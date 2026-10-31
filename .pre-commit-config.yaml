@@ -1,0 +1,38 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=1000"]
+
+  # Ruff and mypy run from the project environment so local hooks, CI and editors use the same versions.
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check --fix
+        language: system
+        types: [python]
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format
+        language: system
+        types: [python]
+      - id: mypy
+        name: mypy
+        entry: uv run mypy
+        language: system
+        types: [python]
+        pass_filenames: false
+      - id: forbid-data-files
+        name: no datasets, frames or weights in git
+        entry: "Data, frames and model weights stay out of git (ADR-0002); README images go in assets/."
+        language: fail
+        files: '\.(jpe?g|mp4|mkv|avi|npy|npz|parquet|zip|pt|pth|ckpt|onnx|mlpackage)$'
+        exclude: '^assets/'
