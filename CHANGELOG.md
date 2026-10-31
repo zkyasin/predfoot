@@ -6,6 +6,13 @@ the project uses [semantic versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- SoccerTrack v2 demo lane (T5.D1): `soccertrack-v2` download source (raw, MOT boxes, MOT clip of one match),
+  `predfoot.io.soccertrack` loaders with conversion to the internal frame, virtual broadcast cameras inside the
+  panorama (`predfoot.demo.virtual_camera`), `scripts/render_demo.py` (side-by-side demo video, still, GIF)
+  and `reports/soccertrack_v2.md`: the released calibration is metres off on the far half, so SoccerTrack v2
+  is a demo-pixel source, not a metric benchmark. The demo's noise parameters and conformal quantiles are
+  versioned in `src/predfoot/demo/dev_calibration.json` (`scripts/fit_demo_calibration.py`), so it runs
+  without SN-GSR data; `--no-smooth` uses the per-frame quantiles.
 - Project skeleton: uv, pre-commit, CI, licence check, package layout, coordinate conventions, data contracts,
   ADR-0001 (conventions) and ADR-0002 (licences and data).
 - SkillCorner-format export: record writer and reader with the uncertainty extension fields, image corners

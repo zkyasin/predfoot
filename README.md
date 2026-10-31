@@ -31,6 +31,32 @@ Outputs follow the SkillCorner open-data JSONL schema, with the uncertainty as e
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the pipeline and [CLAUDE.md](CLAUDE.md) for the working rules.
 
+## Demo on SoccerTrack v2 pixels
+
+![predfoot on a virtual broadcast view of a SoccerTrack v2 panorama](assets/demo.jpg)
+
+A virtual broadcast camera turns inside the fixed panorama of SoccerTrack v2 match 117093. Its camera is
+known exactly under SoccerTrack's released calibration (cyan lines), which is itself metres off on the far half
+of the pitch. predfoot calibrates each view from the pitch lines (magenta lines), places the foot points of
+SoccerTrack's ground-truth boxes (not detections) on the pitch and draws their 90 % regions on the minimap;
+foot points are coloured by the size of that region. The regions are calibrated on SN-GSR broadcast frames, not
+on SoccerTrack: against the released calibration they cover 52 % of the positions here, 93 % on the near half
+and 33 % on the far half, where they are also the narrower ones. The still comes from a 10-frame smoke run in
+which the calibration finds only 7-11 inliers per view; on the night match 117092 every frame abstains. Pixels:
+SoccerTrack v2 (CC BY 4.0, Scott et al.), cropped and reprojected.
+[`reports/soccertrack_v2.md`](reports/soccertrack_v2.md) explains why SoccerTrack v2 is a demo source here, not
+a metric benchmark.
+
+```bash
+uv sync --extra vision
+uv run python scripts/download_data.py soccertrack-v2 --match 117093 --parts raw mot clip
+uv run python scripts/download_data.py pnlcalib-weights
+uv run python scripts/render_demo.py --match 117093 --start 0 --frames 10 --step 5 --fps 5   # runs/<run>/demo.mp4
+```
+
+The demo needs no SoccerNet data: the noise parameters and conformal quantiles it borrows from the SN-GSR dev
+evaluation are versioned in `src/predfoot/demo/dev_calibration.json` (aggregate numbers only).
+
 ## Real pipeline on a development clip
 
 ```bash
