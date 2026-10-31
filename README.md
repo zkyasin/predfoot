@@ -64,10 +64,14 @@ synthetic clip comes from `scripts/make_synthetic_clip.py`; the frame schema is
 
 ### Real stages from detections
 
-With a detections file (`predfoot-detections/1`: the PnLCalib keypoints and line ends of every frame, as the
-detection cache holds them), `predfoot run` runs the real stages instead of the stubs: robust calibration of
-each frame, delta-method positions, and 90 % regions scaled by a Mondrian conformal model when one is given.
-No torch is needed, so the CPU images run them too. The golden fixture is such an input:
+With a detections file (`predfoot-detections/1`: the PnLCalib keypoints and line ends of the clip's frames),
+`predfoot run` runs the real stages instead of the stubs: robust calibration of each frame, delta-method
+positions, and 90 % regions scaled by a Mondrian conformal model when one is given. No torch is needed, so the
+CPU images run them too. Frames are keyed by their 0-based index in the clip file (`frame` in
+`predfoot-clip/1`), not by image number as in the detection cache (1, 6, 11, … for SN-GSR frames downloaded
+one in five): re-key cached detections with `predfoot.keypoints.cache.by_clip_index` before writing them with
+`dumps_detections`. A file that names frames beyond the clip is refused before anything runs, and a file
+without frame 0 gets a warning. The golden fixture is such an input:
 
 ```bash
 uv run predfoot run tests/fixtures/golden/clip.json --out out-golden/ \
@@ -81,8 +85,9 @@ uv run python -m predfoot.io.compare out-golden/ tests/fixtures/golden/expected/
 a PNG, no script and no external reference (a Content-Security-Policy forbids loading anything), every string
 from the run files escaped. It shows the run summary (frames, published share, abstentions, provenance and
 stages), the validation of the outputs plus consistency checks between `metrics.json`, `match.json` and
-`tracking.jsonl`, a timeline of calibration health, abstentions and median p90 radius per frame, the
-distribution of the p90 radii, the worst frames, the abstained spans and short definitions of the fields.
+`tracking.jsonl`, a timeline of calibration health, abstentions and median p90 radius per frame (when a
+column groups several frames, its shading is as high as the share of them that abstain), the distribution of
+the p90 radii, the worst frames, the abstained spans and short definitions of the fields.
 `predfoot qa` rebuilds it from the outputs of a finished run, byte for byte:
 
 ```bash
@@ -98,7 +103,7 @@ uv run predfoot qa out/ --output report.html
 | Target | Contents | Default command |
 |---|---|---|
 | `cli` (default) | The command-line tools | `predfoot --help` |
-| `serve` | The tools and the HTTP API (extra `serve`); `EXPOSE 8000`, a `HEALTHCHECK` on `/healthz` | `predfoot serve --host 0.0.0.0 --port 8000` |
+| `serve` | The tools and the HTTP API (extra `serve`); `EXPOSE 8000`, a `HEALTHCHECK` on `/healthz` | `predfoot serve`, on `PREDFOOT_HOST=0.0.0.0` and `PREDFOOT_PORT=8000` |
 
 ```bash
 docker build -f docker/Dockerfile.cpu --build-arg GIT_SHA="$(git rev-parse HEAD)" -t predfoot:cli .
@@ -112,18 +117,25 @@ docker run --rm -p 8000:8000 predfoot:serve
 ```
 
 In the `serve` image, `/healthz`, `/v1/localize` and `/metrics` work; `/v1/calibrate` answers 503 because the
-keypoint networks need torch (extra `vision`), which the CPU images leave out. The `docker` workflow builds
-both targets on every pull request that touches the package and smoke-tests them: in the `cli` image,
+keypoint networks need torch (extra `vision`), which the CPU images leave out. `predfoot serve` reads its
+interface and port from `PREDFOOT_HOST` and `PREDFOOT_PORT` when the command line does not set them, so
+`docker run -p 8000:8000 predfoot:serve serve --conformal /models/conformal.json` still listens on every
+interface; the `HEALTHCHECK` probes `PREDFOOT_PORT`, without proxies.
+
+Two scripts smoke-test the images, locally or in CI: `docker/smoke-cli.sh IMAGE` (non-root user,
 `predfoot run`, `validate` and `qa`, then the real stages on the golden fixture, whose outputs must match
-`tests/fixtures/golden/expected/`; in the `serve` image, a healthy `HEALTHCHECK`, `POST /v1/localize` (200,
-finite values), `POST /v1/calibrate` (503) and `/metrics`. Nothing is pushed there.
+`tests/fixtures/golden/expected/`; both targets pass it) and `docker/smoke-serve.sh IMAGE` (a healthy
+`HEALTHCHECK`, `/healthz`, `POST /v1/localize` with 200 and finite values, `POST /v1/calibrate` with 503,
+`/metrics`). The `docker` workflow builds both targets on every pull request that touches what the images
+contain and runs them; nothing is pushed there.
 
 ### Release
 
-Bump `version` in `pyproject.toml`, merge, then push a tag `v<version>`. The `release` workflow checks that
-the tag matches the package version, smoke-tests both images (version, tracer bullet, golden check) and pushes
-them to the GitHub Container Registry with `GITHUB_TOKEN`, with OCI labels (source, revision, version,
-licence):
+Bump the version in `pyproject.toml` and in `src/predfoot/__init__.py` (a unit test checks that they agree),
+merge, then push a tag `v<version>`. The `release` workflow checks that the tag matches the package version,
+runs the smoke scripts of the `docker` workflow on each image (and `predfoot version`), the HTTP checks
+included for the `serve` image, and only then pushes them to the GitHub Container Registry with
+`GITHUB_TOKEN`, with OCI labels (source, revision, version, licence):
 
 | Image | Tags |
 |---|---|
