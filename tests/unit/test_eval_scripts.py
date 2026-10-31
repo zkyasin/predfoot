@@ -184,3 +184,12 @@ def test_compare_labels_are_distinct(tmp_path):
     runs = [tmp_path / "run_a" / "players.parquet", tmp_path / "run_b" / "players.parquet"]
     assert error_process.camera_labels(runs) == ["run_a", "run_b"]
     assert error_process.camera_labels([tmp_path / "players.parquet"])[0]
+
+
+def test_json_payload_is_plain_json():
+    import json
+
+    payload = {"acf": {1: np.float64(0.5), 2: float("nan")}, "rho25": (0.9, 0.95), "n": np.int64(3)}
+    out = error_process.to_jsonable(payload)
+    assert out == {"acf": {"1": 0.5, "2": None}, "rho25": [0.9, 0.95], "n": 3}
+    json.dumps(out, allow_nan=False)

@@ -19,20 +19,24 @@ Usage:
     uv run python scripts/error_process.py runs/<ptz>/players.parquet --compare runs/<none>/players.parquet \\
         --out runs/error_process_smoothed.md
 With ``--compare``, both tables are restricted to the player-frames where both have finite errors.
+``--json`` also writes the numbers (per camera, reference, part and axis: σ, ACF with pair counts, lag-1 step
+RMS, series lengths, and the KPI proxy with its run lengths) for scripts/kpi_spectral.py.
 """
 
 from __future__ import annotations
 
+import json
 import subprocess
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import polars as pl
 import typer
-from scipy.signal import savgol_filter
 
 from predfoot.kpi.errors import split_common_mode
+from predfoot.kpi.proxy import PROXY_MIN_RUN, ProxyTotals
 
 app = typer.Typer(add_completion=False)
 STEP_FRAMES = 5  # cached frames are one in five of the native 25 fps
@@ -40,9 +44,8 @@ DT_S = STEP_FRAMES / 25.0
 MAX_ERROR_M = 10.0  # errors this large are calibration failures, handled by abstention, not by the budget
 LAGS = (1, 2, 3, 4, 5)
 MIN_SERIES = 10
-MIN_RUN = 8
-SG_WINDOW, SG_ORDER = 5, 2
-HSR_MS = 5.56  # 20 km/h
+MIN_RUN = PROXY_MIN_RUN
+AXES = ("x", "y")
 KEYS = ["clip", "frame", "track_id"]
 TITLES = {"lab": "labels", "or": "trusted line oracle", "sm": "smoothed labels"}
 
@@ -70,11 +73,13 @@ class _Pool:
         self.sd: list[tuple[float, int]] = []
         self.acf: dict[int, list[tuple[float, int]]] = {lag: [] for lag in LAGS}
         self.step_sq, self.step_n = 0.0, 0
+        self.lengths: Counter[int] = Counter()
 
     def add(self, x: np.ndarray) -> None:
         n = int(np.isfinite(x).sum())
         if n < MIN_SERIES:
             return
+        self.lengths[n] += 1
         self.sd.append((float(np.nanstd(x)), n))
         for lag in LAGS:
             a, b = x[:-lag], x[lag:]
@@ -96,39 +101,44 @@ class _Pool:
         return {
             "sigma": float(np.sqrt(np.average(sd[:, 0] ** 2, weights=sd[:, 1]))) if self.sd else float("nan"),
             "acf": acf,
+            "n_pairs": {lag: int(sum(n for _, n in rows)) for lag, rows in self.acf.items()},
             "step_rms": float(np.sqrt(self.step_sq / self.step_n)) if self.step_n else float("nan"),
             "rho25": (r1 ** (1 / 5), r5 ** (1 / 25)),
             "n_series": len(self.sd),
+            "series_lengths": dict(sorted(self.lengths.items())),
         }
 
 
 def measure(players: pl.DataFrame, ref: str) -> dict[str, Any]:
     d = players.filter(pl.col(f"ex_{ref}").is_not_nan() & pl.col(f"ex_{ref}").is_not_null())
     d = d.filter((pl.col(f"ex_{ref}") ** 2 + pl.col(f"ey_{ref}") ** 2) < MAX_ERROR_M**2)
-    pools = {"common": _Pool(), "individual": _Pool()}
+    parts = ("common", "individual")
+    pools = {(part, axis): _Pool() for part in parts for axis in ("xy", *AXES)}
     for (_clip,), g in d.partition_by("clip", as_dict=True).items():
         e = clip_tensor(g, ref)
         if e.shape[0] < MIN_SERIES:
             continue
         common, indiv = split_common_mode(e)
-        for axis in range(2):
-            pools["common"].add(common[:, axis])
-            for t in range(indiv.shape[1]):
-                pools["individual"].add(indiv[:, t, axis])
+        for axis, name in enumerate(AXES):
+            for key in (name, "xy"):
+                pools["common", key].add(common[:, axis])
+                for t in range(indiv.shape[1]):
+                    pools["individual", key].add(indiv[:, t, axis])
     out: dict[str, Any] = {"n_player_frames": d.height, "n_clips": d["clip"].n_unique()}
-    for part, pool in pools.items():
-        out[part] = pool.summary()
+    for part in parts:
+        out[part] = pools[part, "xy"].summary()  # both axes pooled, as in the tables
+        for name in AXES:
+            out[part][name] = pools[part, name].summary()
     return out
 
 
-def kpi_proxy(players: pl.DataFrame) -> dict[str, float] | None:
+def kpi_proxy(players: pl.DataFrame) -> dict[str, Any] | None:
     """Distance, HSR distance and speed of the prediction against the smoothed labels (5 fps, SG filters)."""
     if not {"x_pred", "y_pred", "ex_sm", "ey_sm"} <= set(players.columns):
         return None
     d = players.filter(pl.col("ex_lab").is_not_nan() & pl.col("ex_sm").is_not_nan()).sort(KEYS)
-    tot = {"pred": 0.0, "sm": 0.0, "raw": 0.0, "hsr_pred": 0.0, "hsr_sm": 0.0, "hsr_raw": 0.0}
-    speed_err: list[np.ndarray] = []
-    n_runs = n_samples = 0
+    pred_vs_sm, raw_vs_sm = ProxyTotals(), ProxyTotals()
+    run_lengths: Counter[int] = Counter()
     for (_clip, _track), g in d.partition_by("clip", "track_id", as_dict=True).items():
         frames = g["frame"].to_numpy()
         pred = g.select("x_pred", "y_pred").to_numpy()
@@ -140,32 +150,26 @@ def kpi_proxy(players: pl.DataFrame) -> dict[str, float] | None:
             idx = idx[good[idx]]
             if len(idx) < MIN_RUN:
                 continue
-            n_runs += 1
-            n_samples += len(idx)
-            speeds = {}
-            for name, p in (("pred", pred[idx]), ("sm", sm[idx]), ("raw", raw[idx])):
-                pos = savgol_filter(p, SG_WINDOW, SG_ORDER, axis=0)
-                vel = savgol_filter(p, SG_WINDOW, SG_ORDER, deriv=1, delta=DT_S, axis=0)
-                speed = np.linalg.norm(vel, axis=1)
-                steps = np.linalg.norm(np.diff(pos, axis=0), axis=1)
-                fast = 0.5 * (speed[1:] + speed[:-1]) >= HSR_MS
-                tot[name] += float(steps.sum())
-                tot[f"hsr_{name}"] += float(steps[fast].sum())
-                speeds[name] = speed
-            speed_err.append(speeds["pred"] - speeds["sm"])
-    if not n_runs:
+            run_lengths[len(idx)] += 1
+            pred_vs_sm.add(pred[idx], sm[idx], DT_S)
+            raw_vs_sm.add(raw[idx], sm[idx], DT_S)
+    if not pred_vs_sm.runs:
         return None
-    err = np.concatenate(speed_err)
+    p, r = pred_vs_sm.summary(), raw_vs_sm.summary()
     return {
-        "runs": n_runs,
-        "samples": n_samples,
-        "distance_bias": tot["pred"] / tot["sm"] - 1,
-        "raw_distance_bias": tot["raw"] / tot["sm"] - 1,
-        "hsr_bias": tot["hsr_pred"] / tot["hsr_sm"] - 1 if tot["hsr_sm"] > 0 else float("nan"),
-        "raw_hsr_bias": tot["hsr_raw"] / tot["hsr_sm"] - 1 if tot["hsr_sm"] > 0 else float("nan"),
-        "hsr_sm_m": tot["hsr_sm"],
-        "speed_rms": float(np.sqrt(np.mean(err**2))),
-        "speed_p90": float(np.quantile(np.abs(err), 0.9)),
+        "runs": pred_vs_sm.runs,
+        "samples": pred_vs_sm.samples,
+        "distance_bias": p["distance_bias"],
+        "raw_distance_bias": r["distance_bias"],
+        "hsr_bias": p["hsr_bias"],
+        "raw_hsr_bias": r["hsr_bias"],
+        "hsr_sm_m": p["ref_hsr_m"],
+        "sm_distance_m": p["ref_distance_m"],
+        "sm_duration_s": p["duration_s"],
+        "sm_mean_speed_ms": p["ref_mean_speed_ms"],
+        "speed_rms": p["speed_rms"],
+        "speed_p90": p["speed_p90"],
+        "run_lengths": dict(sorted(run_lengths.items())),
     }
 
 
@@ -195,6 +199,19 @@ def camera_labels(paths: list[Path]) -> list[str]:
     return [f"{p} ({i + 1})" for i, p in enumerate(paths)]
 
 
+def to_jsonable(obj: Any) -> Any:
+    """Plain JSON types: dict keys as strings, tuples as lists, NaN as null."""
+    if isinstance(obj, dict):
+        return {str(k): to_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, list | tuple):
+        return [to_jsonable(v) for v in obj]
+    if isinstance(obj, float | np.floating):
+        return None if not np.isfinite(obj) else float(obj)
+    if isinstance(obj, np.integer):
+        return int(obj)
+    return obj
+
+
 def git_sha() -> str:
     return subprocess.run(
         ["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True
@@ -207,16 +224,26 @@ def main(
     compare: Path | None = typer.Option(None, help="players.parquet of another camera (e.g. per-frame)."),  # noqa: B008
     include_filled: bool = typer.Option(False, help="Keep frames whose raw calibration failed (filled)."),
     out: Path = Path("reports/error_process_dev.md"),
+    json_out: Path | None = typer.Option(None, "--json", help="Also write the numbers as JSON here."),  # noqa: B008
+    name: str | None = typer.Option(None, help="Camera label of PLAYERS_PATH (default: its folder)."),
+    compare_name: str | None = typer.Option(None, help="Camera label of --compare (default: its folder)."),
 ) -> None:
     main_t = _load(players_path, include_filled)
-    tables = {camera_labels([players_path])[0]: main_t}
+    sources = {name or camera_labels([players_path])[0]: players_path}
+    tables = {next(iter(sources)): main_t}
     if compare is not None:
         main_t, other_t = _restrict(main_t, _load(compare, include_filled))
         name_other, name_main = camera_labels([compare, players_path])
+        name_other, name_main = compare_name or name_other, name or name_main
+        if name_other == name_main:
+            raise typer.BadParameter("the two cameras need distinct labels (--name / --compare-name)")
         tables = {name_other: other_t, name_main: main_t}
+        sources = {name_other: compare, name_main: players_path}
     cmd = f"uv run python scripts/error_process.py {players_path}"
     cmd += f" --compare {compare}" if compare is not None else ""
     cmd += " --include-filled" if include_filled else ""
+    cmd += f" --name {name}" if name else ""
+    cmd += f" --compare-name {compare_name}" if compare_name else ""
     md = [
         "# Position-error process on SN-GSR dev (T4.2)",
         "",
@@ -305,6 +332,26 @@ def main(
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("\n".join(md) + "\n")
     typer.echo("\n".join(md))
+    if json_out is not None:
+        payload = {
+            "command": cmd,
+            "git_sha": git_sha(),
+            "include_filled": include_filled,
+            "dt_s": DT_S,
+            "lags_s": [round(lag * DT_S, 6) for lag in LAGS],
+            "max_error_m": MAX_ERROR_M,
+            "cameras": {
+                cam: {
+                    "path": str(sources[cam]),
+                    "references": measured.get(cam, {}),
+                    "kpi_proxy": proxies[cam],
+                }
+                for cam in tables
+            },
+        }
+        json_out.parent.mkdir(parents=True, exist_ok=True)
+        json_out.write_text(json.dumps(to_jsonable(payload), indent=1) + "\n")
+        typer.echo(f"json: {json_out}")
 
 
 if __name__ == "__main__":
