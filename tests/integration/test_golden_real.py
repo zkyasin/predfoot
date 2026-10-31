@@ -131,3 +131,23 @@ def test_detections_keyed_by_image_number_are_a_usage_error(tmp_path):
     assert "beyond the 20 frames of clip 'synthetic-golden-001' (20)" in text
     assert "keyed by the 0-based index of the clip's frames" in text
     assert not out.exists()
+
+
+def test_a_conformal_model_with_an_infinite_edge_is_refused_up_front(tmp_path):
+    model = json.loads((GOLDEN / "conformal.json").read_text(encoding="utf-8"))
+    model["edges"]["mpp"] = [0.035, float("inf")]
+    path = tmp_path / "conformal.json"
+    path.write_text(json.dumps(model), encoding="utf-8")  # Infinity, as Python writes it
+    out = tmp_path / "out"
+    args = [
+        "run",
+        str(GOLDEN / "clip.json"),
+        "--out",
+        str(out),
+        "--detections",
+        str(GOLDEN / "detections.json"),
+    ]
+    result = CliRunner(env=PLAIN_ENV).invoke(app, [*args, "--conformal", str(path)])
+    assert result.exit_code == 2, result.output
+    assert "bin edges that are not sorted finite numbers" in plain(result)
+    assert not out.exists()

@@ -125,6 +125,8 @@ def test_served_conformal_models_give_90_percent_regions_from_known_features(tmp
         check_conformal(dataclasses.replace(mondrian_model(), edges={"zoom": [1.5]}))
     with pytest.raises(ValueError, match="sorted"):
         check_conformal(dataclasses.replace(mondrian_model(), edges={"mpp": [0.075, 0.05]}))
+    with pytest.raises(ValueError, match="sorted finite"):
+        check_conformal(dataclasses.replace(mondrian_model(), edges={"mpp": [0.05, float("inf")]}))
     with pytest.raises(ValueError, match="positive finite"):
         check_conformal(dataclasses.replace(mondrian_model(), pooled=float("inf")))
     path = tmp_path / "conformal.json"

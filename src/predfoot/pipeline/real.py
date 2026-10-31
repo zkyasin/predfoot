@@ -115,8 +115,8 @@ def check_detection_frames(detections: Mapping[int, Any], clip: ClipInput) -> No
 def conformal_provenance(model: MondrianConformal) -> dict[str, Any]:
     """What meta.json records about a conformal model: enough to recognise it and to recompute every q̂.
 
-    meta.json is strict JSON, so a non-finite quantile (an empty calibration set gives +inf) is written as a
-    string, "inf".
+    meta.json is strict JSON, so a non-finite quantile (an empty calibration set gives +inf) or bin edge is
+    written as a string, "inf".
     """
 
     def number(value: float) -> float | str:
@@ -127,7 +127,9 @@ def conformal_provenance(model: MondrianConformal) -> dict[str, Any]:
         "sha256": hashlib.sha256(model.to_json().encode("utf-8")).hexdigest(),
         "alpha": model.alpha,
         "pooled": number(model.pooled),
-        "edges": model.edges,
+        "edges": {
+            name: [e if math.isfinite(e) else number(e) for e in es] for name, es in model.edges.items()
+        },
         "quantiles": {key: number(q) for key, q in model.quantiles.items()},
     }
 
