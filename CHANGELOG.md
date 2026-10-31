@@ -30,3 +30,8 @@ the project uses [semantic versioning](https://semver.org/).
 - Real pipeline stages for `predfoot run` (cached detections → calibration → calibrated ellipses).
 - Scripts: spike S0, dev evaluation with leave-one-game-out coverage, failure detection, error process.
 - Preregistration draft for the locked test run.
+- Temporal camera smoothing (PTZ-RTS): fixed-centre pan-tilt-zoom camera model, label-free projection centre
+  per clip, Kalman filter and RTS smoother inside shot segments with outlier deletion and run splitting, noise
+  fitted without labels per leave-one-game-out fold; `eval_dev.py --smooth none|proj|ptz` (`--calib-from`,
+  `--fit-scope`, `--beta`), `error_process.py --compare` with a model-free KPI proxy, optional smoothing in
+  the real stages.
