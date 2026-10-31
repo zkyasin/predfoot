@@ -716,7 +716,7 @@ def _timeline_section(run: RunFiles) -> str:
     body = [
         '<p class="legend"><span class="swatch band-swatch" aria-hidden="true"></span> abstained (no '
         f"position published) · {_e(grouping)} Hover a column for its numbers.</p>",
-        timeline_svg(rows, run.export_fps),
+        f'<div class="chart-wrap">{timeline_svg(rows, run.export_fps)}</div>',
     ]
     spans = _ranges([r.abstain for r in rows])
     if not spans:
@@ -758,7 +758,8 @@ def _radii_section(run: RunFiles) -> str:
         '<div class="table-wrap"><table><caption>p90 radius of the published positions</caption>'
         f"<thead><tr>{head}</tr></thead><tbody><tr>{cells}</tr></tbody></table></div>"
     )
-    return _section("radii", "Distribution of p90 radii", [histogram_svg(radii), table])
+    chart = f'<div class="chart-wrap">{histogram_svg(radii)}</div>'
+    return _section("radii", "Distribution of p90 radii", [chart, table])
 
 
 def worst_frames(rows: Sequence[FrameRow], n: int = WORST_FRAMES) -> list[FrameRow]:
@@ -936,6 +937,8 @@ ul.checks{list-style:none;padding-left:0}
 .swatch{display:inline-block;width:14px;height:10px;border-radius:2px}
 .band-swatch{background:var(--band);border:1px solid var(--axis)}
 svg.chart{width:100%;height:auto;display:block}
+.chart-wrap{overflow-x:auto}
+.chart-wrap svg.chart{min-width:640px}
 svg .grid{stroke:var(--grid);stroke-width:1}
 svg .axis{stroke:var(--axis);stroke-width:1}
 svg .tick,svg .note{fill:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
