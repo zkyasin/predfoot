@@ -34,7 +34,12 @@ from predfoot.health.features import calibration_features
 from predfoot.keypoints.cache import cache_path, cached_detections
 from predfoot.paths import data_dir, index_dir
 from predfoot.uncertainty.conformal import MondrianConformal, grouped_quantile
-from predfoot.uncertainty.delta import circumscribed_radius, mahalanobis2, position_covariance
+from predfoot.uncertainty.delta import (
+    circumscribed_radius,
+    mahalanobis2,
+    position_covariance,
+    region_quantile,
+)
 
 app = typer.Typer(add_completion=False)
 KP = pnlcalib_keypoints()
@@ -126,8 +131,26 @@ def predict_clip(
     return frame_rows, out
 
 
-def logo(df: pl.DataFrame, ref: str, rng: np.random.Generator, n_boot: int = 300) -> list[dict]:
-    """Leave-one-game-out coverage and size for our ellipses and the constant-radius baseline."""
+def _clip_bootstrap(
+    hit: np.ndarray, clip_ids: np.ndarray, rng: np.random.Generator, n_boot: int
+) -> tuple[float, float]:
+    """95 % interval of a coverage rate, resampling whole clips."""
+    uniq = np.unique(clip_ids)
+    idx = {c: np.flatnonzero(clip_ids == c) for c in uniq}
+    stats = [
+        np.mean(np.concatenate([hit[idx[c]] for c in rng.choice(uniq, size=len(uniq), replace=True)]))
+        for _ in range(n_boot)
+    ]
+    lo, hi = np.quantile(stats, [0.025, 0.975])
+    return float(lo), float(hi)
+
+
+def logo(df: pl.DataFrame, ref: str, rng: np.random.Generator, n_boot: int = 300) -> tuple[list[dict], dict]:
+    """Leave-one-game-out coverage and size of our ellipses against a constant circle.
+
+    Returns one row per held-out game and a summary over all held-out predictions (each player-frame is
+    predicted with quantiles fitted on the other games), including coverage by distance tercile.
+    """
     d = df.filter(pl.col(f"ex_{ref}").is_not_nan())
     e = d.select(f"ex_{ref}", f"ey_{ref}").to_numpy()
     cov = np.stack([d["c00"], d["c01"], d["c01"], d["c11"]], axis=1).reshape(-1, 2, 2)
@@ -136,6 +159,10 @@ def logo(df: pl.DataFrame, ref: str, rng: np.random.Generator, n_boot: int = 300
     groups = d["clip"].to_numpy()
     games = d["game"].to_numpy()
     feats = {"mpp": d["mpp"].to_numpy(), "n_inliers": d["n_inliers"].to_numpy().astype(float)}
+    dof = d["dof"].to_numpy().astype(float)
+    raw_q = np.array([region_quantile(2, 1 - ALPHA, v) for v in dof])
+    hit_mond, hit_const = np.zeros(len(d), bool), np.zeros(len(d), bool)
+    rad_mond, area_mond, r_const_all = np.zeros(len(d)), np.zeros(len(d)), np.zeros(len(d))
     rows = []
     for g in np.unique(games):
         cal, tst = games != g, games == g
@@ -149,42 +176,47 @@ def logo(df: pl.DataFrame, ref: str, rng: np.random.Generator, n_boot: int = 300
         )
         q_mond = mond.quantile_for({k: v[tst] for k, v in feats.items()})
         r_const = grouped_quantile(norm[cal], groups[cal], ALPHA)
-        hit_pool = score[tst] <= q_pool
-        hit_mond = score[tst] <= q_mond
-        hit_const = norm[tst] <= r_const
-        rad_pool = circumscribed_radius(cov[tst], q_pool)
-        rad_mond = np.sqrt(q_mond * np.linalg.eigvalsh(cov[tst])[:, -1])
-        area_mond = np.pi * q_mond * np.sqrt(np.clip(np.linalg.det(cov[tst]), 0, None))
-        clips = np.unique(groups[tst])
-
-        def boot(
-            hit: np.ndarray, clip_ids: np.ndarray = groups[tst], uniq: np.ndarray = clips
-        ) -> tuple[float, float]:
-            idx = {c: np.flatnonzero(clip_ids == c) for c in uniq}
-            stats = []
-            for _ in range(n_boot):
-                pick = rng.choice(uniq, size=len(uniq), replace=True)
-                stats.append(np.mean(np.concatenate([hit[idx[c]] for c in pick])))
-            lo, hi = np.quantile(stats, [0.025, 0.975])
-            return float(lo), float(hi)
-
+        hit_mond[tst] = score[tst] <= q_mond
+        hit_const[tst] = norm[tst] <= r_const
+        rad_mond[tst] = np.sqrt(q_mond * np.linalg.eigvalsh(cov[tst])[:, -1])
+        area_mond[tst] = np.pi * q_mond * np.sqrt(np.clip(np.linalg.det(cov[tst]), 0, None))
+        r_const_all[tst] = r_const
         rows.append(
             {
                 "game": int(g),
-                "clips": len(clips),
+                "clips": len(np.unique(groups[tst])),
                 "n": int(tst.sum()),
-                "cov_pool": float(hit_pool.mean()),
-                "cov_mond": float(hit_mond.mean()),
-                "cov_mond_ci": boot(hit_mond),
-                "cov_const": float(hit_const.mean()),
-                "r_pool": float(np.median(rad_pool)),
-                "r_mond": float(np.median(rad_mond)),
-                "a_mond": float(np.median(area_mond)),
+                "cov_raw": float(np.mean(score[tst] <= raw_q[tst])),
+                "cov_pool": float(np.mean(score[tst] <= q_pool)),
+                "cov_mond": float(hit_mond[tst].mean()),
+                "cov_mond_ci": _clip_bootstrap(hit_mond[tst], groups[tst], rng, n_boot),
+                "cov_const": float(hit_const[tst].mean()),
+                "r_pool": float(np.median(circumscribed_radius(cov[tst], q_pool))),
+                "r_mond": float(np.median(rad_mond[tst])),
+                "a_mond": float(np.median(area_mond[tst])),
                 "r_const": float(r_const),
                 "a_const": float(np.pi * r_const**2),
             }
         )
-    return rows
+    terciles = np.quantile(feats["mpp"], [1 / 3, 2 / 3])
+    bins = np.searchsorted(terciles, feats["mpp"])
+    summary = {
+        "n": len(d),
+        "clips": len(np.unique(groups)),
+        "cov_raw": float(np.mean(score <= raw_q)),
+        "cov_mond": float(hit_mond.mean()),
+        "cov_mond_ci": _clip_bootstrap(hit_mond, groups, rng, n_boot),
+        "cov_const": float(hit_const.mean()),
+        "cov_const_ci": _clip_bootstrap(hit_const, groups, rng, n_boot),
+        "r_mond": float(np.median(rad_mond)),
+        "a_mond": float(np.median(area_mond)),
+        "a_const": float(np.median(np.pi * r_const_all**2)),
+        "by_tercile": [
+            (float(hit_mond[bins == b].mean()), float(hit_const[bins == b].mean())) for b in range(3)
+        ],
+        "tercile_edges": terciles.tolist(),
+    }
+    return rows, summary
 
 
 @app.command()
@@ -247,28 +279,42 @@ def main(out: Path = Path("reports/m2_logo_dev.md"), max_clips: int = 0) -> None
         f" p50 {np.nanquantile(line_px, 0.5):.1f} px, p90 {np.nanquantile(line_px, 0.9):.1f} px.",
     ]
     header = (
-        "| Held-out game | Clips | Player-frames | Ellipses, pooled | Ellipses, Mondrian [95 % CI] |"
-        " Constant circle | Median radius pooled / Mondrian / constant (m) |"
-        " Median area Mondrian / constant |"
+        "| Held-out game | Clips | Player-frames | Raw Laplace | Conformal, pooled | Conformal, Mondrian"
+        " [95 % CI] | Constant circle | Median radius pooled / Mondrian / constant (m) |"
+        " Median area Mondrian / constant (m²) |"
     )
     for ref, title in (("lab", "labels"), ("or", "trusted line oracle")):
-        res = logo(players, ref, rng)
+        res, summ = logo(players, ref, rng)
+        lo, hi = summ["cov_mond_ci"]
+        clo, chi = summ["cov_const_ci"]
+        e1, e2 = summ["tercile_edges"]
         md += [
             "",
             f"## LOGO coverage at 90 %, reference: {title}",
             "",
-            "Each row holds one dev game out; its quantiles come from the five others. Radius: circumscribed",
-            "circle of the ellipse (median over player-frames). Area in m².",
+            f"All held-out predictions ({summ['n']} player-frames, {summ['clips']} clips): Mondrian"
+            f" ellipses cover **{summ['cov_mond']:.1%}** [{lo:.1%}, {hi:.1%}] with a median area of"
+            f" {summ['a_mond']:.2f} m²;"
+            f" the constant circle covers {summ['cov_const']:.1%} [{clo:.1%}, {chi:.1%}] with"
+            f" {summ['a_const']:.2f} m². Uncalibrated Laplace ellipses cover {summ['cov_raw']:.1%}.",
+            "",
+            "Coverage by distance (metres per pixel at the feet), Mondrian ellipses / constant circle:",
+            "",
+            f"| Near (< {e1:.3f} m/px) | Middle | Far (> {e2:.3f} m/px) |",
+            "|---|---|---|",
+            "| " + " | ".join(f"{m:.1%} / {c:.1%}" for m, c in summ["by_tercile"]) + " |",
+            "",
+            "Per held-out game (its quantiles come from the five other games):",
             "",
             header,
-            "|---|---|---|---|---|---|---|---|",
+            "|---|---|---|---|---|---|---|---|---|",
         ]
         for r in res:
-            lo, hi = r["cov_mond_ci"]
+            glo, ghi = r["cov_mond_ci"]
             md.append(
-                f"| {r['game']} | {r['clips']} | {r['n']} | {r['cov_pool']:.1%} | {r['cov_mond']:.1%}"
-                f" [{lo:.1%}, {hi:.1%}] | {r['cov_const']:.1%} | {r['r_pool']:.2f} / {r['r_mond']:.2f} /"
-                f" {r['r_const']:.2f} | {r['a_mond']:.2f} / {r['a_const']:.2f} |"
+                f"| {r['game']} | {r['clips']} | {r['n']} | {r['cov_raw']:.1%} | {r['cov_pool']:.1%} |"
+                f" {r['cov_mond']:.1%} [{glo:.1%}, {ghi:.1%}] | {r['cov_const']:.1%} | {r['r_pool']:.2f} /"
+                f" {r['r_mond']:.2f} / {r['r_const']:.2f} | {r['a_mond']:.2f} / {r['a_const']:.2f} |"
             )
     md += [
         "",
