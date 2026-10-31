@@ -41,10 +41,18 @@ the project uses [semantic versioning](https://semver.org/).
 - Spectral KPI error budget (T4.3) and KPI uncertainty card (T4.4): `predfoot.kpi.noise` (nugget + one or two
   scales of an exponential, Matérn-3/2, Matérn-5/2 or squared-exponential kernel, Gaussian or Gaussian-copula
   marginal, exact circulant-embedding sampling, weighted least-squares fit to the 5 fps ACF);
-  `error_process.py --json` (per-axis σ, ACF and normal-score ACF, marginal quantiles, run lengths);
-  `kpi_spectral.py` (simulation of the SN-GSR KPI proxy on IDSSE, 10 fps budget with kernel × nugget
-  sensitivity) and `predfoot.kpi.card` with `kpi_card.py` (linear and quadratic SIMEX bias correction,
-  coverage on IDSSE with leave-one-match-out calibration). Finding: no stationary model fitted to σ, ACF and
-  marginal reproduces the measured proxy (PTZ camera: +18 to +32 % simulated distance bias against +3.9 %
-  measured); real error steps are intermittent (median 0.2 s step about half the model's), so the 10 fps
-  budget is an overestimate.
+  `error_process.py --json` (per-axis σ, ACF and normal-score ACF pooled over series through the
+  semi-variogram, so that a fitted process reproduces the measured step variances; step RMS and median,
+  marginal quantiles and kurtosis, run lengths); `kpi_spectral.py` (5 fps step round trip, simulation of the
+  SN-GSR KPI proxy on IDSSE with an explicit verdict, 10 fps budget with kernel × nugget sensitivity) and
+  `predfoot.kpi.card` with `kpi_card.py` (linear and quadratic SIMEX bias correction, estimates projected onto
+  the KPI's support, variance from a nested parametric bootstrap, nominal intervals with their coverage on
+  IDSSE and a leave-one-match-out calibration). Finding: the PTZ camera's simulated 5 fps proxy fails its
+  check against SN-GSR (distance bias +15 % ball in play against +3.9 % measured, HSR distance +34 % against
+  +9.5 %; the per-frame camera is within a factor of two, but above too). Fitted Gaussian processes reproduce
+  the measured step RMS, yet the measured median 0.2 s step is only 0.59 to 0.72 of the chosen model's: real
+  steps are intermittent, which no stationary model fitted to σ, ACF and marginal captures, so the 10 fps
+  budget (PTZ distance +19 %, HI distance +60 %) overstates predfoot's KPI error. On IDSSE with simulated
+  errors (PTZ camera, 4 matches), the card's nested-bootstrap intervals cover effort counts and PSV-99 at
+  about their nominal 90 % (86 to 94 %, against 55 to 70 % with the spread of one dose); distance KPIs stay
+  below (21 to 55 %) because of the remaining extrapolation bias.
