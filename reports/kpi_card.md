@@ -6,7 +6,7 @@
 > whether the error model is right for real broadcast tracking.
 
 - **Command**: `uv run python scripts/kpi_card.py --matches J03WMX J03WN1 J03WOH J03WOY --n-draws 20 --n-outer 8 --n-inner 8`
-- **Git commit**: `796a452`; date 2026-10-31T18:47:01; runtime 627.4 s
+- **Git commit**: `1bb22eb`; date 2026-10-31T19:20:51; runtime 624.4 s
 - **Error model** per camera: `matern32:copula:white` from `reports/error_process_temporal_dev.json` (`predfoot.kpi.noise.fit_error_model`).
 - **Data**: IDSSE (Bassek, Rein, Weber & Memmert 2025, CC BY 4.0), 4 matches (J03WMX, J03WN1, J03WOH, J03WOY), 80 outfield player-matches with ≥ 45 min; 20 error draws per card, each at two doses; nested bootstrap with 8 pseudo-observations of 8 draws each; coverage intervals: 1000 bootstrap resamples over matches; seed 20261031.
 
@@ -40,18 +40,18 @@ overstates the KPI bias of predfoot's real tracking and is not predfoot's KPI er
 
 | Camera | KPI | Quadratic | Quadratic, one-dose spread | Linear | Naive | Quadratic, LOMO-calibrated | Median half-width (rel.) | Truncated | Bias, observed | Bias after linear | Bias after quadratic |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| none | Distance | 0 % [0, 5]† | 0 % [0, 5]† | 0 % [0, 5]† | 0 % [0, 5]† | 89 % (×6.08) | 123 m (1 %) | 0 % | +41.8 % | +11.2 % | +4.9 % |
-| none | HI distance (≥ 20 km/h) | 16 % [10, 22] | 4 % [1, 5] | 0 % [0, 5]† | 0 % [0, 5]† | 86 % (×2.80) | 142 m (22 %) | 6 % | +194.9 % | -77.2 % | -34.6 % |
-| none | Sprint distance (> 25 km/h) | 59 % [44, 68] | 46 % [34, 56] | 1 % [0, 4] | 0 % [0, 5]† | 89 % (×2.03) | 110 m (79 %) | 2 % | +363.4 % | -97.4 % | +48.2 % |
-| none | HSR efforts | 94 % [88, 99] | 56 % [50, 62] | 75 % [70, 80] | 56 % [51, 62] | 90 % (×0.89) | 15.4 (40 %) | 0 % | -14.1 % | -18.3 % | -10.9 % |
-| none | Sprint efforts | 91 % [90, 94] | 51 % [42, 60] | 85 % [78, 92] | 61 % [55, 69] | 90 % (×0.98) | 7.4 (100 %) | 6 % | -26.0 % | -29.8 % | -21.8 % |
-| none | PSV-99 | 75 % [65, 82] | 45 % [35, 51] | 65 % [58, 71] | 0 % [0, 5]† | 89 % (×1.47) | 3.2 km/h (11 %) | 0 % | +21.6 % | +7.2 % | +7.6 % |
-| ptz | Distance | 36 % [15, 69] | 24 % [4, 56] | 0 % [0, 5]† | 0 % [0, 5]† | 85 % (×2.96) | 85 m (1 %) | 0 % | +19.3 % | +3.9 % | +1.2 % |
-| ptz | HI distance (≥ 20 km/h) | 55 % [32, 66] | 32 % [14, 46] | 20 % [16, 24] | 0 % [0, 5]† | 89 % (×1.97) | 91 m (12 %) | 0 % | +60.7 % | -15.9 % | +9.9 % |
-| ptz | Sprint distance (> 25 km/h) | 21 % [10, 32] | 12 % [8, 15] | 49 % [37, 68] | 0 % [0, 5]† | 89 % (×2.46) | 59 m (40 %) | 0 % | +101.8 % | -31.7 % | +51.4 % |
-| ptz | HSR efforts | 90 % [86, 94] | 59 % [55, 63] | 89 % [82, 94] | 91 % [87, 95] | 91 % (×1.05) | 15.2 (39 %) | 0 % | -3.1 % | -9.1 % | -7.1 % |
-| ptz | Sprint efforts | 94 % [88, 100] | 55 % [44, 66] | 89 % [80, 98] | 86 % [78, 93] | 92 % (×0.92) | 6.1 (79 %) | 5 % | -10.2 % | -15.4 % | -12.4 % |
-| ptz | PSV-99 | 86 % [72, 100] | 70 % [58, 84] | 86 % [74, 98] | 2 % [0, 5] | 89 % (×1.17) | 2.0 km/h (7 %) | 0 % | +10.3 % | +2.2 % | +2.9 % |
+| none | Distance | 0 % [0, 5]† | 0 % [0, 5]† | 0 % [0, 5]† | 0 % [0, 5]† | 89 % (×6.16) | 122 m (1 %) | 0 % | +41.6 % | +11.1 % | +4.9 % |
+| none | HI distance (≥ 20 km/h) | 15 % [10, 22] | 5 % [1, 9] | 0 % [0, 5]† | 0 % [0, 5]† | 88 % (×2.62) | 144 m (22 %) | 6 % | +193.3 % | -76.8 % | -33.6 % |
+| none | Sprint distance (> 25 km/h) | 57 % [40, 66] | 44 % [26, 56] | 1 % [0, 4] | 0 % [0, 5]† | 86 % (×1.99) | 108 m (77 %) | 4 % | +359.3 % | -97.2 % | +49.4 % |
+| none | HSR efforts | 92 % [88, 98] | 54 % [44, 65] | 71 % [67, 75] | 60 % [53, 67] | 91 % (×0.98) | 14.3 (39 %) | 0 % | -14.1 % | -18.6 % | -11.7 % |
+| none | Sprint efforts | 88 % [85, 90] | 52 % [48, 56] | 82 % [76, 90] | 62 % [54, 70] | 91 % (×1.19) | 7.3 (98 %) | 6 % | -26.0 % | -30.1 % | -22.5 % |
+| none | PSV-99 | 72 % [68, 78] | 44 % [35, 51] | 65 % [54, 75] | 0 % [0, 5]† | 92 % (×1.58) | 3.2 km/h (11 %) | 0 % | +21.4 % | +7.1 % | +7.4 % |
+| ptz | Distance | 39 % [19, 70] | 26 % [7, 59] | 0 % [0, 5]† | 0 % [0, 5]† | 85 % (×2.98) | 83 m (1 %) | 0 % | +18.5 % | +3.7 % | +1.2 % |
+| ptz | HI distance (≥ 20 km/h) | 51 % [28, 64] | 38 % [21, 50] | 36 % [25, 46] | 0 % [0, 5]† | 89 % (×2.03) | 90 m (12 %) | 0 % | +57.0 % | -14.1 % | +9.8 % |
+| ptz | Sprint distance (> 25 km/h) | 32 % [19, 44] | 15 % [8, 22] | 52 % [39, 69] | 0 % [0, 5]† | 91 % (×2.26) | 65 m (42 %) | 0 % | +95.3 % | -28.8 % | +46.4 % |
+| ptz | HSR efforts | 91 % [87, 95] | 57 % [51, 63] | 86 % [82, 90] | 92 % [83, 99] | 90 % (×0.98) | 14.6 (40 %) | 0 % | -2.6 % | -9.3 % | -7.8 % |
+| ptz | Sprint efforts | 90 % [83, 95] | 57 % [44, 71] | 88 % [75, 95] | 84 % [72, 95] | 88 % (×1.15) | 5.8 (81 %) | 5 % | -10.0 % | -15.9 % | -12.8 % |
+| ptz | PSV-99 | 90 % [79, 98] | 69 % [56, 80] | 90 % [82, 98] | 2 % [0, 5] | 90 % (×1.04) | 2.1 km/h (7 %) | 0 % | +9.9 % | +2.1 % | +2.6 % |
 
 † The bootstrap over matches collapsed to a point (every interval covers, or none does):
 Clopper-Pearson interval over player-matches instead, which ignores the clustering by match.
@@ -64,34 +64,34 @@ Clopper-Pearson interval over player-matches instead, which ignores the clusteri
 
 | KPI | Card, none camera (nominal 90 %) | Card, ptz camera (nominal 90 %) | Clean truth |
 |---|---|---|---|
-| Distance | 10447 ± 143 m (observed 14473) | 10047 ± 126 m (observed 12035) | 9947 m |
-| HI distance (≥ 20 km/h) | 253 ± 172 m (observed 1918) | 647 ± 105 m (observed 953) | 558 m |
-| Sprint distance (> 25 km/h) | 227 ± 126 m (observed 667) | 299 ± 59 m (observed 297) | 157 m |
-| HSR efforts | 23.3 ± 18.4 (observed 25.0) | 19.7 ± 14.0 (observed 25.0) | 29.0 |
-| Sprint efforts | 5.7 [0.0, 11.9] (observed 5.0) | 9.2 ± 6.9 (observed 8.0) | 9.0 |
-| PSV-99 | 29.6 ± 2.9 km/h (observed 33.7) | 31.7 ± 1.6 km/h (observed 33.2) | 30.3 km/h |
+| Distance | 10446 ± 144 m (observed 14454) | 10043 ± 123 m (observed 11950) | 9947 m |
+| HI distance (≥ 20 km/h) | 259 ± 164 m (observed 1904) | 654 ± 115 m (observed 931) | 558 m |
+| Sprint distance (> 25 km/h) | 212 ± 128 m (observed 655) | 271 ± 56 m (observed 282) | 157 m |
+| HSR efforts | 22.9 ± 19.4 (observed 25.0) | 23.9 ± 19.0 (observed 27.0) | 29.0 |
+| Sprint efforts | 5.6 [0.0, 12.6] (observed 5.0) | 9.9 ± 6.1 (observed 8.0) | 9.0 |
+| PSV-99 | 29.5 ± 3.2 km/h (observed 33.6) | 31.8 ± 1.7 km/h (observed 33.2) | 30.3 km/h |
 
 **J03WOH, home #34**
 
 | KPI | Card, none camera (nominal 90 %) | Card, ptz camera (nominal 90 %) | Clean truth |
 |---|---|---|---|
-| Distance | 10520 ± 153 m (observed 14363) | 10288 ± 93 m (observed 12150) | 10100 m |
-| HI distance (≥ 20 km/h) | 290 ± 134 m (observed 2088) | 825 ± 78 m (observed 1147) | 685 m |
-| Sprint distance (> 25 km/h) | 275 ± 111 m (observed 783) | 289 ± 97 m (observed 355) | 149 m |
-| HSR efforts | 38.3 ± 18.2 (observed 34.0) | 31.4 ± 17.3 (observed 37.0) | 37.0 |
-| Sprint efforts | 14.5 ± 8.6 (observed 9.0) | 7.2 ± 6.3 (observed 7.0) | 10.0 |
-| PSV-99 | 29.1 ± 2.4 km/h (observed 34.1) | 27.8 ± 1.3 km/h (observed 30.5) | 27.7 km/h |
+| Distance | 10520 ± 153 m (observed 14345) | 10282 ± 97 m (observed 12068) | 10100 m |
+| HI distance (≥ 20 km/h) | 304 ± 159 m (observed 2078) | 829 ± 84 m (observed 1124) | 685 m |
+| Sprint distance (> 25 km/h) | 274 ± 95 m (observed 777) | 284 ± 108 m (observed 348) | 149 m |
+| HSR efforts | 38.5 ± 14.2 (observed 34.0) | 31.9 ± 17.7 (observed 37.0) | 37.0 |
+| Sprint efforts | 11.3 ± 8.3 (observed 8.0) | 6.8 ± 5.1 (observed 7.0) | 10.0 |
+| PSV-99 | 29.2 ± 2.5 km/h (observed 34.2) | 27.3 ± 1.3 km/h (observed 30.2) | 27.7 km/h |
 
 **J03WMX, away #7**
 
 | KPI | Card, none camera (nominal 90 %) | Card, ptz camera (nominal 90 %) | Clean truth |
 |---|---|---|---|
-| Distance | 12137 ± 158 m (observed 16073) | 11723 ± 114 m (observed 13619) | 11675 m |
-| HI distance (≥ 20 km/h) | 623 ± 118 m (observed 2761) | 1099 ± 106 m (observed 1581) | 1066 m |
-| Sprint distance (> 25 km/h) | 268 ± 181 m (observed 1060) | 291 ± 67 m (observed 446) | 163 m |
-| HSR efforts | 51.5 ± 14.1 (observed 47.0) | 61.2 ± 15.3 (observed 55.0) | 58.0 |
-| Sprint efforts | 5.9 ± 5.2 (observed 6.0) | 14.4 ± 7.6 (observed 11.0) | 11.0 |
-| PSV-99 | 30.2 ± 2.1 km/h (observed 34.0) | 27.8 ± 1.6 km/h (observed 30.6) | 27.2 km/h |
+| Distance | 12135 ± 158 m (observed 16052) | 11717 ± 111 m (observed 13533) | 11675 m |
+| HI distance (≥ 20 km/h) | 623 ± 119 m (observed 2744) | 1123 ± 107 m (observed 1554) | 1066 m |
+| Sprint distance (> 25 km/h) | 285 ± 196 m (observed 1055) | 264 ± 69 m (observed 426) | 163 m |
+| HSR efforts | 50.8 ± 16.6 (observed 47.0) | 62.9 ± 22.9 (observed 56.0) | 58.0 |
+| Sprint efforts | 5.3 ± 4.7 (observed 6.0) | 13.7 ± 7.8 (observed 11.0) | 11.0 |
+| PSV-99 | 30.2 ± 1.9 km/h (observed 33.9) | 28.2 ± 1.5 km/h (observed 30.6) | 27.2 km/h |
 
 ## Reading it
 

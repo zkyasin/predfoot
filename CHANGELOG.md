@@ -84,14 +84,15 @@ the project uses [semantic versioning](https://semver.org/).
   `predfoot.kpi.card` with `kpi_card.py` (linear and quadratic SIMEX bias correction, estimates projected onto
   the KPI's support, variance from a nested parametric bootstrap, nominal intervals with their coverage on
   IDSSE and a leave-one-match-out calibration). Finding: the PTZ camera's simulated 5 fps proxy fails its
-  check against SN-GSR (distance bias +15 % ball in play against +3.9 % measured, HSR distance +34 % against
-  +9.5 %; the per-frame camera is within a factor of two, but above too). Fitted Gaussian processes reproduce
-  the measured step RMS, yet the measured median 0.2 s step is only 0.59 to 0.72 of the chosen model's: real
-  steps are intermittent, which no stationary model fitted to σ, ACF and marginal captures, so the 10 fps
-  budget (PTZ distance +19 %, HI distance +60 %) overstates predfoot's KPI error. On IDSSE with simulated
-  errors (PTZ camera, 4 matches), the card's nested-bootstrap intervals cover effort counts and PSV-99 at
-  about their nominal 90 % (86 to 94 %, against 55 to 70 % with the spread of one dose); distance KPIs stay
-  below (21 to 55 %) because of the remaining extrapolation bias.
+  check against SN-GSR (distance bias +13.9 % ball in play against +2.7 % measured, HSR distance +31.4 %
+  against +6.2 %; the per-frame camera is within a factor of two, but above too). Fitted Gaussian processes
+  reproduce the measured step RMS, yet the measured median 0.2 s step is only 0.59 to 0.75 of the chosen
+  model's: real steps are intermittent, which no stationary model fitted to σ, ACF and marginal captures, so
+  the 10 fps budget (PTZ distance +18 %, HI distance +56 %) overstates predfoot's KPI error. On IDSSE with
+  simulated errors (PTZ camera, 4 matches), the card's nested-bootstrap intervals cover effort counts and
+  PSV-99 at their nominal 90 % (90 to 91 %, against 57 to 69 % with the spread of one dose); distance KPIs
+  stay below (32 to 51 %) because of the remaining extrapolation bias, and only leave-one-match-out
+  calibrated intervals reach about 90 % for every KPI.
 
 ### Fixed
 - Temporal smoothing tails: a run of misfit frames lasting at most 0.5 s strictly inside a segment gets the
