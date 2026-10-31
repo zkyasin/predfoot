@@ -30,16 +30,21 @@ weights and of the decoding config. Every later stage reads the cache, so experi
 | `uncertainty` | `CalibResult` + `FootObs` → `Localization` (position, Σp); conformal calibration |
 | `health` | Calibration features (+ frame) → failure probability, abstention |
 | `detect` | Frame → `FootObs` (ground-truth boxes for evaluation, a detector for demos) |
-| `io` | Dataset loaders, coordinate conventions, SkillCorner JSONL writer, JSON Schema |
+| `io` | Dataset loaders, coordinate conventions, SkillCorner JSONL writer and reader, export time base, JSON Schema and validator |
 | `kpi` | Tracking → physical KPIs; error injection; KPI error budget |
 | `eval` | Metrics, coverage, risk–coverage, cluster bootstrap |
 | `viz` | Minimaps, overlays, per-run QA report |
 | `serve` | HTTP API |
+| `pipeline` | Orchestration of the stages per frame, export blocks with resume; stub stages until the real modules land |
 
 Shared contracts live in `predfoot/contracts.py`; conventions in [ADR-0001](docs/adr/0001-conventions.md).
 
 ## Outputs of a run
 
 `tracking.jsonl` (one SkillCorner-style record per frame at 10 fps, plus `p90_radius_m`, `pos_cov_m2`,
-`calib_health`, `abstain`), `match.json`, `meta.json` (versions, hashes, conformal quantiles),
-`metrics.json` and `qa_report.html`.
+`calib_health`, `abstain`; schema `src/predfoot/io/schema/frame-1.0.json`), `match.json`, `meta.json`
+(versions, hashes, conformal quantiles), `metrics.json`, `minimap.png` and, later, `qa_report.html`.
+
+Runs are processed in blocks of export frames written atomically to `OUT/.parts/`. A re-run with the same
+input, configuration and stages reuses the finished blocks, so a killed run resumes to byte-identical files
+(only `metrics.json`, which holds timings, differs).
