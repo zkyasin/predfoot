@@ -143,3 +143,34 @@ def test_common_part_is_shared_and_player_draws_have_the_summed_variance(rng):
     b = sample_errors(model, 50, 3, np.random.default_rng(3))
     np.testing.assert_array_equal(a, b)
     assert sample_errors(SpectralErrorModel("none"), 10, 2, rng).any() is np.False_
+
+
+def test_copula_process_has_the_target_marginal_and_normal_score_acf(rng):
+    """Laplace marginal (kurtosis 6): quantiles reproduced, and the normal scores keep the Gaussian ACF."""
+    from scipy.special import ndtri
+    from scipy.stats import laplace, rankdata
+
+    probs = np.linspace(0.001, 0.999, 201)
+    quantiles = laplace.ppf(probs, scale=0.2)
+    proc = AxisProcess(
+        sigma=float(laplace.std(scale=0.2)),
+        kernel="matern32",
+        length_s=0.6,
+        w_nugget=0.3,
+        probs=tuple(probs),
+        quantiles=tuple(quantiles),
+    )
+    assert proc.is_copula
+    e = sample_axis([proc], n=5000, n_paths=40, rng=rng)
+    np.testing.assert_allclose(
+        np.quantile(e, [0.1, 0.5, 0.9, 0.99]), laplace.ppf([0.1, 0.5, 0.9, 0.99], scale=0.2), atol=0.02
+    )
+    scores = ndtri((rankdata(e.ravel()) - 0.5) / e.size).reshape(e.shape)
+    for lag in (1, 5, 10):
+        assert empirical_acf(scores, lag) == pytest.approx(float(proc.acf(lag / 25.0)), abs=0.03)
+    # A copula process sums with a Gaussian one: variances add.
+    g = AxisProcess(sigma=0.1, w_nugget=1.0)
+    total = sample_axis([proc, g], n=5000, n_paths=40, rng=rng)
+    assert total.var() == pytest.approx(proc.sigma**2 + 0.01, rel=0.08)
+    with pytest.raises(ValueError, match="probs"):
+        AxisProcess(sigma=0.1, probs=(0.5, 0.2), quantiles=(0.0, 1.0))

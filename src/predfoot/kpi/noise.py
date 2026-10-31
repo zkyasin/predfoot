@@ -17,6 +17,12 @@ standard deviation σ and autocorrelation
   ``white`` (independent frames, flat spectrum up to 12.5 Hz) or ``bandlimited`` (flat spectrum up to
   ``band_hz`` = 2.5 Hz, ν(τ) = sinc(2·band_hz·τ): the smoothest process still uncorrelated at 0.2 s lags).
 
+Measured errors are heavy-tailed (kurtosis 10 to 35 on SN-GSR dev), so a process can carry its marginal
+distribution as quantiles: it is then a Gaussian copula, e = Q(Φ(g)), where g is the unit-variance Gaussian
+process with the autocorrelation above, Φ the standard normal CDF and Q the measured quantile function
+(linear between the stored quantiles). ρ is then the autocorrelation of the normal scores Φ⁻¹(F(e)), which a
+monotone transform leaves unchanged, and σ the standard deviation of the marginal.
+
 :func:`fit_axis` fits the weights and time scales by weighted least squares to the measured ACF (σ is matched
 exactly). :func:`sample_axis` draws exact samples on a regular grid by circulant embedding (Dietrich & Newsam
 1997): the covariance is embedded in a circulant matrix whose eigenvalues come from one FFT; the band-limited
@@ -34,6 +40,7 @@ import numpy as np
 import scipy.fft
 from numpy.typing import ArrayLike
 from scipy.optimize import least_squares
+from scipy.special import ndtr
 
 from predfoot.kpi.speed import FloatArray
 
@@ -86,6 +93,9 @@ class AxisProcess:
     slow_s: float = 10.0
     nugget: str = "white"
     band_hz: float = 2.5
+    # Marginal of a Gaussian-copula process: quantiles at probabilities ``probs`` (empty: Gaussian, σ).
+    probs: tuple[float, ...] = ()
+    quantiles: tuple[float, ...] = ()
 
     def __post_init__(self) -> None:
         if self.sigma < 0:
@@ -100,6 +110,26 @@ class AxisProcess:
             raise ValueError("w_nugget + w_slow must not exceed 1")
         if self.length_s <= 0 or self.slow_s <= 0 or self.band_hz <= 0:
             raise ValueError("time scales and band must be positive")
+        if len(self.probs) != len(self.quantiles) or len(self.probs) == 1:
+            raise ValueError("probs and quantiles must have the same length (at least 2, or both empty)")
+        if self.probs:
+            pr, q = np.asarray(self.probs), np.asarray(self.quantiles)
+            if np.any(np.diff(pr) <= 0) or pr[0] <= 0 or pr[-1] >= 1 or np.any(np.diff(q) < 0):
+                raise ValueError("probs must increase inside (0, 1) and quantiles must not decrease")
+
+    @property
+    def is_copula(self) -> bool:
+        return bool(self.quantiles)
+
+    def gaussian(self) -> AxisProcess:
+        """The Gaussian process with this autocorrelation (unit variance for a copula process)."""
+        if not self.is_copula:
+            return self
+        return replace(self, sigma=1.0, probs=(), quantiles=())
+
+    def transform(self, g: ArrayLike) -> FloatArray:
+        """Map unit-variance Gaussian values to the marginal of a copula process."""
+        return np.asarray(np.interp(ndtr(np.asarray(g)), self.probs, self.quantiles), dtype=np.float64)
 
     @property
     def w_main(self) -> float:
@@ -121,7 +151,11 @@ class AxisProcess:
         return np.asarray(self.smooth_acf(lag) + self.w_nugget * nug, dtype=np.float64)
 
     def derivative_variance(self) -> float:
-        """Variance of the time derivative (m²/s²): infinite when any part of ρ has a cusp at zero."""
+        """Variance of the time derivative (m²/s²): infinite when any part of ρ has a cusp at zero.
+
+        For a copula process this is the value of a Gaussian process with the same σ and ρ (the transform is
+        Lipschitz, so finiteness is the same).
+        """
         if self.sigma == 0:
             return 0.0
         total = 0.0
@@ -188,13 +222,28 @@ def sample_axis(
 ) -> FloatArray:
     """Exact samples (n, n_paths) on a grid at ``hz`` of the sum of the independent processes ``procs``.
 
-    Every path is stationary from its first sample. Real and imaginary parts of one complex FFT give two
-    independent paths.
+    Every path is stationary from its first sample. Gaussian processes are summed in the covariance domain
+    (one embedding); each copula process is sampled as its own Gaussian process and transformed.
     """
     active = tuple(p for p in procs if p.sigma > 0)
     out = np.zeros((n, n_paths))
     if not active or n == 0 or n_paths == 0:
         return out
+    gaussian = tuple(p for p in active if not p.is_copula)
+    if gaussian:
+        out += _sample_gaussian(gaussian, n, n_paths, rng, hz)
+    for p in active:
+        if p.is_copula:
+            out += p.transform(_sample_gaussian((p.gaussian(),), n, n_paths, rng, hz))
+    return out
+
+
+def _sample_gaussian(
+    active: tuple[AxisProcess, ...], n: int, n_paths: int, rng: np.random.Generator, hz: float
+) -> FloatArray:
+    """Circulant-embedding samples of a sum of Gaussian processes (real and imaginary parts of one FFT
+    give two independent paths)."""
+    out = np.zeros((n, n_paths))
     if n == 1:
         return rng.standard_normal((1, n_paths)) * math.sqrt(sum(p.sigma**2 for p in active))
     s = _sqrt_eigenvalues(active, n, float(hz))
@@ -294,6 +343,7 @@ def fit_axis(
     slow: bool = False,
     nugget: str = "white",
     min_scale_s: float = 0.2,
+    marginal: tuple[Sequence[float], Sequence[float]] | None = None,
 ) -> AcfFit:
     """Weighted least-squares fit of the nugget weight and time scales to a measured ACF.
 
@@ -306,7 +356,8 @@ def fit_axis(
     Kernel time scales are kept at or above ``min_scale_s`` (default: the 0.2 s interval of the
     measurement). A shorter scale is not resolved by the lags and would only act as a nugget with an
     arbitrary 25 Hz shape; power that decorrelates faster goes to the nugget, whose shape is then an explicit
-    assumption.
+    assumption. With ``marginal = (probs, quantiles)`` the result is a copula process and ``acf`` must be the
+    ACF of the normal scores.
     """
     lags = np.asarray(lags_s, dtype=np.float64)
     r = np.asarray(acf, dtype=np.float64)
@@ -329,6 +380,8 @@ def fit_axis(
             w_slow=min(w_s, 1.0 - w_n),
             slow_s=slow_s,
             nugget=nugget,
+            probs=tuple(float(v) for v in marginal[0]) if marginal else (),
+            quantiles=tuple(float(v) for v in marginal[1]) if marginal else (),
         )
 
     def resid(theta: FloatArray) -> FloatArray:

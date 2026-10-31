@@ -34,6 +34,7 @@ from typing import Any
 import numpy as np
 import polars as pl
 import typer
+from scipy.special import ndtri
 
 from predfoot.kpi.errors import split_common_mode
 from predfoot.kpi.proxy import PROXY_MIN_RUN, ProxyTotals
@@ -46,6 +47,10 @@ LAGS = (1, 2, 3, 4, 5)
 MIN_SERIES = 10
 MIN_RUN = PROXY_MIN_RUN
 AXES = ("x", "y")
+# Probabilities at which the marginal of the errors is stored (dense in the tails).
+_TAIL_PROBS = (0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025)
+_PROBS = np.concatenate([_TAIL_PROBS, np.linspace(0.05, 0.95, 91), 1.0 - np.array(_TAIL_PROBS[::-1])])
+MARGINAL_PROBS = tuple(float(p) for p in _PROBS.round(6))
 KEYS = ["clip", "frame", "track_id"]
 TITLES = {"lab": "labels", "or": "trusted line oracle", "sm": "smoothed labels"}
 
@@ -113,23 +118,49 @@ def measure(players: pl.DataFrame, ref: str) -> dict[str, Any]:
     d = players.filter(pl.col(f"ex_{ref}").is_not_nan() & pl.col(f"ex_{ref}").is_not_null())
     d = d.filter((pl.col(f"ex_{ref}") ** 2 + pl.col(f"ey_{ref}") ** 2) < MAX_ERROR_M**2)
     parts = ("common", "individual")
-    pools = {(part, axis): _Pool() for part in parts for axis in ("xy", *AXES)}
+    series: dict[tuple[str, str], list[np.ndarray]] = {(part, axis): [] for part in parts for axis in AXES}
     for (_clip,), g in d.partition_by("clip", as_dict=True).items():
         e = clip_tensor(g, ref)
         if e.shape[0] < MIN_SERIES:
             continue
         common, indiv = split_common_mode(e)
         for axis, name in enumerate(AXES):
-            for key in (name, "xy"):
-                pools["common", key].add(common[:, axis])
-                for t in range(indiv.shape[1]):
-                    pools["individual", key].add(indiv[:, t, axis])
+            series["common", name].append(common[:, axis])
+            series["individual", name].extend(indiv[:, t, axis] for t in range(indiv.shape[1]))
     out: dict[str, Any] = {"n_player_frames": d.height, "n_clips": d["clip"].n_unique()}
     for part in parts:
-        out[part] = pools[part, "xy"].summary()  # both axes pooled, as in the tables
+        pooled = _Pool()
+        per_axis: dict[str, Any] = {}
         for name in AXES:
-            out[part][name] = pools[part, name].summary()
+            pool, scores = _Pool(), _Pool()
+            kept = [x for x in series[part, name] if np.isfinite(x).sum() >= MIN_SERIES]
+            for x in kept:
+                pool.add(x)
+                pooled.add(x)
+            # Marginal of the errors around each series' mean (the σ above uses the same centring), and the
+            # ACF of their normal scores Φ⁻¹(F̂(e)): the correlation of a Gaussian copula with that marginal.
+            centred = [x - np.nanmean(x) for x in kept]
+            values = np.sort(np.concatenate([x[np.isfinite(x)] for x in centred]))
+            for x in centred:
+                scores.add(normal_scores(x, values))
+            per_axis[name] = pool.summary()
+            per_axis[name]["quantiles"] = np.quantile(values, MARGINAL_PROBS).tolist()
+            ns = scores.summary()
+            per_axis[name]["acf_nscore"], per_axis[name]["n_pairs_nscore"] = ns["acf"], ns["n_pairs"]
+        out[part] = pooled.summary()  # both axes pooled, as in the tables
+        out[part].update(per_axis)
+    out["marginal_probs"] = list(MARGINAL_PROBS)
     return out
+
+
+def normal_scores(x: np.ndarray, sorted_values: np.ndarray) -> np.ndarray:
+    """Φ⁻¹ of the pooled empirical CDF (mid-ranks) at each value of ``x``; NaN stays NaN."""
+    n = sorted_values.size
+    lo = np.searchsorted(sorted_values, x, side="left")
+    hi = np.searchsorted(sorted_values, x, side="right")
+    u = (0.5 * (lo + hi)) / n
+    out = ndtri(np.clip(u, 0.5 / n, 1.0 - 0.5 / n))
+    return np.where(np.isfinite(x), out, np.nan)
 
 
 def kpi_proxy(players: pl.DataFrame) -> dict[str, Any] | None:
