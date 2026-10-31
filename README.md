@@ -70,8 +70,10 @@ positions, and 90 % regions scaled by a Mondrian conformal model when one is giv
 CPU images run them too. Frames are keyed by their 0-based index in the clip file (`frame` in
 `predfoot-clip/1`), not by image number as in the detection cache (1, 6, 11, … for SN-GSR frames downloaded
 one in five): re-key cached detections with `predfoot.keypoints.cache.by_clip_index` before writing them with
-`dumps_detections`. A file that names frames beyond the clip is refused before anything runs, and a file
-without frame 0 gets a warning. The golden fixture is such an input:
+`dumps_detections`, as `scripts/run_real_clip.py` does when it writes `input_clip.json`, `detections.json` and
+`conformal.json` next to its outputs, so that `predfoot run --fps 5 --detections ...` reruns it from files. A
+file that names frames beyond the clip is refused before anything runs, and a file without frame 0 gets a
+warning. The golden fixture is such an input:
 
 ```bash
 uv run predfoot run tests/fixtures/golden/clip.json --out out-golden/ \

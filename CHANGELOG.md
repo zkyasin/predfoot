@@ -57,6 +57,8 @@ the project uses [semantic versioning](https://semver.org/).
   golden check inside the images.
 - `docker/smoke-cli.sh` and `docker/smoke-serve.sh`: the smoke tests of the images, shared by the `docker` and
   `release` workflows and runnable locally.
+- `scripts/run_real_clip.py` writes its inputs next to its outputs (`input_clip.json`, `detections.json`
+  re-keyed by clip frame index, `conformal.json`), so `predfoot run --detections` reruns a dev clip from files.
 
 ### Fixed
 - The export rate entered the config hash as given, so `RunConfig()` (10) and `predfoot run` (10.0) hashed the
