@@ -1,7 +1,7 @@
 """Per-frame latency of the PnLCalib networks on this machine (ticket T5.5).
 
-Backends: PyTorch CPU, PyTorch MPS (Apple GPU, when available), ONNX Runtime CPU and ONNX Runtime with the
-CoreML execution provider (when available).
+Backends: PyTorch CPU, PyTorch MPS (Apple GPU) or CUDA when available, ONNX Runtime CPU, and ONNX Runtime
+with the CoreML or CUDA execution provider when available.
 
 Usage:
     uv sync --extra vision --extra export
@@ -10,9 +10,10 @@ Usage:
 
 Method: frames of a dev clip are decoded and preprocessed once (resized to 960 × 540, RGB in [0, 1]). Each
 backend then runs both networks on one frame at a time (batch 1). The clock covers the copy to the device,
-both forward passes and the heatmaps back in host memory; MPS is synchronised before the clock starts and
-stops. The first frame is a warm-up and is excluded; loading is timed apart. JPEG decoding, resizing and
-heatmap decoding, which surround the networks in the pipeline, are timed separately on the CPU.
+both forward passes and the heatmaps back in host memory; the GPU is synchronised before the clock starts
+and stops. The first frame is a warm-up and is excluded; loading is timed apart. JPEG decoding, resizing and
+heatmap decoding, which surround the networks in the pipeline, are timed separately on the CPU. The report
+flags a busy machine: a high load average at start, or a warm-up frame faster than every timed frame.
 """
 
 from __future__ import annotations
@@ -54,6 +55,8 @@ app = typer.Typer(add_completion=False)
 DEFAULT_CLIP = Path("sn-gsr") / "valid" / "SNGS-056"
 COREML_OPTIONS = {"ModelFormat": "MLProgram", "MLComputeUnits": "ALL"}
 MATCH_FRAMES_10FPS = 90 * 60 * 10
+#: A 1-minute load average above this at start flags the run as made on a busy machine.
+BUSY_LOAD = 1.0
 
 
 @dataclasses.dataclass(frozen=True)
@@ -114,9 +117,45 @@ def coreml_partition(log: str) -> str:
     return "CoreML ran " + " and ".join(graphs)
 
 
+def processor() -> str:
+    """Name of the processor ("Apple M4 Pro"), from sysctl on macOS, else from the platform module."""
+    if sys.platform == "darwin":
+        try:
+            brand = subprocess.run(
+                ["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True, text=True
+            ).stdout.strip()
+        except OSError:
+            brand = ""
+        if brand:
+            return brand
+    return platform.processor() or platform.machine() or "unknown processor"
+
+
 def machine() -> str:
-    chip = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True, text=True)
-    return f"{chip.stdout.strip() or platform.processor()}, macOS {platform.mac_ver()[0]}"
+    system = f"macOS {platform.mac_ver()[0]}" if sys.platform == "darwin" else platform.platform(terse=True)
+    return f"{processor()}, {system}"
+
+
+def load_average() -> tuple[float, float, float] | None:
+    """1, 5 and 15-minute load averages, None where the system does not report them."""
+    try:
+        return os.getloadavg()
+    except (AttributeError, OSError):
+        return None
+
+
+def busy_signs(results: list[Result], loadavg: tuple[float, float, float] | None) -> list[str]:
+    """Signs that other work shared the machine during the run."""
+    signs = []
+    if loadavg is not None and loadavg[0] > BUSY_LOAD:
+        signs.append(f"the 1-minute load average was {loadavg[0]:.2f} at start")
+    for r in results:
+        if r.warmup_ms < min(r.times_ms):
+            signs.append(
+                f"the {r.backend} warm-up frame ({r.warmup_ms:.0f} ms) was faster than every timed frame "
+                f"({min(r.times_ms):.0f} ms at best)"
+            )
+    return signs
 
 
 def git_commit() -> str:
@@ -128,14 +167,23 @@ def git_commit() -> str:
 
 
 def report(results: list[Result], ctx: dict[str, Any]) -> str:
+    loadavg = ctx["loadavg"]
+    load_text = "not reported" if loadavg is None else ", ".join(f"{v:.2f}" for v in loadavg)
+    signs = busy_signs(results, loadavg)
+    busy = (
+        f" **The machine was busy**: {'; '.join(signs)}. The timed frames then overstate the networks' own "
+        "cost; re-run on an idle machine for a stable figure."
+        if signs
+        else ""
+    )
     lines = [
-        "# Keypoint network latency on an Apple M4 Pro",
+        f"# Keypoint network latency on {ctx['processor']}",
         "",
         f"`uv run python scripts/bench_latency.py --frames {ctx['n']}` · commit `{ctx['commit']}` · "
         f"{ctx['date']} · model `{ctx['model']}`",
         "",
         f"Machine: {ctx['machine']}; torch {ctx['torch']}, onnxruntime {ctx['onnxruntime']}. "
-        f"Load average at start (1, 5, 15 min): {ctx['loadavg']}; other jobs may have shared the machine.",
+        f"Load average at start (1, 5, 15 min): {load_text}.",
         "",
         "| Backend | Load (s) | Warm-up (ms) | ms / frame, median (min–max) | Frames / s | "
         "h per match at 10 fps | Max shift vs PyTorch CPU (px) |",
@@ -157,8 +205,9 @@ def report(results: list[Result], ctx: dict[str, Any]) -> str:
         "",
         "**Method.** Both networks (keypoints and lines, HRNet-W48) run on one 960 × 540 frame at a time "
         "(batch 1, float32). The clock covers the copy to the device, both forward passes and the heatmaps "
-        "back in host memory; MPS is synchronised (`torch.mps.synchronize()`) before the clock starts and "
-        "stops. The first frame warms each backend up and is excluded; loading (weights and their hashes, "
+        "back in host memory; PyTorch on a GPU is synchronised (`torch.mps.synchronize()`, "
+        "`torch.cuda.synchronize()`) before the clock starts and stops. The first frame warms each backend "
+        "up and is excluded; loading (weights and their hashes, "
         f"session creation, CoreML compilation) is timed apart. Frames: {ctx['n']} timed frames of dev clip "
         f"{ctx['clip']} after one warm-up frame, the same preprocessed inputs for every backend. PyTorch "
         f"CPU uses {ctx['torch_threads']} threads, ONNX Runtime its defaults. {ctx['coreml']}. Max shift: "
@@ -168,7 +217,7 @@ def report(results: list[Result], ctx: dict[str, Any]) -> str:
         "",
         f"**Caveats.** {ctx['n']} timed frames per backend make a smoke run, not a stable estimate: no "
         "confidence interval and no thermal steady state. Hours per match extrapolate the median to 54,000 "
-        "frames (90 minutes at 10 fps), networks only. No T4 / CUDA row yet.",
+        f"frames (90 minutes at 10 fps), networks only.{busy}",
         "",
     ]
     return "\n".join(lines)
@@ -185,8 +234,7 @@ def main(
     clip = clip_dir or data_dir() / DEFAULT_CLIP
     if "test" in clip.parts:
         raise typer.BadParameter("the test split stays locked", param_hint="--clip-dir")
-    loadavg = subprocess.run(["sysctl", "-n", "vm.loadavg"], capture_output=True, text=True).stdout
-    loadavg = ", ".join(loadavg.strip(" {}\n").split())
+    loadavg = load_average()
     paths = spread_frames(clip, frames + 1)
     if len(paths) < 2:
         raise typer.BadParameter("the clip needs at least two frames")
@@ -221,6 +269,11 @@ def main(
         results.append(mps.against(parity(reference, heatmaps, frame_size)))
         gc.collect()
         torch.mps.empty_cache()
+    if torch.cuda.is_available():
+        cuda, heatmaps, _ = bench_torch("cuda", torch.cuda.synchronize)
+        results.append(cuda.against(parity(reference, heatmaps, frame_size)))
+        gc.collect()
+        torch.cuda.empty_cache()
 
     coreml_note = "The CoreML execution provider was not available"
     ort_version = "not used"
@@ -233,6 +286,8 @@ def main(
         if "CoreMLExecutionProvider" in ort.get_available_providers():
             coreml = [("CoreMLExecutionProvider", COREML_OPTIONS), "CPUExecutionProvider"]
             backends.append(("ONNX Runtime CoreML", coreml))
+        if "CUDAExecutionProvider" in ort.get_available_providers():
+            backends.append(("ONNX Runtime CUDA", ["CUDAExecutionProvider", "CPUExecutionProvider"]))
         for name, providers in backends:
             start = time.perf_counter()
             if name.endswith("CoreML"):
@@ -265,6 +320,7 @@ def main(
             "commit": git_commit(),
             "date": datetime.now(UTC).strftime("%Y-%m-%d"),
             "model": model_version,
+            "processor": processor(),
             "machine": machine(),
             "torch": version("torch"),
             "onnxruntime": ort_version,
@@ -276,6 +332,8 @@ def main(
             "coreml": coreml_note,
         },
     )
+    for sign in busy_signs(results, loadavg):
+        typer.echo(f"warning: busy machine, {sign}", err=True)
     if out is None:
         typer.echo(text)
     else:

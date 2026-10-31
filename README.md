@@ -97,7 +97,8 @@ spools uploads above 1 MiB to an anonymous temporary file that goes away with th
 
 The keypoint networks also export to ONNX (opset 18, parity with PyTorch within 0.5 px on decoded keypoints)
 and run on ONNX Runtime. [`reports/latency_m4.md`](reports/latency_m4.md) times both networks per frame on an
-M4 Pro: 0.46 s with ONNX Runtime CoreML, 0.56 s with PyTorch MPS, 1.8-1.9 s on the CPU (3-frame smoke run).
+M4 Pro: 0.46 s with ONNX Runtime CoreML, 0.56 s with PyTorch MPS, about 1.1-1.9 s on the CPU (a 3-frame
+smoke run on a busy machine, which inflated the CPU frames).
 
 ```bash
 uv sync --extra vision --extra export
