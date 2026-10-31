@@ -38,3 +38,13 @@ the project uses [semantic versioning](https://semver.org/).
   leave-one-game-out fold; `eval_dev.py --smooth none|proj|ptz` (`--calib-from`, `--fit-scope`, `--beta`)
   with Mondrian bins per covariance source, `error_process.py --compare` with a model-free KPI proxy,
   optional smoothing in the real stages (with an optional game centre).
+- Spectral KPI error budget (T4.3) and KPI uncertainty card (T4.4): `predfoot.kpi.noise` (nugget + one or two
+  scales of an exponential, Matérn-3/2, Matérn-5/2 or squared-exponential kernel, Gaussian or Gaussian-copula
+  marginal, exact circulant-embedding sampling, weighted least-squares fit to the 5 fps ACF);
+  `error_process.py --json` (per-axis σ, ACF and normal-score ACF, marginal quantiles, run lengths);
+  `kpi_spectral.py` (simulation of the SN-GSR KPI proxy on IDSSE, 10 fps budget with kernel × nugget
+  sensitivity) and `predfoot.kpi.card` with `kpi_card.py` (linear and quadratic SIMEX bias correction,
+  coverage on IDSSE with leave-one-match-out calibration). Finding: no stationary model fitted to σ, ACF and
+  marginal reproduces the measured proxy (PTZ camera: +18 to +32 % simulated distance bias against +3.9 %
+  measured); real error steps are intermittent (median 0.2 s step about half the model's), so the 10 fps
+  budget is an overestimate.
