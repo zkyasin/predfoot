@@ -1,8 +1,8 @@
 {
   "schema_version": "1.0",
-  "config_hash": "f42c07169aec52e7139a5fc8b4dab8a9e55c4c53aa71fa3120a0ad0b4831df21",
+  "config_hash": "dd46306269174f72d3cdd538aee82bf6bd62018b3831eb5ca320b46ab0080a15",
   "config": {
-    "export_fps": 10,
+    "export_fps": 10.0,
     "placeholder_radius_m": 1.0,
     "n_panels": 6,
     "schema_version": "1.0",
@@ -15,7 +15,7 @@
   },
   "clip_id": "synthetic-golden-001",
   "native_fps": 25.0,
-  "export_fps": 10,
+  "export_fps": 10.0,
   "image_size": [
     1920,
     1080

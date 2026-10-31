@@ -217,6 +217,12 @@ def test_blocks_from_other_stages_are_never_reused(tmp_path, monkeypatch):
     assert json.loads((tmp_path / "meta.json").read_text())["config"]["stages"] == "calib-v2"
 
 
+def test_the_same_rate_written_as_int_or_float_is_one_configuration():
+    assert RunConfig(export_fps=10).output_settings() == RunConfig(export_fps=10.0).output_settings()
+    assert json.dumps(RunConfig(export_fps=10).output_settings()) == json.dumps(RunConfig().output_settings())
+    assert RunConfig().output_settings()["export_fps"] == 10.0
+
+
 def test_run_config_rejects_bad_settings():
     with pytest.raises(ValueError, match="export_fps"):
         RunConfig(export_fps=0)

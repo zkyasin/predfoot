@@ -74,7 +74,7 @@ class RunConfig:
 
     def output_settings(self) -> dict[str, Any]:
         return {
-            "export_fps": self.export_fps,
+            "export_fps": float(self.export_fps),  # 10 and 10.0 are one setting, with one config hash
             "placeholder_radius_m": self.placeholder_radius_m,
             "n_panels": self.n_panels,
             "schema_version": SCHEMA_VERSION,
