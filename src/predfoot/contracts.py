@@ -60,6 +60,7 @@ class CalibResult:
     rms_px: float | None = None
     n_inliers: int = 0
     cond: float | None = None  # condition number of JᵀWJ
+    dof: float | None = None  # degrees of freedom of the noise scale; regions use F quantiles, not χ²
 
     @property
     def ok(self) -> bool:

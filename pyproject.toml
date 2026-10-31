@@ -19,6 +19,7 @@ dependencies = [
     "jsonschema>=4.23",
     "matplotlib>=3.9",
     "huggingface-hub>=0.26",
+    "scikit-learn>=1.9.1",
 ]
 
 [project.optional-dependencies]
@@ -53,6 +54,9 @@ packages = ["src/predfoot"]
 line-length = 110
 target-version = "py312"
 src = ["src", "tests", "scripts"]
+# Third-party MIT model definition, kept as close to upstream as possible.
+extend-exclude = ["src/predfoot/keypoints/hrnet_mit.py"]
+force-exclude = true
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "NPY", "RUF", "PT"]
@@ -67,6 +71,7 @@ no_implicit_optional = true
 warn_unused_ignores = true
 warn_redundant_casts = true
 ignore_missing_imports = true
+exclude = ["src/predfoot/keypoints/hrnet_mit\\.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
