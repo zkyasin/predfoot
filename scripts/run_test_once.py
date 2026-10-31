@@ -289,6 +289,8 @@ def stage_b(ctx: Context) -> None:
 
 def stage_c(ctx: Context) -> dict[str, Any]:
     lock = guard(ctx)  # nothing below runs without a matching lock
+    if ctx.report.exists():  # a committed result, e.g. from another clone with its own data folder
+        raise pr.PreregError(f"{ctx.report} exists: the test evaluation already ran, a second one is refused")
     ensure_clips(ctx)
     b = ctx.run_dir / "stage_b.json"
     if not b.exists():
@@ -473,13 +475,17 @@ def main(
             typer.echo(
                 "criteria: " + ", ".join(f"{k} {'met' if v['pass'] else 'not met'}" for k, v in crit.items())
             )
-            if dry_run:
+            if dry_run:  # the report is set aside so that the marker alone has to refuse
+                aside = ctx.report.with_name(ctx.report.name + ".aside")
+                ctx.report.rename(aside)
                 try:
                     stage_c(ctx)
                 except pr.PreregError as err:
                     typer.echo(f"second stage C refused as expected: {err}")
                 else:
                     raise RuntimeError("a second stage C was not refused")
+                finally:
+                    aside.rename(ctx.report)
     except pr.PreregError as err:
         typer.echo(f"Refused: {err}", err=True)
         raise typer.Exit(2) from err

@@ -219,6 +219,14 @@ def test_stage_c_is_not_reachable_without_a_matching_lock(repo, tmp_path, monkey
     assert not any(m.exists() for m in ctx.markers)
 
 
+def test_stage_c_refuses_when_a_test_report_exists(repo, tmp_path, monkeypatch):
+    ctx = _context(repo, tmp_path)
+    ctx.report.write_text("# Preregistered test run\n")
+    with pytest.raises(pr.PreregError, match="already ran"):
+        run_test_once.stage_c(ctx)
+    assert not any(m.exists() for m in ctx.markers)
+
+
 def test_stages_a_and_b_refuse_without_the_lock(repo, tmp_path):
     (repo / pr.LOCK_PATH).unlink()
     commit_all(repo, "no lock")
