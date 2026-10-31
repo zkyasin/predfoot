@@ -62,6 +62,19 @@ from its finished blocks and produces the same bytes (only `metrics.json`, which
 synthetic clip comes from `scripts/make_synthetic_clip.py`; the frame schema is
 `src/predfoot/io/schema/frame-1.0.json`.
 
+### Real stages from detections
+
+With a detections file (`predfoot-detections/1`: the PnLCalib keypoints and line ends of every frame, as the
+detection cache holds them), `predfoot run` runs the real stages instead of the stubs: robust calibration of
+each frame, delta-method positions, and 90 % regions scaled by a Mondrian conformal model when one is given.
+No torch is needed, so the CPU images run them too. The golden fixture is such an input:
+
+```bash
+uv run predfoot run tests/fixtures/golden/clip.json --out out-golden/ \
+    --detections tests/fixtures/golden/detections.json --conformal tests/fixtures/golden/conformal.json
+uv run python -m predfoot.io.compare out-golden/ tests/fixtures/golden/expected/
+```
+
 ### QA report
 
 `qa_report.html` is one self-contained file that opens offline: inline CSS and SVG, the minimap embedded as
@@ -100,15 +113,18 @@ docker run --rm -p 8000:8000 predfoot:serve
 
 In the `serve` image, `/healthz`, `/v1/localize` and `/metrics` work; `/v1/calibrate` answers 503 because the
 keypoint networks need torch (extra `vision`), which the CPU images leave out. The `docker` workflow builds
-both targets on every pull request that touches the package and smoke-tests them: `predfoot run`, `validate`
-and `qa` in the `cli` image; in the `serve` image, a healthy `HEALTHCHECK`, `POST /v1/localize` (200, finite
-values), `POST /v1/calibrate` (503) and `/metrics`. Nothing is pushed there.
+both targets on every pull request that touches the package and smoke-tests them: in the `cli` image,
+`predfoot run`, `validate` and `qa`, then the real stages on the golden fixture, whose outputs must match
+`tests/fixtures/golden/expected/`; in the `serve` image, a healthy `HEALTHCHECK`, `POST /v1/localize` (200,
+finite values), `POST /v1/calibrate` (503) and `/metrics`. Nothing is pushed there. No image has been built
+outside CI: the workflow run is the build's first test.
 
 ### Release
 
 Bump `version` in `pyproject.toml`, merge, then push a tag `v<version>`. The `release` workflow checks that
-the tag matches the package version, smoke-tests both images and pushes them to the GitHub Container Registry
-with `GITHUB_TOKEN`, with OCI labels (source, revision, version, licence):
+the tag matches the package version, smoke-tests both images (version, tracer bullet, golden check) and pushes
+them to the GitHub Container Registry with `GITHUB_TOKEN`, with OCI labels (source, revision, version,
+licence):
 
 | Image | Tags |
 |---|---|

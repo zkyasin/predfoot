@@ -51,8 +51,14 @@ the project uses [semantic versioning](https://semver.org/).
 - Golden test of the real stages on committed synthetic detections (`scripts/make_golden.py --update`
   regenerates the expected outputs), detection files as JSON (`predfoot-detections/1`) and a generator of
   network-style detections from a known camera.
+- `predfoot run --detections FILE [--conformal MODEL]` runs the real stages (calibration from the detections,
+  delta-method regions, Mondrian conformal scaling) without torch; `python -m predfoot.io.compare` compares a
+  run with golden outputs, one written decimal of slack on numbers. The Docker and release workflows run the
+  golden check inside the images.
 
 ### Fixed
+- The export rate entered the config hash as given, so `RunConfig()` (10) and `predfoot run` (10.0) hashed the
+  same configuration differently, and a run resumed through the other path recomputed every block.
 - `meta.json` described every stage as a stub and the conformal model as null even when the real stages ran
   with a Mondrian model; stages now describe themselves, and the real ones record their model (hash, alpha,
   pooled quantile, edges, per-bin quantiles).
