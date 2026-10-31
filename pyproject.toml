@@ -27,6 +27,9 @@ dependencies = [
 vision = ["torch>=2.5", "torchvision>=0.20"]
 serve = ["fastapi>=0.115", "uvicorn>=0.30"]
 export = ["onnx>=1.17", "onnxruntime>=1.20"]
+cloud = [
+    "modal>=1.6",
+]
 
 [project.scripts]
 predfoot = "predfoot.cli:app"
