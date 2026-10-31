@@ -24,7 +24,6 @@ import shutil
 import subprocess
 import sys
 import time
-import zlib
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,7 +36,8 @@ from predfoot.kpi.config import DEFAULT_CONFIG_PATH, KpiConfig, load_kpi_config
 from predfoot.kpi.errors import ErrorModel, ar1_noise, ghost_distance_per_min, sample_errors
 from predfoot.kpi.metrics import compute_kpis, kpi_names, path_length
 from predfoot.kpi.report import compare_to_reference
-from predfoot.kpi.speed import Kinematics, drop_glitches, kmh_to_ms, pipeline
+from predfoot.kpi.simulate import period_tracks, seeded_rng
+from predfoot.kpi.speed import Kinematics, pipeline
 from predfoot.paths import REPO_ROOT, reports_dir
 
 SIGMAS = (0.05, 0.1, 0.2, 0.5)
@@ -143,31 +143,8 @@ def period_arrays(
     Tracking glitches of the source feed are cut out first (:func:`drop_glitches`). Also returns the number of
     samples dropped and the number of valid samples before cleaning.
     """
-    out = []
-    dropped = total = 0
-    max_speed = float(kmh_to_ms(cfg.glitch_speed_kmh))
-    for period in sorted(players["period"].unique().to_list()):
-        df = players.filter(pl.col("period") == period)
-        ids = sorted(df["player_id"].unique().to_list())
-        f0 = int(df["frame"].min())  # type: ignore[arg-type]
-        n = int(df["frame"].max()) - f0 + 1  # type: ignore[operator]
-        cube = np.full((n, len(ids), 2), np.nan)
-        col = df["player_id"].replace_strict({pid: i for i, pid in enumerate(ids)}).to_numpy()
-        row = df["frame"].to_numpy() - f0
-        cube[row, col, 0] = df["x"].to_numpy()
-        cube[row, col, 1] = df["y"].to_numpy()
-        for i in range(len(ids)):
-            cube[:, i], n_dropped = drop_glitches(cube[:, i], cfg.native_hz, max_speed)
-            dropped += n_dropped
-        total += df.height
-        out.append((ids, cube))
-    return out, dropped, total
-
-
-def seeded_rng(seed: int, *keys: str | int) -> np.random.Generator:
-    """Generator seeded from the study seed and stable keys (match, error model, period)."""
-    entropy = [seed] + [k if isinstance(k, int) else zlib.crc32(k.encode()) for k in keys]
-    return np.random.default_rng(entropy)
+    tracks, dropped, total = period_tracks(players, cfg)
+    return [(list(t.player_ids), t.xy) for t in tracks], dropped, total
 
 
 def condition_kpis(
