@@ -18,7 +18,12 @@ from predfoot.io.skillcorner import CORNER_KEYS, image_corners_projection
 from predfoot.serve.app import MAX_JSON_BYTES, create_app
 from predfoot.serve.schemas import MAX_FEET
 from predfoot.uncertainty.delta import CHI2_2_90, region_quantile
-from tests.unit.serve_fakes import SyntheticDetector, broadcast_camera, laplace_covariance
+from tests.unit.serve_fakes import (
+    SyntheticDetector,
+    broadcast_camera,
+    jpeg_with_orientation,
+    laplace_covariance,
+)
 
 PLAYERS = np.array([[5.0, -10.0], [20.0, 5.0], [30.0, 15.0], [45.0, -30.0]])
 CAM = broadcast_camera()
@@ -343,6 +348,22 @@ def test_non_images_are_refused(payload, content_type):
     r = client.post("/v1/calibrate", files={"image": ("f", data, content_type)})
     assert r.status_code == 415
     assert detector.calls == 0
+
+
+class ShapeRecorder(SyntheticDetector):
+    def detect(self, frames_rgb):
+        self.shape = frames_rgb.shape
+        return super().detect(frames_rgb)
+
+
+def test_calibrate_keeps_the_stored_pixel_grid_of_rotated_jpegs():
+    detector = ShapeRecorder(CAM)
+    client = TestClient(create_app(detector=detector))
+    data = jpeg_with_orientation(1920, 1080, 6)  # EXIF asks viewers to show it as 1080 × 1920
+    r = client.post("/v1/calibrate", files={"image": ("f.jpg", data, "image/jpeg")})
+    assert r.status_code == 200, r.text
+    assert r.json()["image_size"] == [1920, 1080]
+    assert detector.shape == (1, 1080, 1920, 3)  # keypoints, H and corners all use the same grid
 
 
 def test_calibrate_needs_an_image_field(client):

@@ -1,5 +1,6 @@
 """Numpy cores of the HTTP API: localisation, upload checks, calibration of detections, lazy model loading."""
 
+import io
 import threading
 import time
 
@@ -25,7 +26,12 @@ from predfoot.serve.calibrate import (
 from predfoot.serve.images import ImageRejected, decode_rgb, inspect_image
 from predfoot.serve.localize import localize_feet, region_threshold
 from predfoot.uncertainty.delta import CHI2_2_90, position_covariance
-from tests.unit.serve_fakes import SyntheticDetector, broadcast_camera, laplace_covariance
+from tests.unit.serve_fakes import (
+    SyntheticDetector,
+    broadcast_camera,
+    jpeg_with_orientation,
+    laplace_covariance,
+)
 
 PLAYERS = np.array([[5.0, -10.0], [20.0, 5.0], [30.0, 15.0], [45.0, -30.0]])
 
@@ -149,6 +155,40 @@ def test_images_with_too_many_pixels_are_rejected_before_decoding():
     with pytest.raises(ImageRejected) as err:
         inspect_image(data, "image/png", max_pixels=500)
     assert err.value.status_code == 413
+
+
+def test_the_exif_orientation_is_ignored():
+    data = jpeg_with_orientation(96, 54, 6)
+    assert inspect_image(data, "image/jpeg") == ("JPEG", (96, 54))
+    assert decode_rgb(data, (96, 54)).shape == (54, 96, 3)  # the stored grid, as the header says
+
+
+def test_a_decoded_size_that_contradicts_the_header_is_rejected():
+    with pytest.raises(ImageRejected) as err:
+        decode_rgb(encode(".png", np.zeros((54, 96, 3), dtype=np.uint8)), (54, 96))
+    assert err.value.status_code == 415
+
+
+def test_multi_picture_jpegs_are_jpegs():
+    from PIL import Image
+
+    img = Image.fromarray(np.zeros((54, 96, 3), dtype=np.uint8))
+    buf = io.BytesIO()
+    img.save(buf, "MPO", save_all=True, append_images=[img])  # a JPEG with an MPF segment, as phones write
+    data = buf.getvalue()
+    assert data[:2] == b"\xff\xd8"
+    assert inspect_image(data, "image/jpeg") == ("MPO", (96, 54))
+    assert decode_rgb(data, (96, 54)).shape == (54, 96, 3)
+    with pytest.raises(ImageRejected):
+        inspect_image(data, "image/png")
+
+
+def test_only_the_jpeg_and_png_parsers_read_uploads():
+    data = encode(".bmp", np.zeros((8, 8, 3), dtype=np.uint8))  # Pillow reads BMP, but not for uploads
+    with pytest.raises(ImageRejected) as err:
+        inspect_image(data, "image/png")
+    assert err.value.status_code == 415
+    assert "not a readable JPEG or PNG image" in str(err.value)
 
 
 def test_decoded_pixels_are_rgb():

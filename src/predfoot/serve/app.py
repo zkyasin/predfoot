@@ -174,7 +174,7 @@ def create_app(
             raise HTTPException(413, f"upload larger than {max_upload_bytes} bytes")
         try:
             _, size = inspect_image(data, image.content_type)
-            rgb = decode_rgb(data)
+            rgb = decode_rgb(data, size)
         except ImageRejected as err:
             raise HTTPException(err.status_code, str(err)) from err
         decoded = time.perf_counter()

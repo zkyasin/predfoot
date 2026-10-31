@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import io
+
 import numpy as np
 
 from predfoot.contracts import KeypointObs
@@ -56,3 +58,14 @@ class SyntheticDetector:
             )
             out.append((kps, ends))
         return out
+
+
+def jpeg_with_orientation(width: int, height: int, orientation: int) -> bytes:
+    """A black JPEG of width × height stored pixels with an EXIF orientation tag (6: viewers turn it 90°)."""
+    from PIL import Image
+
+    exif = Image.Exif()
+    exif[0x0112] = orientation
+    buf = io.BytesIO()
+    Image.fromarray(np.zeros((height, width, 3), dtype=np.uint8)).save(buf, "JPEG", exif=exif.tobytes())
+    return buf.getvalue()

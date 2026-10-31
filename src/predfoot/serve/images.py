@@ -7,8 +7,11 @@ import io
 import numpy as np
 from numpy.typing import NDArray
 
-#: Image formats accepted by /v1/calibrate (Pillow's format name → media type).
-MEDIA_TYPES = {"JPEG": "image/jpeg", "PNG": "image/png"}
+#: Image formats accepted by /v1/calibrate (Pillow's format name → media type). Pillow calls a JPEG that
+#: carries a multi-picture (MPF) segment, as many phone and camera JPEGs do, "MPO".
+MEDIA_TYPES = {"JPEG": "image/jpeg", "MPO": "image/jpeg", "PNG": "image/png"}
+#: The only Pillow parsers that ever run on uploads.
+PARSERS = ("JPEG", "PNG")
 #: Uploads above this size are refused (20 MiB).
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 #: Images with more pixels are refused before decoding: a small PNG can decode to gigabytes.
@@ -38,7 +41,7 @@ def inspect_image(
     if media not in MEDIA_TYPES.values():
         raise ImageRejected(415, f"unsupported media type {media or 'none'!r}: send image/jpeg or image/png")
     try:
-        with Image.open(io.BytesIO(data)) as img:
+        with Image.open(io.BytesIO(data), formats=PARSERS) as img:
             fmt, (width, height) = img.format, img.size
     except Image.DecompressionBombError as err:
         raise ImageRejected(413, f"image too large: {err}") from err
@@ -53,11 +56,21 @@ def inspect_image(
     return fmt, (width, height)
 
 
-def decode_rgb(data: bytes) -> NDArray[np.uint8]:
-    """Pixels (H, W, 3) uint8 RGB, decoded with OpenCV as in the offline pipeline (keypoints.cache)."""
+def decode_rgb(data: bytes, size: tuple[int, int] | None = None) -> NDArray[np.uint8]:
+    """Pixels (H, W, 3) uint8 RGB, decoded with OpenCV as in the offline pipeline (keypoints.cache).
+
+    The pixels keep the grid they are stored in: an EXIF orientation tag is ignored, so pixel coordinates
+    refer to the stored (width, height) that the header gives, whether or not the client's own decoder
+    applies the tag. (The SN-GSR frames of the offline cache carry no such tag.) With ``size``, raises
+    :class:`ImageRejected` when the decoded image does not have that (width, height).
+    """
     import cv2
 
-    bgr = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
+    flags = cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION
+    bgr = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), flags)
     if bgr is None:
         raise ImageRejected(415, "the image could not be decoded")
+    if size is not None and (bgr.shape[1], bgr.shape[0]) != tuple(size):
+        got = f"{bgr.shape[1]} × {bgr.shape[0]}"
+        raise ImageRejected(415, f"the image decodes to {got} pixels, its header says {size[0]} × {size[1]}")
     return np.asarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), dtype=np.uint8)
