@@ -515,13 +515,15 @@ def histogram_svg(radii: Sequence[float]) -> str:
         # a hit target as tall as the plot, so that small bars are easy to hover
         parts.append(_rect("hit", _LEFT + i * slot_w, top, slot_w, plot_h, tip))
     parts.append(_line("axis", _LEFT, base, _W - _RIGHT, base))
+    over_x = _LEFT + (HISTOGRAM_BINS + 0.5) * slot_w
     x_step = _nice_step(hi, 6)
     k = 0
     while (v := k * x_step) <= hi + 1e-9:
-        parts.append(_text("tick", x_of(v), base + 18, f"{v:g}", "middle"))
+        if not n_over or over_x - x_of(v) > 32:  # leave room for the label of the overflow bar
+            parts.append(_text("tick", x_of(v), base + 18, f"{v:g}", "middle"))
         k += 1
     if n_over:
-        parts.append(_text("tick", _LEFT + (HISTOGRAM_BINS + 0.5) * slot_w, base + 18, f">{hi:g}", "middle"))
+        parts.append(_text("tick", over_x, base + 18, f">{hi:g}", "middle"))
     parts.append(_text("tick", _LEFT + _PLOT_W / 2, base + 38, "p90 radius (m)", "middle"))
     markers = [(name, value) for name, value in (("median", p50), ("p90", p90)) if value <= hi]
     for _, value in markers:

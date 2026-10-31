@@ -1,6 +1,7 @@
 """QA report (T5.2): written by ``predfoot run``, rebuilt by ``predfoot qa``, self-contained and escaped."""
 
 import json
+import re
 from collections import Counter
 from html.parser import HTMLParser
 
@@ -211,6 +212,19 @@ def test_report_of_the_real_stages_shows_their_conformal_model(tmp_path):
     assert "kind: mondrian, sha256: 892b11963c54, alpha: 0.1, pooled: 6.5" in text
     assert "Mondrian conformal quantile of each player's bin" in text
     assert "frame 3 (00:00:00.30): 1 frame" in text
+
+
+def test_a_few_huge_radii_get_a_bar_of_their_own():
+    from predfoot.viz.qa_report import histogram_svg
+
+    radii = [0.2 + 0.001 * i for i in range(400)] + [9.0]  # one radius far beyond the rest
+    svg = histogram_svg(radii)
+    parse(svg)
+    assert re.search(r"<title>above [0-9.]+ m: 1 position</title>", svg)  # the overflow bar
+    ticks = re.findall(r'<text class="tick" x="([0-9.]+)" y="([0-9.]+)"[^>]*>([^<]*)</text>', svg)
+    axis = [(float(x), label) for x, y, label in ticks if label and label != "p90 radius (m)"]
+    (over_x,) = [x for x, label in axis if label.startswith("&gt;")]
+    assert all(abs(x - over_x) > 30 for x, label in axis if not label.startswith("&gt;"))
 
 
 def test_worst_frames_come_first(run_dir):
