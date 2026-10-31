@@ -74,8 +74,8 @@ class SmootherConfig:
     # steps): the looser motion model a camera move must fit. The factor on the steps next to a frame without
     # an accepted measurement is a fitted noise parameter instead (NoiseParams.gap).
     manoeuvre_factor: float = 20.0
-    # fit_noise fits the gap factor when at least this many innovations follow a gap step (its log has a
-    # standard error of about 0.2-0.3 then); with fewer it keeps its initial value.
+    # fit_noise fits the gap factor only when at least this many innovations follow a gap step, so that a
+    # handful of gaps cannot set it; with fewer it keeps its value.
     min_gap_terms: int = 20
     q_roll: float = 1e-8  # rad²/s³, fixed
     floor_px: float = 0.0  # fixed pixel floor added to the measurement covariance; off in v1
@@ -1088,9 +1088,8 @@ def smooth_clip(
     - a single flagged measurement comes back with process noise × ``manoeuvre_factor`` on one step, into it
       or out of it, if that looser step first lowers the innovation NLL of the other measurements (the flagged
       one still deleted) by more than ``step_gain``, and the step on its other side stays tight to a used
-      neighbour.
-      A kink in the camera path strains its neighbours until the step is freed; once a spike is deleted its
-      neighbours fit, so the looser step brings nothing and the spike stays deleted.
+      neighbour. A kink in the camera path strains its neighbours until the step is freed; once a spike is
+      deleted its neighbours fit, so the looser step brings nothing and the spike stays deleted.
 
     Segments with fewer than ``min_segment`` used measurements are marked short.
     """
