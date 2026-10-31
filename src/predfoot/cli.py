@@ -140,8 +140,11 @@ def serve(
 
     Needs the 'serve' extra; /v1/calibrate also needs the 'vision' extra and the PnLCalib weights.
     """
+    from predfoot.serve.calibrate import DEVICES
     from predfoot.serve.localize import load_conformal
 
+    if device not in DEVICES:
+        raise typer.BadParameter(f"{device!r} is not one of {', '.join(DEVICES)}", param_hint="--device")
     try:
         model = None if conformal is None else load_conformal(conformal)
     except ValueError as err:

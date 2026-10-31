@@ -11,6 +11,7 @@ import dataclasses
 import logging
 import math
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
@@ -31,6 +32,11 @@ log = logging.getLogger(__name__)
 #: Frame size the solver's pixel settings were tuned on (SN-GSR broadcast frames).
 REFERENCE_SIZE = (1920, 1080)
 WEIGHT_FILES = ("SV_kp", "SV_lines")
+#: Torch devices of the networks; "auto" picks cuda, then mps, then the CPU.
+DEVICES = ("auto", "cpu", "mps", "cuda")
+#: After a failed load, requests get the same 503 at once for this long before the next attempt: a load
+#: builds two HRNet-W48 and reads 2 × 266 MB of weights, which a broken setup would redo on every request.
+RETRY_AFTER_S = 10.0
 
 
 class Detector(Protocol):
@@ -48,7 +54,8 @@ class ModelUnavailable(RuntimeError):
 def load_pnlcalib(weights_dir: Path | None = None, device: str = "auto") -> Detector:
     """PnLCalib networks from ``weights_dir`` (default ``PREDFOOT_DATA_DIR/weights/pnlcalib``).
 
-    Raises :class:`ModelUnavailable` with a message for the API client (no server paths in it).
+    Raises :class:`ModelUnavailable` with a message for the API client (no server paths in it), whatever
+    the failure: torch or weights missing, an unsupported device, corrupt weights, too little memory.
     """
     try:
         import torch  # noqa: F401
@@ -69,19 +76,35 @@ def load_pnlcalib(weights_dir: Path | None = None, device: str = "auto") -> Dete
         )
     from predfoot.keypoints.pnlcalib import PnLCalibNetworks
 
-    return PnLCalibNetworks(paths[0], paths[1], device=device)
+    try:
+        return PnLCalibNetworks(paths[0], paths[1], device=device)
+    except Exception as err:
+        log.exception("the PnLCalib networks failed to load on device %r", device)
+        raise ModelUnavailable(
+            f"the keypoint networks failed to load on this server ({type(err).__name__}; "
+            "details in the server log)"
+        ) from err
 
 
 class LazyDetector:
     """Loads a detector on first use, exactly once even under concurrent requests, and runs it on one frame at
     a time: one GPU context, and two HRNet-W48 at 960 × 540 should not be held in memory twice.
 
-    A failed load is not remembered: the next request tries again (for instance after the weights arrive).
+    A failed load (:class:`ModelUnavailable`) is tried again, for instance once the weights arrive, but not
+    before ``retry_after_s``: until then requests get the same error at once.
     """
 
-    def __init__(self, load: Callable[[], Detector]) -> None:
+    def __init__(
+        self,
+        load: Callable[[], Detector],
+        retry_after_s: float = RETRY_AFTER_S,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         self._load = load
+        self._retry_after_s = retry_after_s
+        self._clock = clock
         self._detector: Detector | None = None
+        self._failure: tuple[float, str] | None = None  # (when, message) of the last failed load
         self._load_lock = threading.Lock()
         self._run_lock = threading.Lock()
 
@@ -96,7 +119,15 @@ class LazyDetector:
         if detector is None:
             with self._load_lock:
                 if self._detector is None:
-                    self._detector = self._load()
+                    failure = self._failure
+                    if failure is not None and self._clock() - failure[0] < self._retry_after_s:
+                        raise ModelUnavailable(failure[1])
+                    try:
+                        self._detector = self._load()
+                    except ModelUnavailable as err:
+                        self._failure = (self._clock(), str(err))
+                        raise
+                    self._failure = None
                 detector = self._detector
         return detector
 

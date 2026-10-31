@@ -327,8 +327,9 @@ def test_networks_load_once_under_concurrent_requests():
     assert lazy.version == "synthetic@test"
 
 
-def test_a_failed_load_is_retried():
+def test_a_failed_load_is_retried_after_a_pause():
     attempts = []
+    now = [100.0]
 
     def flaky_load():
         attempts.append(1)
@@ -336,10 +337,38 @@ def test_a_failed_load_is_retried():
             raise ModelUnavailable("weights still downloading")
         return SyntheticDetector(broadcast_camera())
 
-    lazy = LazyDetector(flaky_load)
+    lazy = LazyDetector(flaky_load, retry_after_s=10.0, clock=lambda: now[0])
     with pytest.raises(ModelUnavailable):
         lazy.get()
+    now[0] += 9.0
+    with pytest.raises(ModelUnavailable, match="still downloading"):
+        lazy.get()  # the same answer at once, without loading again
+    assert len(attempts) == 1
+    now[0] += 2.0
     assert lazy.get().version == "synthetic@test"
+    assert len(attempts) == 2
+
+
+def test_any_failure_to_load_the_networks_makes_them_unavailable(monkeypatch, tmp_path):
+    import sys
+    import types
+
+    import predfoot.keypoints.pnlcalib as pnlcalib
+
+    # torch "installed" and weights present, but the networks fail (here: a device torch was not built for)
+    for name in ("torch", "torchvision"):
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+    for name in ("SV_kp", "SV_lines"):
+        (tmp_path / name).write_bytes(b"not a state dict")
+
+    def broken(*args, **kwargs):
+        raise AssertionError("Torch not compiled with CUDA enabled")
+
+    monkeypatch.setattr(pnlcalib, "PnLCalibNetworks", broken)
+    with pytest.raises(ModelUnavailable) as err:
+        load_pnlcalib(tmp_path, device="cuda")
+    assert "failed to load" in str(err.value)
+    assert str(tmp_path) not in str(err.value)
 
 
 def test_missing_weights_make_the_networks_unavailable(tmp_path):

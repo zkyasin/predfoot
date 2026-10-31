@@ -25,6 +25,12 @@ def test_serve_command_runs_the_api(monkeypatch):
     assert kwargs == {"host": "0.0.0.0", "port": 8123}
 
 
+def test_serve_checks_the_device():
+    result = CliRunner().invoke(app, ["serve", "--device", "gpu"])
+    assert result.exit_code == 2
+    assert "auto, cpu, mps, cuda" in result.output
+
+
 def test_serve_loads_a_conformal_model(monkeypatch, tmp_path):
     pytest.importorskip("fastapi")
     uvicorn = pytest.importorskip("uvicorn")
