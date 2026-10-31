@@ -25,10 +25,11 @@ import numpy as np
 import polars as pl
 import typer
 
-from predfoot.calib.lines import intersection_correspondences, line_oracle, line_reprojection_px
-from predfoot.calib.solver import LineObservation, SolverConfig, calibrate
+from predfoot.calib.lines import line_oracle, line_reprojection_px
+from predfoot.calib.observations import observations_from_detections
+from predfoot.calib.solver import SolverConfig, calibrate
 from predfoot.geometry import homography as hg
-from predfoot.geometry.pitch import pnlcalib_keypoints, pnlcalib_lines
+from predfoot.geometry.pitch import pnlcalib_keypoints
 from predfoot.health.features import calibration_features
 from predfoot.keypoints.cache import cache_path, cached_detections
 from predfoot.paths import data_dir, index_dir
@@ -37,28 +38,8 @@ from predfoot.uncertainty.delta import circumscribed_radius, mahalanobis2, posit
 
 app = typer.Typer(add_completion=False)
 KP = pnlcalib_keypoints()
-SEGMENTS = pnlcalib_lines()
-LINE_WEIGHT = 0.5
 ORACLE_MAX_PX = 3.0
 ALPHA = 0.1
-
-
-def frame_inputs(det: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[LineObservation]]:
-    """Planar keypoints, line intersections (as points) and line ends (on lines) from cached detections."""
-    planar = np.array([KP[int(k)][2] for k in det["kp_ids"]], dtype=bool)
-    xy = np.array([KP[int(k)][:2] for k in det["kp_ids"]]).reshape(-1, 2)[planar]
-    uv, w = det["kp_uv"][planar], det["kp_conf"][planar]
-    lines = {SEGMENTS[int(k)].name: det["line_uv"][i] for i, k in enumerate(det["line_ids"])}
-    lxy, luv = intersection_correspondences(lines)
-    if len(lxy):
-        xy, uv = np.vstack([xy, lxy]), np.vstack([uv, luv])
-        w = np.concatenate([w, np.full(len(lxy), LINE_WEIGHT)])
-    obs = [
-        LineObservation(SEGMENTS[int(k)].a[:2], SEGMENTS[int(k)].b[:2], det["line_uv"][i], LINE_WEIGHT)
-        for i, k in enumerate(det["line_ids"])
-        if SEGMENTS[int(k)].planar
-    ]
-    return xy, uv, w, obs
 
 
 def predict_clip(
@@ -90,7 +71,7 @@ def predict_clip(
         h_or = line_oracle(frame_lines)
         oracle_px = line_reprojection_px(h_or, frame_lines)
         trusted = h_or is not None and oracle_px <= ORACLE_MAX_PX
-        xy, uv, w, obs = frame_inputs(det)
+        xy, uv, w, obs = observations_from_detections(det)
         rng = np.random.default_rng(frame * 7919 + int(clip_id.split("-")[1]))
         res, _ = calibrate(xy, uv, rng, weights=w, config=cfg, lines=obs)
         evidence = np.vstack([uv.reshape(-1, 2), *[o.uv for o in obs]]) if obs else uv
@@ -101,7 +82,14 @@ def predict_clip(
         feet = p.select("foot_u", "foot_v").to_numpy()
         gt = p.select("x_raw", "y_raw").to_numpy()
         tracks = p["track_id"].to_numpy()
-        base = {"clip": clip_id, "game": game, "frame": frame, "ok": res.ok, "n_corr": len(xy) + len(obs)}
+        base = {
+            "clip": clip_id,
+            "game": game,
+            "frame": frame,
+            "ok": res.ok,
+            "n_corr": len(xy) + len(obs),
+            "n_inliers": res.n_inliers,
+        }
         frame_row = {**base, **feats, "line_px": line_px, "oracle_px": oracle_px, "trusted": trusted}
         if not res.ok or p.height == 0:
             frame_rows.append(frame_row | {"err_p90_lab": np.nan, "err_p90_or": np.nan})
@@ -147,7 +135,7 @@ def logo(df: pl.DataFrame, ref: str, rng: np.random.Generator, n_boot: int = 300
     norm = np.linalg.norm(e, axis=1)
     groups = d["clip"].to_numpy()
     games = d["game"].to_numpy()
-    feats = {"mpp": d["mpp"].to_numpy(), "n_corr": d["n_corr"].to_numpy().astype(float)}
+    feats = {"mpp": d["mpp"].to_numpy(), "n_inliers": d["n_inliers"].to_numpy().astype(float)}
     rows = []
     for g in np.unique(games):
         cal, tst = games != g, games == g
@@ -156,7 +144,7 @@ def logo(df: pl.DataFrame, ref: str, rng: np.random.Generator, n_boot: int = 300
             score[cal],
             groups[cal],
             {k: v[cal] for k, v in feats.items()},
-            {"mpp": 3, "n_corr": 2},
+            {"mpp": 3, "n_inliers": 2},
             alpha=ALPHA,
         )
         q_mond = mond.quantile_for({k: v[tst] for k, v in feats.items()})
@@ -214,6 +202,9 @@ def main(out: Path = Path("reports/m2_logo_dev.md"), max_clips: int = 0) -> None
         f_rows, p_rows = predict_clip(c["clip_id"], c["split"], int(c["game_id"]), cp, cl)
         frame_rows.extend(f_rows)
         rows.extend(p_rows)
+    if not rows:
+        typer.echo("No cached clips found: run scripts/cache_keypoints.py first.")
+        raise typer.Exit(1)
     players = pl.DataFrame(rows, infer_schema_length=None)
     frames = pl.DataFrame(frame_rows, infer_schema_length=None)
     sha = subprocess.run(
@@ -283,7 +274,7 @@ def main(out: Path = Path("reports/m2_logo_dev.md"), max_clips: int = 0) -> None
         "",
         "Notes. Exploratory dev numbers, not the preregistered test. Frames are subsampled at 5 fps and",
         "remain correlated within a clip, hence clip-level bootstrap intervals. Mondrian bins: metres per",
-        "pixel at the feet (3 bins) × number of calibration constraints (2 bins); small bins use the pooled",
+        "pixel at the feet (3 bins) × number of RANSAC inliers (2 bins); small bins use the pooled",
         "quantile.",
     ]
     out.parent.mkdir(parents=True, exist_ok=True)
