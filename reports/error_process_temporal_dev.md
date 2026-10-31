@@ -1,6 +1,6 @@
 # Position-error process on SN-GSR dev (T4.2)
 
-`uv run python scripts/error_process.py runs/20261031-153059_c3861c7_ptz/players.parquet --compare runs/20261031-152537_c3861c7_none/players.parquet --name ptz --compare-name none` · commit `537fb12`
+`uv run python scripts/error_process.py runs/20261031-153059_c3861c7_ptz/players.parquet --compare runs/20261031-152537_c3861c7_none/players.parquet --name ptz --compare-name none` · commit `ca647c4`
 
 Errors of predfoot's positions (ground-truth boxes, our calibration), split into a common part
 shared by the players of a frame (mostly the camera) and an individual part. σ is the marginal
