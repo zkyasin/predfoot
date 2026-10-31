@@ -179,7 +179,7 @@ class SmoothedTrack:
     used: BoolArray  # measurement used by the final pass
     rejected: BoolArray  # accepted but deleted by the robust passes
     short: BoolArray  # inside a segment with fewer than min_segment used measurements
-    nis: FloatArray  # (T,) normalised innovation squared of the final pass (NaN where no update)
+    nis: FloatArray  # (T,) innovation χ² of the final pass; NaN for the first two used of a segment
     deletion: FloatArray  # (T,) deletion statistic (used) or prediction statistic (rejected)
     nll: float
     n_iter: int
@@ -539,7 +539,7 @@ class Forward:
 
     nll: float
     n_terms: int
-    nis: FloatArray  # (B, L), NaN where no update
+    nis: FloatArray  # (B, L) innovation χ² of the NLL terms (third and later used), NaN elsewhere
     m_pred: FloatArray | None = None  # (B, L, 8)
     P_pred: FloatArray | None = None  # (B, L, 8, 8)
     m_filt: FloatArray | None = None
