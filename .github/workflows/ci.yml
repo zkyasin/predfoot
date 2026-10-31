@@ -20,8 +20,8 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Install (core + dev, no torch)
-        run: uv sync --locked
+      - name: Install (core + dev + the serve extra for the API tests, no torch)
+        run: uv sync --locked --extra serve
 
       - name: Lint
         run: |

@@ -1,7 +1,8 @@
 """Fail when an installed dependency carries a licence the project cannot ship with (ADR-0002).
 
-Run with ``uv run python scripts/check_licenses.py``. It inspects the active environment, so CI checks the
-default install (core + dev group); extras can be checked locally after ``uv sync --all-extras``.
+Run with ``uv run python scripts/check_licenses.py``. It inspects the active environment, so CI checks what it
+installs (core + dev group + the serve extra); the other extras can be checked locally after
+``uv sync --all-extras``.
 """
 
 from __future__ import annotations

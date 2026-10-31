@@ -13,10 +13,11 @@ import json
 from typing import Any
 
 import numpy as np
-from numpy.typing import ArrayLike
+from numpy.typing import ArrayLike, NDArray
 
 from predfoot.contracts import FloatArray
 from predfoot.geometry.camera import look_at
+from predfoot.geometry.pitch import pnlcalib_keypoints, pnlcalib_lines
 
 
 def look_at_homography(
@@ -122,3 +123,79 @@ def dumps_clip(clip: dict[str, Any]) -> str:
     lines.append(",\n".join(f"    {json.dumps(f)}" for f in clip["frames"]))
     lines += ["  ]", "}"]
     return "\n".join(lines) + "\n"
+
+
+# --- network-style detections ------------------------------------------------------------------------
+
+#: Detections closer than this to the image border are dropped, as a network would miss them.
+BORDER_MARGIN_PX = 5.0
+#: A line whose visible part is shorter than this in the image is not detected.
+MIN_LINE_PX = 40.0
+
+
+def _in_image(uv: FloatArray, w: FloatArray, image_size: tuple[int, int], margin: float) -> NDArray[np.bool_]:
+    width, height = image_size
+    return np.asarray(
+        (w > 0)
+        & (uv[:, 0] >= margin)
+        & (uv[:, 0] <= width - 1 - margin)
+        & (uv[:, 1] >= margin)
+        & (uv[:, 1] <= height - 1 - margin)
+    )
+
+
+def synthetic_detections(
+    H: ArrayLike,
+    rng: np.random.Generator,
+    *,
+    image_size: tuple[int, int] = IMAGE_SIZE,
+    sigma_px: float = 1.0,
+    n_outliers: int = 0,
+    max_keypoints: int | None = None,
+    with_lines: bool = True,
+) -> dict[str, Any]:
+    """What the keypoint and line networks would report for a camera with ground homography ``H``.
+
+    Planar PnLCalib keypoints inside the image, with Gaussian pixel noise ``sigma_px`` and confidences in
+    [0.6, 0.95]; ``n_outliers`` of them moved 30-60 px away (false detections); at most ``max_keypoints``
+    kept. Planar lines contribute the two ends of their visible part, with the same noise, unless
+    ``with_lines`` is false (with ``max_keypoints`` < 4: a frame that cannot be calibrated). The dict has the
+    layout of the detection cache (:mod:`predfoot.keypoints.cache`).
+    """
+    h = np.asarray(H, dtype=np.float64)
+    template = pnlcalib_keypoints()
+    ids = np.array([k for k, (_, _, planar) in template.items() if planar], dtype=np.int64)
+    uv, w = project_ground(h, [template[int(k)][:2] for k in ids])
+    keep = _in_image(uv, w, image_size, BORDER_MARGIN_PX)
+    ids, uv = ids[keep][:max_keypoints], uv[keep][:max_keypoints]
+    uv = uv + rng.normal(scale=sigma_px, size=uv.shape)
+    conf = rng.uniform(0.6, 0.95, size=len(ids))
+    if n_outliers:
+        moved = rng.choice(len(ids), size=n_outliers, replace=False)
+        angle = rng.uniform(0.0, 2 * np.pi, size=n_outliers)
+        dist = rng.uniform(30.0, 60.0, size=n_outliers)
+        uv[moved] += np.column_stack([dist * np.cos(angle), dist * np.sin(angle)])
+    line_ids, line_uv = [], []
+    t = np.linspace(0.0, 1.0, 401)[:, None]
+    for k, seg in pnlcalib_lines().items():
+        if not (with_lines and seg.planar):
+            continue
+        points = (1 - t) * np.array(seg.a[:2]) + t * np.array(seg.b[:2])
+        puv, pw = project_ground(h, points)
+        # A segment meets the (convex) image in one interval, so its first and last visible samples are the
+        # ends of the visible part.
+        visible = np.flatnonzero(_in_image(puv, pw, image_size, BORDER_MARGIN_PX))
+        if len(visible) < 2:
+            continue
+        ends = puv[[visible[0], visible[-1]]]
+        if np.hypot(*(ends[1] - ends[0])) < MIN_LINE_PX:
+            continue
+        line_ids.append(k)
+        line_uv.append(ends + rng.normal(scale=sigma_px, size=(2, 2)))
+    return {
+        "kp_ids": ids,
+        "kp_uv": uv,
+        "kp_conf": conf,
+        "line_ids": np.array(line_ids, dtype=np.int64),
+        "line_uv": np.array(line_uv, dtype=np.float64).reshape(-1, 2, 2),
+    }

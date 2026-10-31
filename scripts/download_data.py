@@ -8,7 +8,7 @@ Every command is idempotent (complete files are skipped) and resumable (interrup
     uv run python scripts/download_data.py sn-gsr-labels --splits train valid test
     uv run python scripts/download_data.py sn-gsr-frames --clips SNGS-056 SNGS-060 --every 5
     uv run python scripts/download_data.py pnlcalib-weights
-    uv run python scripts/download_data.py soccertrack-raw --match 117092
+    uv run python scripts/download_data.py soccertrack-v2 --match 117092 --parts raw mot clip
 """
 
 from __future__ import annotations
@@ -34,7 +34,11 @@ PNLCALIB_RELEASE = "https://github.com/mguti97/PnLCalib/releases/download/v1.0.0
 PNLCALIB_FILES = ("SV_kp", "SV_lines")
 SOCCERTRACK_REPO = "atomscott/soccertrack-v2"
 SOCCERTRACK_EXCLUDE_SUFFIXES = ("_tracker_box_data.xml",)  # 318 MB of tracker boxes, not needed
-MULTI_VALUE_OPTIONS = ("--splits", "--clips")
+#: What ``soccertrack-v2 --parts`` can fetch for one match: the calibration files, the MOT ground-truth boxes
+#: (about 6 MB) and the paired 4-minute MOT clip (300-600 MB). Never the 2.7 GB game-state JSONs or the 6.7 GB
+#: half-match videos.
+SOCCERTRACK_PARTS = ("raw", "mot", "clip")
+MULTI_VALUE_OPTIONS = ("--splits", "--clips", "--parts")
 
 app = typer.Typer(no_args_is_help=True, add_completion=False, help=__doc__.split("\n\n")[0])
 
@@ -153,34 +157,61 @@ def pnlcalib_weights() -> None:
             _report(name, stats)
 
 
-@app.command("soccertrack-raw")
-def soccertrack_raw(
-    match: Annotated[str, typer.Option(help="Match id under raw/ in atomscott/soccertrack-v2.")] = "117092",
-) -> None:
-    """SoccerTrack v2 raw/<match>/ (CC BY 4.0, gated: accept the terms first) -> soccertrack-v2/raw/<match>/.
+def soccertrack_wanted(path: str, match: str, parts: list[str]) -> bool:
+    """Whether a file of the SoccerTrack v2 repository belongs to the requested parts of one match."""
+    rel = PurePosixPath(check_relpath(path))
+    wanted = {
+        "raw": rel.parts[:2] == ("raw", match)
+        and len(rel.parts) == 3
+        and not rel.name.endswith(SOCCERTRACK_EXCLUDE_SUFFIXES),
+        "mot": rel == PurePosixPath("mot", f"{match}.txt"),
+        "clip": rel == PurePosixPath("mot", "clips", f"{match}.mp4"),
+    }
+    return any(wanted[part] for part in parts)
 
-    Every file except the tracker boxes XML; LFS files are checked against their SHA-256, the others against
-    their git blob id.
+
+def _soccertrack_listing(api: HfApi, match: str, parts: list[str]) -> list[RepoFile]:
+    folders = {"raw": f"raw/{match}", "mot": "mot", "clip": "mot/clips"}
+    items: dict[str, RepoFile] = {}
+    for part in parts:
+        for item in api.list_repo_tree(SOCCERTRACK_REPO, path_in_repo=folders[part], repo_type="dataset"):
+            if isinstance(item, RepoFile) and soccertrack_wanted(item.path, match, parts):
+                items[item.path] = item
+    return sorted(items.values(), key=lambda i: i.path)
+
+
+@app.command("soccertrack-v2")
+def soccertrack_v2(
+    match: Annotated[str, typer.Option(help="Match id, e.g. 117092 (M1).")] = "117092",
+    parts: Annotated[
+        list[str] | None, typer.Option(help=f"Any of {', '.join(SOCCERTRACK_PARTS)} (default: all).")
+    ] = None,
+) -> None:
+    """SoccerTrack v2 files of one match (CC BY 4.0, gated: accept the terms first) -> soccertrack-v2/.
+
+    ``raw`` is raw/<match>/ without the 318 MB tracker boxes XML, ``mot`` the MOT ground truth
+    mot/<match>.txt and ``clip`` the paired MOT clip mot/clips/<match>.mp4. Files keep their repository
+    path under soccertrack-v2/. LFS files are checked against their SHA-256, the others against their git
+    blob id.
     """
     if not match.isdigit():
         raise typer.BadParameter(f"not a match id: {match!r}")
+    chosen = list(dict.fromkeys(parts or SOCCERTRACK_PARTS))
+    unknown = sorted(set(chosen) - set(SOCCERTRACK_PARTS))
+    if unknown:
+        raise typer.BadParameter(f"unknown parts {unknown}; choose from {SOCCERTRACK_PARTS}")
     root = data_dir()
     token = get_token()
-    prefix = f"raw/{match}"
-    items = [
-        item
-        for item in HfApi(token=token).list_repo_tree(
-            SOCCERTRACK_REPO, path_in_repo=prefix, repo_type="dataset", recursive=True
+    items = _soccertrack_listing(HfApi(token=token), match, chosen)
+    found = {part for part in chosen for item in items if soccertrack_wanted(item.path, match, [part])}
+    if found != set(chosen):
+        raise RuntimeError(
+            f"{SOCCERTRACK_REPO} has nothing for match {match} in {sorted(set(chosen) - found)}"
         )
-        if isinstance(item, RepoFile)
-    ]
-    if not items:
-        raise RuntimeError(f"nothing under {prefix} in {SOCCERTRACK_REPO}")
+    failed = 0
     with Manifest(root) as manifest:
-        for item in sorted(items, key=lambda i: i.path):
+        for item in items:
             path = PurePosixPath(check_relpath(item.path))
-            if path.parts[:2] != ("raw", match) or path.name.endswith(SOCCERTRACK_EXCLUDE_SUFFIXES):
-                continue
             url = f"https://huggingface.co/datasets/{SOCCERTRACK_REPO}/resolve/main/{quote(item.path)}"
             expected = item.lfs.sha256 if item.lfs is not None else None
             blob_id = item.blob_id
@@ -196,6 +227,16 @@ def soccertrack_raw(
                 verify=None if expected else same_blob,
             )
             _report(item.path, stats)
+            failed += len(stats.failed)
+    raise typer.Exit(1 if failed else 0)
+
+
+@app.command("soccertrack-raw", hidden=True)
+def soccertrack_raw(
+    match: Annotated[str, typer.Option(help="Match id under raw/ in atomscott/soccertrack-v2.")] = "117092",
+) -> None:
+    """Deprecated alias of ``soccertrack-v2 --parts raw``."""
+    soccertrack_v2(match=match, parts=["raw"])
 
 
 def main() -> None:

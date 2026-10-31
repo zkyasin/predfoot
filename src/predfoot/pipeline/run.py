@@ -1,7 +1,8 @@
 """``predfoot run``: the end-to-end tracer bullet, processed in blocks that survive a crash.
 
 Native frames → stages (``CalibResult``, ``FootObs``, ``Localization``) → export frames at 10 fps →
-``tracking.jsonl``, ``match.json``, ``meta.json``, ``metrics.json`` and ``minimap.png`` in the output folder.
+``tracking.jsonl``, ``match.json``, ``meta.json``, ``metrics.json``, ``minimap.png`` and ``qa_report.html`` in
+the output folder.
 The stages are the stubs of :mod:`predfoot.pipeline.stub` until the real modules replace them.
 
 Resume: export frames are processed in blocks of ``block_size``, each written atomically to ``OUT/.parts/``.
@@ -20,7 +21,7 @@ import re
 import shutil
 import subprocess
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -48,6 +49,7 @@ from predfoot.paths import REPO_ROOT
 from predfoot.pipeline import stub
 from predfoot.pipeline.clip import ClipFrame, ClipInput, load_clip
 from predfoot.viz.minimap import render_minimap, select_panels
+from predfoot.viz.qa_report import write_qa_report
 
 #: Bump when the stub stages change their outputs, so stale blocks are not reused.
 STUB_VERSION = 1
@@ -72,11 +74,15 @@ class RunConfig:
 
     def output_settings(self) -> dict[str, Any]:
         return {
-            "export_fps": self.export_fps,
+            "export_fps": float(self.export_fps),  # 10 and 10.0 are one setting, with one config hash
             "placeholder_radius_m": self.placeholder_radius_m,
             "n_panels": self.n_panels,
             "schema_version": SCHEMA_VERSION,
         }
+
+
+class ClipMismatch(ValueError):
+    """The stages cannot run on this clip, for example detections that name frames the clip does not have."""
 
 
 @dataclass(frozen=True)
@@ -92,6 +98,13 @@ class Stages:
     detect: Callable[[ClipFrame], list[FootObs]]
     localize: Callable[[CalibResult, Sequence[FootObs]], list[Localization]]
     health: Callable[[CalibResult], tuple[float | None, bool]]
+    #: What each stage does (calibration, detection, localization, health), for meta.json. None: the stubs.
+    description: Mapping[str, str] | None = None
+    #: Provenance of the conformal model behind the regions, for meta.json; None without one.
+    conformal: Mapping[str, Any] | None = None
+    #: Raises :class:`ClipMismatch` when the stages were not built for the clip; ``run_clip`` calls it before
+    #: computing anything. None: the stages run on any clip.
+    check_clip: Callable[[ClipInput], None] | None = None
 
 
 def stub_stages(config: RunConfig) -> Stages:
@@ -227,6 +240,8 @@ def run_clip(
     stages = stages or stub_stages(config)
     input_path, out_dir = Path(input_path), Path(out_dir)
     clip = load_clip(input_path)
+    if stages.check_clip is not None:
+        stages.check_clip(clip)
     input_sha = sha256_file(input_path)
     settings = config.output_settings() | {"stages": stages.version}
     config_hash = sha256_json(settings)
@@ -279,7 +294,7 @@ def run_clip(
         team_of=clip.teams,
         title=clip.clip_id,
     )
-    write_json(out_dir / "meta.json", _meta(clip, input_path, input_sha, settings, config_hash, sha))
+    write_json(out_dir / "meta.json", _meta(clip, input_path, input_sha, settings, config_hash, sha, stages))
     n_abstained = sum(summary.abstain)
     write_json(
         out_dir / "metrics.json",
@@ -308,6 +323,7 @@ def run_clip(
             },
         },
     )
+    write_qa_report(out_dir)  # reads the files above; holds no timings, so it is byte-stable too
     shutil.rmtree(parts)
     return RunResult(out_dir, len(clip.frames), summary.n_frames, n_abstained, computed, reused)
 
@@ -343,8 +359,11 @@ def _meta(
     settings: dict[str, Any],
     config_hash: str,
     sha: str | None,
+    stages: Stages | None = None,
 ) -> dict[str, Any]:
     """Provenance of a run. No timestamps, so that a resumed run writes the same bytes."""
+    described = stages.description if stages is not None else None
+    description = dict(described) if described is not None else _stub_description(settings)
     return {
         "schema_version": SCHEMA_VERSION,
         "predfoot_version": __version__,
@@ -358,14 +377,18 @@ def _meta(
         "image_size": list(clip.image_size),
         "pitch": {"length": clip.pitch.length, "width": clip.pitch.width},
         "time_resampling": "linear interpolation between the two native frames around each export instant",
-        "stages": {
-            "calibration": "stub: homography read from the input",
-            "detection": "stub: foot points read from the input",
-            "localization": (
-                "inverse homography; placeholder uncertainty: constant "
-                f"{settings['placeholder_radius_m']:g} m radius, isotropic covariance"
-            ),
-            "health": "none: calib_health is null; a frame abstains when its calibration failed",
-        },
-        "conformal": None,
+        "stages": description,
+        "conformal": None if stages is None or stages.conformal is None else dict(stages.conformal),
+    }
+
+
+def _stub_description(settings: dict[str, Any]) -> dict[str, str]:
+    return {
+        "calibration": "stub: homography read from the input",
+        "detection": "stub: foot points read from the input",
+        "localization": (
+            "inverse homography; placeholder uncertainty: constant "
+            f"{settings['placeholder_radius_m']:g} m radius, isotropic covariance"
+        ),
+        "health": "none: calib_health is null; a frame abstains when its calibration failed",
     }

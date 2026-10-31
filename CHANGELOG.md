@@ -6,6 +6,13 @@ the project uses [semantic versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- SoccerTrack v2 demo lane (T5.D1): `soccertrack-v2` download source (raw, MOT boxes, MOT clip of one match),
+  `predfoot.io.soccertrack` loaders with conversion to the internal frame, virtual broadcast cameras inside the
+  panorama (`predfoot.demo.virtual_camera`), `scripts/render_demo.py` (side-by-side demo video, still, GIF)
+  and `reports/soccertrack_v2.md`: the released calibration is metres off on the far half, so SoccerTrack v2
+  is a demo-pixel source, not a metric benchmark. The demo's noise parameters and conformal quantiles are
+  versioned in `src/predfoot/demo/dev_calibration.json` (`scripts/fit_demo_calibration.py`), so it runs
+  without SN-GSR data; `--no-smooth` uses the per-frame quantiles.
 - Project skeleton: uv, pre-commit, CI, licence check, package layout, coordinate conventions, data contracts,
   ADR-0001 (conventions) and ADR-0002 (licences and data).
 - SkillCorner-format export: record writer and reader with the uncertainty extension fields, image corners
@@ -38,6 +45,35 @@ the project uses [semantic versioning](https://semver.org/).
   leave-one-game-out fold; `eval_dev.py --smooth none|proj|ptz` (`--calib-from`, `--fit-scope`, `--beta`)
   with Mondrian bins per covariance source, `error_process.py --compare` with a model-free KPI proxy,
   optional smoothing in the real stages (with an optional game centre).
+- HTTP API, `predfoot serve` (extra `serve`): `/healthz`; `/v1/localize`, pitch positions with calibrated
+  covariances and 90 % radii from a camera and its 8 × 8 Σθ, nulls above the horizon, with the Mondrian
+  conformal regions of the pipeline when the server loads a model (`--conformal`, fitted by
+  `scripts/fit_conformal.py`); `/v1/calibrate`, one uploaded frame → PnLCalib keypoints and lines →
+  calibration and image corners, with size and content checks before decoding, a bounded queue on worker
+  threads of its own, and a 503 when the networks cannot load or the queue is full; `/metrics` for
+  Prometheus.
+- ONNX export of both keypoint networks, installed only once it passes a parity check against PyTorch
+  (`scripts/export_onnx.py`, extra `export`; heatmaps within 1e-4, the same detections, decoded keypoints
+  within 0.5 px) and a latency benchmark on PyTorch CPU, MPS and CUDA and ONNX Runtime CPU, CoreML and CUDA
+  (`scripts/bench_latency.py`, `reports/latency_m4.md`).
+- QA report: `predfoot run` writes `qa_report.html` next to `tracking.jsonl`, and `predfoot qa OUT` rebuilds it
+  from the outputs of a run. One self-contained file (inline CSS and SVG, no script, no external reference)
+  with the run summary, the validation of the outputs and consistency checks, a timeline of calibration
+  health, abstentions and p90 radii, the distribution of the radii, the worst frames and field definitions.
+- Docker: a `serve` target next to the default `cli` one (API extra, port 8000, `HEALTHCHECK` on `/healthz`,
+  numeric non-root user); the `docker` workflow builds and smoke-tests both; a `release` workflow pushes both
+  images to `ghcr.io/zkyasin/predfoot` on `v*` tags, with version and commit tags and OCI labels.
+- Golden test of the real stages on committed synthetic detections (`scripts/make_golden.py --update`
+  regenerates the expected outputs), detection files as JSON (`predfoot-detections/1`) and a generator of
+  network-style detections from a known camera.
+- `predfoot run --detections FILE [--conformal MODEL]` runs the real stages (calibration from the detections,
+  delta-method regions, Mondrian conformal scaling) without torch; `python -m predfoot.io.compare` compares a
+  run with golden outputs, one written decimal of slack on numbers. The Docker and release workflows run the
+  golden check inside the images.
+- `docker/smoke-cli.sh` and `docker/smoke-serve.sh`: the smoke tests of the images, shared by the `docker` and
+  `release` workflows and runnable locally.
+- `scripts/run_real_clip.py` writes its inputs next to its outputs (`input_clip.json`, `detections.json`
+  re-keyed by clip frame index, `conformal.json`), so `predfoot run --detections` reruns a dev clip from files.
 - Spectral KPI error budget (T4.3) and KPI uncertainty card (T4.4): `predfoot.kpi.noise` (nugget + one or two
   scales of an exponential, Matérn-3/2, Matérn-5/2 or squared-exponential kernel, Gaussian or Gaussian-copula
   marginal, exact circulant-embedding sampling, weighted least-squares fit to the 5 fps ACF);
@@ -56,3 +92,35 @@ the project uses [semantic versioning](https://semver.org/).
   errors (PTZ camera, 4 matches), the card's nested-bootstrap intervals cover effort counts and PSV-99 at
   about their nominal 90 % (86 to 94 %, against 55 to 70 % with the spread of one dose); distance KPIs stay
   below (21 to 55 %) because of the remaining extrapolation bias.
+
+### Fixed
+- Temporal smoothing tails: a run of misfit frames lasting at most 0.5 s strictly inside a segment gets the
+  smoothed state (flag `bridged`) instead of its raw camera; raw-OK frames of a segment too short for any
+  innovation to test them abstain (flag `unchecked`) instead of publishing their PTZ projection; the
+  process-noise factor across failure gaps is fitted without labels (`NoiseParams.gap`), apart from the fixed
+  manoeuvre factor. `eval_dev.py` calibrates filled and bridged frames in their own covariance source with one
+  pooled quantile, counts PTZ-projected frames as single-frame calibrations, gives a source its own quantiles
+  only with at least 10 calibration clips, and reports robust common-mode step statistics.
+- The export rate entered the config hash as given, so `RunConfig()` (10) and `predfoot run` (10.0) hashed the
+  same configuration differently, and a run resumed through the other path recomputed every block.
+- `meta.json` described every stage as a stub and the conformal model as null even when the real stages ran
+  with a Mondrian model; stages now describe themselves, and the real ones record their model (hash, alpha,
+  pooled quantile, edges, per-bin quantiles).
+- The release could push the `serve` image without ever starting its server: its smoke test only ran CLI
+  commands, and nothing tied a tag to a green `docker` run. The release now runs the same scripts as the
+  `docker` workflow, the HTTP checks included, before it logs in to the registry.
+- The QA timeline shaded a whole column as soon as one of its frames abstained: on a full match (90 frames per
+  column), 1 % of scattered abstentions shaded 90 % of the chart. The shading is now as high as the share of
+  abstained frames, and columns are as wide as the frames they hold.
+- `predfoot run --detections` ran detections keyed by image number (as the detection cache keys them) with
+  the cameras of other frames and no warning. Detections that name frames beyond the clip are refused before
+  anything runs, a file without frame 0 gets a warning, and the 0-based key is documented.
+- The `serve` image's `HEALTHCHECK` went through the proxy variables the Docker CLI can pass to containers, and
+  a command that only added options to `serve` listened on 127.0.0.1 alone. The probe now ignores proxies, and
+  `predfoot serve` takes its host and port from `PREDFOOT_HOST` and `PREDFOOT_PORT`, set in the image.
+- A conformal model with an infinite bin edge passed the start-up checks, then made `meta.json` unwritable
+  after the whole computation; it is now refused when it is loaded.
+- The non-root checks of the Docker workflows passed when `docker run` itself failed, and the `docker` workflow
+  did not run when `README.md`, `LICENSE` or `ATTRIBUTION.md`, which the images copy, changed.
+- `predfoot qa` never returned on an absurd `export_fps` in `meta.json` (it now falls back to 10 fps outside
+  1e-3 to 1e3) and crashed on a line nested thousands deep, which the validator now reports as invalid JSON.

@@ -1,0 +1,262 @@
+{
+  "id": null,
+  "home_team_score": null,
+  "away_team_score": null,
+  "date_time": null,
+  "home_team": {
+    "id": 1,
+    "name": "Home (anonymous)",
+    "short_name": "Home",
+    "acronym": "HOM"
+  },
+  "away_team": {
+    "id": 2,
+    "name": "Away (anonymous)",
+    "short_name": "Away",
+    "acronym": "AWY"
+  },
+  "home_team_coach": null,
+  "away_team_coach": null,
+  "match_periods": [
+    {
+      "period": 1,
+      "name": "period_1",
+      "start_frame": 0,
+      "end_frame": 7,
+      "duration_frames": 8,
+      "duration_minutes": 0.01
+    }
+  ],
+  "referees": [],
+  "players": [
+    {
+      "id": 1,
+      "trackable_object": 1,
+      "team_id": 1,
+      "number": null,
+      "first_name": "",
+      "last_name": "Track 1",
+      "short_name": "Track 1",
+      "start_time": "00:00:00",
+      "end_time": null,
+      "player_role": {
+        "id": null,
+        "name": "Unknown",
+        "acronym": null
+      }
+    },
+    {
+      "id": 3,
+      "trackable_object": 3,
+      "team_id": 1,
+      "number": null,
+      "first_name": "",
+      "last_name": "Track 3",
+      "short_name": "Track 3",
+      "start_time": "00:00:00",
+      "end_time": null,
+      "player_role": {
+        "id": null,
+        "name": "Unknown",
+        "acronym": null
+      }
+    },
+    {
+      "id": 4,
+      "trackable_object": 4,
+      "team_id": 1,
+      "number": null,
+      "first_name": "",
+      "last_name": "Track 4",
+      "short_name": "Track 4",
+      "start_time": "00:00:00",
+      "end_time": null,
+      "player_role": {
+        "id": null,
+        "name": "Unknown",
+        "acronym": null
+      }
+    },
+    {
+      "id": 5,
+      "trackable_object": 5,
+      "team_id": 1,
+      "number": null,
+      "first_name": "",
+      "last_name": "Track 5",
+      "short_name": "Track 5",
+      "start_time": "00:00:00",
+      "end_time": null,
+      "player_role": {
+        "id": null,
+        "name": "Unknown",
+        "acronym": null
+      }
+    },
+    {
+      "id": 6,
+      "trackable_object": 6,
+      "team_id": 1,
+      "number": null,
+      "first_name": "",
+      "last_name": "Track 6",
+      "short_name": "Track 6",
+      "start_time": "00:00:00",
+      "end_time": null,
+      "player_role": {
+        "id": null,
+        "name": "Unknown",
+        "acronym": null
+      }
+    },
+    {
+      "id": 7,
+      "trackable_object": 7,
+      "team_id": 1,
+      "number": null,
+      "first_name": "",
+      "last_name": "Track 7",
+      "short_name": "Track 7",
+      "start_time": "00:00:00",
+      "end_time": null,
+      "player_role": {
+        "id": null,
+        "name": "Unknown",
+        "acronym": null
+      }
+    },
+    {
+      "id": 8,
+      "trackable_object": 8,
+      "team_id": 1,
+      "number": null,
+      "first_name": "",
+      "last_name": "Track 8",
+      "short_name": "Track 8",
+      "start_time": "00:00:00",
+      "end_time": null,
+      "player_role": {
+        "id": null,
+        "name": "Unknown",
+        "acronym": null
+      }
+    },
+    {
+      "id": 10,
+      "trackable_object": 10,
+      "team_id": 1,
+      "number": null,
+      "first_name": "",
+      "last_name": "Track 10",
+      "short_name": "Track 10",
+      "start_time": "00:00:00",
+      "end_time": null,
+      "player_role": {
+        "id": null,
+        "name": "Unknown",
+        "acronym": null
+      }
+    },
+    {
+      "id": 11,
+      "trackable_object": 11,
+      "team_id": 1,
+      "number": null,
+      "first_name": "",
+      "last_name": "Track 11",
+      "short_name": "Track 11",
+      "start_time": "00:00:00",
+      "end_time": null,
+      "player_role": {
+        "id": null,
+        "name": "Unknown",
+        "acronym": null
+      }
+    },
+    {
+      "id": 13,
+      "trackable_object": 13,
+      "team_id": 2,
+      "number": null,
+      "first_name": "",
+      "last_name": "Track 13",
+      "short_name": "Track 13",
+      "start_time": "00:00:00",
+      "end_time": null,
+      "player_role": {
+        "id": null,
+        "name": "Unknown",
+        "acronym": null
+      }
+    },
+    {
+      "id": 14,
+      "trackable_object": 14,
+      "team_id": 2,
+      "number": null,
+      "first_name": "",
+      "last_name": "Track 14",
+      "short_name": "Track 14",
+      "start_time": "00:00:00",
+      "end_time": null,
+      "player_role": {
+        "id": null,
+        "name": "Unknown",
+        "acronym": null
+      }
+    },
+    {
+      "id": 20,
+      "trackable_object": 20,
+      "team_id": 2,
+      "number": null,
+      "first_name": "",
+      "last_name": "Track 20",
+      "short_name": "Track 20",
+      "start_time": "00:00:00",
+      "end_time": null,
+      "player_role": {
+        "id": null,
+        "name": "Unknown",
+        "acronym": null
+      }
+    },
+    {
+      "id": 22,
+      "trackable_object": 22,
+      "team_id": 2,
+      "number": null,
+      "first_name": "",
+      "last_name": "Track 22",
+      "short_name": "Track 22",
+      "start_time": "00:00:00",
+      "end_time": null,
+      "player_role": {
+        "id": null,
+        "name": "Unknown",
+        "acronym": null
+      }
+    },
+    {
+      "id": 99,
+      "trackable_object": 99,
+      "team_id": 1,
+      "number": null,
+      "first_name": "",
+      "last_name": "Track 99",
+      "short_name": "Track 99",
+      "start_time": "00:00:00",
+      "end_time": null,
+      "player_role": {
+        "id": null,
+        "name": "Unknown",
+        "acronym": null
+      }
+    }
+  ],
+  "ball": {
+    "trackable_object": null
+  },
+  "pitch_length": 105.0,
+  "pitch_width": 68.0
+}

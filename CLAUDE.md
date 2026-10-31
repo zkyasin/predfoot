@@ -5,7 +5,7 @@ Guidance for anyone (human or AI assistant) changing this repository.
 ## Commands
 
 ```bash
-uv sync                                   # core + dev; add --extra vision for torch
+uv sync --extra serve                     # core + dev + the API extra, as in CI; add --extra vision for torch
 uv run pytest -m "not slow and not data and not network and not vision"   # what CI runs
 uv run pytest                             # everything available locally
 uv run ruff check . && uv run ruff format --check . && uv run mypy
