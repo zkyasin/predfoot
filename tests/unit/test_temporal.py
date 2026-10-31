@@ -52,6 +52,11 @@ def norms(e):
     return np.linalg.norm(e, axis=2)
 
 
+def flag_count(flags):
+    """Number of flags each frame carries (a raw-OK frame carries exactly one)."""
+    return np.sum([v for k, v in flags.as_dict().items() if k != "segment"], axis=0)
+
+
 def steady_pan_path(n=150):
     """A gentle pan around 20° (keeps the camera on the pitch when tests add ±30° jumps)."""
     t, phi = ptz_path(n, whip_at_s=1e6)
@@ -468,9 +473,7 @@ def test_an_outlier_at_a_segment_edge_is_never_published_raw(rng):
     track = tm.smooth_clip(meas, PARAMS, CFG)
     res, flags = tm.to_calib_results(calibs, meas, track, PARAMS, CFG)
     raw_ok = np.array([c.ok for c in calibs])
-    one_flag = np.sum([getattr(flags, f) for f in ("smoothed", "repaired", "filled", "projected",
-                                                   "passthrough", "duplicate", "rejected")], 0)  # fmt: skip
-    np.testing.assert_array_equal(one_flag[raw_ok], 1)
+    np.testing.assert_array_equal(flag_count(flags)[raw_ok], 1)
     assert not flags.passthrough[edges].any()
     assert track.rejected[edges].all()
     for k in edges:
@@ -478,6 +481,35 @@ def test_an_outlier_at_a_segment_edge_is_never_published_raw(rng):
         if flags.rejected[k]:
             assert res[k].status is CalibStatus.UNHEALTHY
             assert res[k].H is None
+
+
+def test_a_lone_frame_after_a_long_failure_gap_abstains(rng):
+    """After 2.2 s of failed calibrations, the first frames back are 30° off in pan (consistent with the PTZ
+    model, so accepted) and the next ones are right: the persistent-jump rule leaves the wrong frames in a
+    segment of their own, too short for any innovation to test them. They abstain (flag unchecked) instead of
+    being published as their PTZ projection; the frames around them are smoothed."""
+    _, phi = steady_pan_path()
+    n = len(phi)
+    failed = range(40, 51)
+    for wrong in ([51], [51, 52]):
+        obs = phi.copy()
+        obs[wrong, 0] += np.radians(30.0)
+        calibs = gaussian_calibs(obs, CENTRE, np.random.default_rng(int(rng.integers(2**31))), failed=failed)
+        meas = measure(calibs)
+        assert meas.accepted[wrong].all()
+        track = tm.smooth_clip(meas, PARAMS, CFG)
+        res, flags = tm.to_calib_results(calibs, meas, track, PARAMS, CFG)
+        after = wrong[-1] + 1
+        assert track.short[wrong].all()
+        assert len({track.segment[39], track.segment[wrong[0]], track.segment[after]}) == 3
+        assert flags.unchecked.tolist() == [k in wrong for k in range(n)]
+        for k in wrong:
+            assert res[k].status is CalibStatus.UNHEALTHY
+            assert res[k].H is None
+        assert flags.smoothed[[39, after]].all()
+        assert not any(res[k].ok for k in failed)
+        raw_ok = np.array([c.ok for c in calibs])
+        np.testing.assert_array_equal(flag_count(flags)[raw_ok], 1)
 
 
 def test_a_short_misfit_run_inside_a_segment_gets_the_smoothed_state(rng):
@@ -496,8 +528,7 @@ def test_a_short_misfit_run_inside_a_segment_gets_the_smoothed_state(rng):
     res, flags = tm.to_calib_results(calibs, meas, track, PARAMS, CFG)
     assert flags.bridged.tolist() == [k in bridged for k in range(n)]
     assert flags.passthrough[kept].all()
-    names = ("smoothed", "repaired", "filled", "bridged", "projected", "passthrough", "duplicate", "rejected")
-    np.testing.assert_array_equal(np.sum([getattr(flags, f) for f in names], 0), 1)
+    np.testing.assert_array_equal(flag_count(flags), 1)
     for k, used_before in zip(bridged, (29, 99, 99), strict=True):
         np.testing.assert_allclose(res[k].H, ptz.homography(track.mean[k, :4], CENTRE))
         assert res[k].n_inliers == calibs[k].n_inliers
@@ -571,7 +602,8 @@ def test_all_frames_failed():
     assert (track.segment == -1).all()
 
 
-def test_one_accepted_frame_is_projected():
+def test_one_accepted_frame_abstains():
+    """A lone measurement is its own short segment: nothing tests its camera, so it is not published."""
     meas0 = toy_clip(np.random.default_rng(1), 5, missing=(0, 1, 3, 4))
     phi = np.array([0.1, np.radians(17), 0.005, np.log(2500)])
     z = meas0.z.copy()
@@ -585,8 +617,12 @@ def test_one_accepted_frame_is_projected():
     raw = [CalibResult(CalibStatus.FEW_POINTS) for _ in range(5)]
     raw[2] = CalibResult(CalibStatus.OK, H=ptz.homography(phi, CENTRE), cov_theta=np.eye(8), n_inliers=9)
     res, flags = tm.to_calib_results(raw, meas, track, PARAMS, CFG)
-    assert flags.projected.tolist() == [False, False, True, False, False]
-    assert [r.ok for r in res] == [False, False, True, False, False]
+    assert flags.unchecked.tolist() == [False, False, True, False, False]
+    assert not flags.projected.any()
+    assert not any(r.ok for r in res)
+    assert res[2].status is CalibStatus.UNHEALTHY
+    assert res[2].H is None
+    assert res[2].n_inliers == 9
 
 
 def test_duplicates_are_copied_not_measured(rng):
@@ -684,11 +720,7 @@ def test_outputs_honour_the_calibration_contract(rng):
     track = tm.smooth_clip(meas, PARAMS, CFG)
     res, flags = tm.to_calib_results(calibs, meas, track, PARAMS, CFG)
     raw_ok = np.array([c.ok for c in calibs])
-    one_flag = np.sum(
-        [flags.smoothed, flags.repaired, flags.projected, flags.passthrough, flags.duplicate, flags.rejected],
-        0,
-    )
-    np.testing.assert_array_equal(one_flag[raw_ok], 1)
+    np.testing.assert_array_equal(flag_count(flags)[raw_ok], 1)
     stages = real_stages({}, None, "t")
     feet = [FootObs(track_id=i, uv=uv) for i, uv in enumerate(GRID_FEET)]
     for r in res:

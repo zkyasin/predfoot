@@ -13,12 +13,13 @@ Per clip, without labels:
    it does not explain the clip (:func:`measure_at_centre`).
 2. :func:`measure_clip`: each OK homography is projected onto the PTZ manifold at C with the shape of its
    Laplace covariance (:func:`project_to_ptz`). Frames the model cannot explain (another camera, a wrong
-   RANSAC basin) are flagged ``misfit``: a short run of them inside a segment is a calibration failure and
+   RANSAC basin) are flagged ``misfit``: a brief run of them inside a segment is a calibration failure and
    gets the smoothed state (:func:`bridged_frames`), a longer one may be another camera and passes through.
 3. :func:`smooth_clip`: constant-velocity Kalman filter and RTS smoother on φ inside shot segments
    (:func:`segments`), with deletion of outlying measurements to a fixed point.
 4. :func:`to_calib_results`: H and cov_theta rebuilt as :class:`~predfoot.contracts.CalibResult`, so position
-   covariances, conformal calibration, health and export are unchanged.
+   covariances, conformal calibration, health and export are unchanged. Frames of a segment too short for
+   any innovation to test them abstain.
 
 The noise parameters (κ², q) are fitted by maximum likelihood on the innovations of other games
 (:func:`fit_noise`); every other setting is fixed a priori in :class:`SmootherConfig`.
@@ -76,7 +77,10 @@ class SmootherConfig:
     q_roll: float = 1e-8  # rad²/s³, fixed
     floor_px: float = 0.0  # fixed pixel floor added to the measurement covariance; off in v1
     v0: tuple[float, float, float, float] = (1.0, 0.3, 0.05, 0.5)  # prior sd of the rates at a segment start
-    min_segment: int = 3  # fewer used measurements: the segment is "short" (projection only)
+    # Fewer used measurements: the segment is "short" and its frames abstain. The first innovation that enters
+    # the likelihood is the third measurement's; one measurement has no test at all (deletion statistic 0) and
+    # two only test each other through the loose rate prior v0.
+    min_segment: int = 3
     # A run of off-model frames (misfit or not projected) strictly inside a segment that lasts at most this
     # long (from its first frame to the frame after its last) gets the smoothed state; a longer one passes
     # through. A priori: a cut-away to another camera and back (replay, close-up, crowd) lasts seconds, and a
@@ -220,11 +224,12 @@ class FrameFlags:
     smoothed: BoolArray
     repaired: BoolArray  # rejected measurement replaced by the smoothed state
     filled: BoolArray  # failed raw calibration inside a segment
-    bridged: BoolArray  # off-model frame in a short run inside a segment, replaced by the smoothed state
-    projected: BoolArray  # PTZ projection only (short segment, or the projection ablation)
+    bridged: BoolArray  # off-model frame in a brief run inside a segment, replaced by the smoothed state
+    projected: BoolArray  # PTZ projection only (the projection ablation)
     passthrough: BoolArray  # raw homography, covariance scaled by κ²
     duplicate: BoolArray  # same detections as the previous frame: output copied
     rejected: BoolArray  # deleted measurement with no smoothed state to replace it: abstains
+    unchecked: BoolArray  # other raw-OK frame of a short segment: nothing tests its camera, abstains
     segment: IntArray
 
     @classmethod
@@ -241,6 +246,7 @@ class FrameFlags:
             passthrough=z(),
             duplicate=z(),
             rejected=z(),
+            unchecked=z(),
             segment=np.full(n, -1, dtype=np.int64),
         )
 
@@ -1312,15 +1318,18 @@ def to_calib_results(
     1. duplicate detections (k > 0): copy of output k − 1;
     2. inside a segment that is not short: smoothed state, cov_theta = A (P|T + β R_k [used]) Aᵀ with
        A = ∂θ/∂φ, dof None, for used (flag smoothed), deleted (repaired) and failed frames (filled), and for
-       off-model frames (misfit or failed projection) in a short run (:func:`bridged_frames`, flag bridged);
-    3. used frame of a short segment: PTZ projection, cov_theta = A R_k Aᵀ; flag projected;
-    4. measurement deleted by the robust passes with no smoothed state to replace it (outside every segment,
+       off-model frames (misfit or failed projection) in a brief run (:func:`bridged_frames`, flag bridged);
+    3. measurement deleted by the robust passes with no smoothed state to replace it (outside every segment,
        or in a short one): abstains (status UNHEALTHY), since its raw camera was judged an outlier; flag
        rejected;
+    4. any other raw-OK frame of a short segment (fewer than ``min_segment`` used measurements, so no
+       innovation tests it, typically a lone frame after a long failure gap): abstains (status UNHEALTHY);
+       flag unchecked. Its camera is either its own raw one or that camera's PTZ projection, and the smoother
+       has no evidence for either;
     5. any other raw-OK frame: raw H with cov_theta = κ² Σθ, dof None; flag passthrough. This covariance is
        per-frame, while a smoothed one pools the whole segment, and their scales differ: the evaluation
        calibrates the conformal quantiles of the two kinds separately;
-    6. failed raw calibration outside segments: the raw result (abstains).
+    6. failed raw calibration outside segments or in a short one: the raw result (abstains).
     """
     n = len(raw)
     flags = FrameFlags.empty(n)
@@ -1354,12 +1363,12 @@ def to_calib_results(
                 p = p + cfg.beta * track.R[k]
             out.append(_ptz_result(track.mean[k, :N_PHI], p, centre, r, raw_ok, cfg))
             flag[k] = True
-        elif centre is not None and in_seg and track.short[k] and track.used[k]:
-            out.append(_ptz_result(meas.z[k], track.R[k], centre, r, raw_ok, cfg))
-            flags.projected[k] = True
         elif track.rejected[k]:
             out.append(CalibResult(CalibStatus.UNHEALTHY, n_inliers=r.n_inliers))
             flags.rejected[k] = True
+        elif raw_ok and in_seg and track.short[k]:
+            out.append(CalibResult(CalibStatus.UNHEALTHY, n_inliers=r.n_inliers))
+            flags.unchecked[k] = True
         elif raw_ok:
             out.append(replace(r, cov_theta=params.kappa2 * np.asarray(r.cov_theta), dof=None))
             flags.passthrough[k] = True

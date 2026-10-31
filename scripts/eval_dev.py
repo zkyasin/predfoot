@@ -73,7 +73,10 @@ ALPHA = 0.1
 NATIVE_FPS = 25.0
 IMAGE_SIZE = (1920, 1080)
 FAIL_LINE_PX = 10.0
-FLAGS = ("smoothed", "repaired", "filled", "bridged", "projected", "passthrough", "duplicate", "rejected")
+FLAGS = (
+    "smoothed", "repaired", "filled", "bridged", "projected", "passthrough", "duplicate", "rejected",
+    "unchecked",
+)  # fmt: skip
 DEFAULT_REPORT = Path("reports/m2_logo_dev.md")
 #: Mondrian bins of a covariance source; the sources in POOLED_SOURCES (few rows) get one pooled quantile.
 MONDRIAN_BINS = {"mpp": 3, "n_inliers": 2}
