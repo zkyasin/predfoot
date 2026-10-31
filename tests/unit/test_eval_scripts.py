@@ -103,6 +103,28 @@ def test_mondrian_bins_are_formed_within_each_covariance_source(rng):
     assert pooled["frame"][1] > 50 * split["frame"][1]
 
 
+def test_logo_level_follows_alpha_and_returns_each_rows_quantile(rng):
+    """Errors drawn from each row's (identity) covariance: at every level the LOGO regions cover about 1 − α,
+    at most the clip-level correction (1 − α)(1 + 1/G) above it; the default level is α = 0.1; a held-out row
+    is inside its region exactly when its score is at most its own quantile ``q_mond``."""
+    df = players(rng, n_per_clip=300, clips_per_game=8)
+    default = eval_dev.logo(df, "lab", np.random.default_rng(0), n_boot=10)[1]
+    assert default == eval_dev.logo(df, "lab", np.random.default_rng(0), n_boot=10, alpha=0.1)[1]
+    n_cal = 3 * 8  # calibration clips per fold
+    previous = 0.0
+    for alpha in (0.5, 0.2, 0.1, 0.05):
+        _, summary, held, _ = eval_dev.logo(df, "lab", rng, n_boot=10, alpha=alpha)
+        assert 1 - alpha - 0.03 <= summary["cov_mond"] <= (1 - alpha) * (1 + 1 / n_cal) + 0.03
+        assert summary["cov_mond"] > previous
+        previous = summary["cov_mond"]
+        score = (held.select("ex_lab", "ey_lab").to_numpy() ** 2).sum(axis=1)
+        np.testing.assert_array_equal(held["hit_mond"].to_numpy(), score <= held["q_mond"].to_numpy())
+    assert eval_dev.min_source_clips(0.1) == eval_dev.MIN_SOURCE_CLIPS == 10
+    for alpha in (0.5, 0.2, 0.05):
+        g = eval_dev.min_source_clips(alpha)
+        assert (1 - alpha) * (1 + 1 / g) < 1 <= (1 - alpha) * (1 + 1 / (g - 1))
+
+
 def test_cov_sources_follow_the_flags_and_duplicates():
     flags = tm.FrameFlags.empty(8)
     flags.smoothed[0] = flags.duplicate[1] = flags.projected[2] = flags.duplicate[3] = True

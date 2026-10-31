@@ -68,11 +68,13 @@ from predfoot.eval.positions import (
     frame_rows_out,
     load_calib,
     logo,
+    min_source_clips,
     player_rows,
     q3,
     save_calib,
     smooth_outputs,
 )
+from predfoot.eval.positions import clip_bootstrap as _clip_bootstrap
 from predfoot.eval.positions import error_norm as _err
 from predfoot.eval.positions import flag_arrays as _flag_arrays
 from predfoot.eval.positions import mondrian_by_source as _mondrian_by_source
@@ -90,10 +92,12 @@ __all__ = [  # re-exported for tests and for other scripts
     "RAW_GAP_MAX_M",
     "ClipCalib",
     "MondrianConformal",
+    "_clip_bootstrap",
     "_mondrian_by_source",
     "cov_sources",
     "load_calib",
     "logo",
+    "min_source_clips",
     "save_calib",
 ]
 

@@ -186,5 +186,7 @@ Runtime: 404 s (calibration or loading 47 s).
      quantile (gap source): coverage 99.0 % against the labels with a median area of 17.7 m² (468 m² with
      λ = 20), but 77.2 % against the line oracle (967 player-frames).
    - Still open: about 19 isolated off-model frames at clip or segment edges pass through with their raw
-     camera, 9 of them with a p90 error above 5 m. Filled and bridged frames are excluded from the headline
-     coverage and reported here.
+     camera, 9 of them with a p90 error above 5 m. Filled frames are excluded from the headline coverage and
+     reported here; bridged frames are in it (252689 = 243248 smoothed + 3858 repaired + 4300 bridged + 1283
+     passthrough player-frames, table above). *Corrected after review: this note first said both were
+     excluded.*
