@@ -253,7 +253,7 @@ def plot_reliability(rows: list[Level], path: Path) -> None:
         Line2D([], [], color=COLOURS[c], marker="o", lw=1.5, mec=SURFACE, label=CAMERAS[c]) for c in CAMERAS
     ]
     handles.append(Line2D([], [], color=GREY, lw=1.0, ls="--", label="coverage = nominal level"))
-    axes[0].legend(handles=handles, loc="upper left", fontsize=8, frameon=False)
+    axes[0].legend(handles=handles, loc="upper left", fontsize=8, frameon=False, handlelength=3.2)
     fig.suptitle(
         "Mondrian ellipses, leave one game out (SN-GSR dev, 6 games); bars: 95 % CI over clips",
         fontsize=9,
@@ -304,7 +304,7 @@ def plot_area(rows: list[Level], path: Path) -> None:
                 label=f"{CAMERAS[c]}, constant circle",
             )
         )
-    axes[0].legend(handles=handles, loc="upper left", fontsize=7.5, frameon=False)
+    axes[0].legend(handles=handles, loc="upper left", fontsize=7.5, frameon=False, handlelength=3.2)
     fig.suptitle(
         "Region size at the same nominal level: Mondrian ellipses against a constant circle (held-out games)",
         fontsize=9,
