@@ -24,6 +24,8 @@ from predfoot.health.features import FEATURES
 from predfoot.paths import REPO_ROOT
 
 FINAL_TEXT = "# Preregistration of the test run\n\n- Version: 1\n- Status: approved by the owner.\n"
+CLIP = ("SNGS-999", "test", 7)  # the one fake test clip pinned by the throw-away locks
+MODEL = "pnlcalib-sv@fake"
 
 
 def _load(name):
@@ -50,6 +52,20 @@ def commit_all(root, message):
     git(root, "commit", "-q", "-m", message)
 
 
+def write_lock(root, frozen_at="2026-11-01T00:00:00+00:00", **changes):
+    """A lock of the current preregistration and artifacts at HEAD, pinning the fake test clip."""
+    fields = {
+        "code_commit": pr.head_commit(root),
+        "frozen_at_utc": frozen_at,
+        "config_digests": {"detection_model": MODEL},
+        "test_split": {"clips": 1, "clip_ids_sha256": fz.clip_list_digest([(CLIP[0], CLIP[2])])},
+        "environment": pr.environment(),
+    } | changes
+    lock = pr.make_lock(root, Path("artifacts/prereg/v1"), **fields)
+    (root / pr.LOCK_PATH).write_text(lock.to_json())
+    return lock
+
+
 @pytest.fixture
 def repo(tmp_path):
     """A repository whose preregistration is frozen: code, artifacts and a matching lock, all committed."""
@@ -60,19 +76,15 @@ def repo(tmp_path):
     (root / "src" / "m.py").write_text("x = 1\n")
     (root / "scripts" / "s.py").write_text("y = 2\n")
     (root / "configs" / "c.yaml").write_text("a: 1\n")
-    (root / "artifacts/prereg/v1/regions.json").write_text('{"q": 1.0}\n')
+    (root / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    (root / "uv.lock").write_text("version = 1\n")
+    (root / ".gitignore").write_text("__pycache__/\ndata/\n")
     git(root, "init", "-q")
     git(root, "config", "user.email", "test@example.com")
     git(root, "config", "user.name", "test")
     commit_all(root, "code")
-    lock = pr.make_lock(
-        root,
-        Path("artifacts/prereg/v1"),
-        code_commit=pr.head_commit(root),
-        frozen_at_utc="2026-11-01T00:00:00+00:00",
-        config_digests={},
-    )
-    (root / pr.LOCK_PATH).write_text(lock.to_json())
+    (root / "artifacts/prereg/v1/regions.json").write_text('{"q": 1.0}\n')
+    write_lock(root)
     commit_all(root, "freeze")
     return root
 
@@ -110,7 +122,9 @@ def test_an_added_or_removed_artifact_is_refused(repo):
         pr.verify_lock(repo)
 
 
-@pytest.mark.parametrize("path", ["src/m.py", "scripts/s.py", "configs/c.yaml"])
+@pytest.mark.parametrize(
+    "path", ["src/m.py", "scripts/s.py", "configs/c.yaml", "pyproject.toml", "uv.lock", ".python-version"]
+)
 def test_a_code_change_since_the_lock_commit_is_refused(repo, path):
     (repo / path).write_text("changed = True\n")
     commit_all(repo, "change after the freeze")
@@ -122,6 +136,124 @@ def test_a_change_outside_the_protected_paths_is_accepted(repo):
     (repo / "README.md").write_text("Preregistration frozen.\n")
     commit_all(repo, "readme")
     pr.verify_lock(repo)
+
+
+def test_the_protected_set_is_the_code_s_not_the_lock_s(repo):
+    lock = json.loads((repo / pr.LOCK_PATH).read_text())
+    (repo / pr.LOCK_PATH).write_text(json.dumps(lock | {"protected_paths": []}))
+    commit_all(repo, "a lock that protects nothing")  # refused anyway: the lock changed after its freeze
+    with pytest.raises(pr.PreregError):
+        pr.verify_lock(repo)
+    lock = pr.read_lock(repo)
+    (repo / "src" / "m.py").write_text("x = 4\n")
+    commit_all(repo, "code change")
+    with pytest.raises(pr.PreregError, match="code changed"):
+        pr.verify_code(repo, lock)
+
+
+def test_editing_the_preregistration_and_the_lock_together_is_refused(repo):
+    (repo / pr.PREREG_PATH).write_text(FINAL_TEXT + "- P1 now uses the oracle.\n")
+    lock = json.loads((repo / pr.LOCK_PATH).read_text())
+    lock["preregistration"]["sha256"] = pr.sha256_file(repo / pr.PREREG_PATH)
+    (repo / pr.LOCK_PATH).write_text(json.dumps(lock))
+    commit_all(repo, "edit both")
+    pr.verify_hashes(repo, pr.read_lock(repo))  # the hashes alone would pass
+    with pytest.raises(pr.PreregError, match="changed since the freeze commit"):
+        pr.verify_lock(repo)
+
+
+def test_pointing_the_lock_at_a_newer_code_commit_is_refused(repo):
+    (repo / "src" / "m.py").write_text("x = 5\n")
+    commit_all(repo, "code change after the freeze")
+    lock = json.loads((repo / pr.LOCK_PATH).read_text())
+    (repo / pr.LOCK_PATH).write_text(json.dumps(lock | {"code_commit": pr.head_commit(repo)}))
+    commit_all(repo, "move the lock")
+    with pytest.raises(pr.PreregError, match="changed since the freeze commit"):
+        pr.verify_lock(repo)
+
+
+def test_an_uncommitted_lock_hidden_from_git_is_refused(tmp_path):
+    root = tmp_path / "r"
+    (root / "docs").mkdir(parents=True)
+    (root / "src").mkdir()
+    (root / pr.PREREG_PATH).write_text(FINAL_TEXT)
+    (root / "src" / "m.py").write_text("x = 1\n")
+    git(root, "init", "-q")
+    git(root, "config", "user.email", "test@example.com")
+    git(root, "config", "user.name", "test")
+    commit_all(root, "code")
+    (root / "artifacts/prereg/v1").mkdir(parents=True)
+    (root / "artifacts/prereg/v1/regions.json").write_text("{}\n")
+    write_lock(root)
+    (root / ".git/info/exclude").write_text("artifacts/\ndocs/preregistration.lock.json\n")
+    assert pr.dirty_paths(root) == []  # invisible to git status
+    with pytest.raises(pr.PreregError, match="not tracked"):
+        pr.verify_lock(root)
+
+
+def test_a_freeze_commit_with_other_changes_is_refused(repo):
+    (repo / pr.LOCK_PATH).unlink()
+    commit_all(repo, "remove the lock")
+    base = pr.head_commit(repo)
+    write_lock(repo, code_commit=base)
+    (repo / "README.md").write_text("also in the freeze commit\n")
+    commit_all(repo, "freeze with extras")
+    with pytest.raises(pr.PreregError, match="adds more than the lock"):
+        pr.verify_lock(repo)
+
+
+def test_a_re_freeze_is_accepted_and_ties_nothing_to_the_old_lock(repo):
+    old = pr.lock_sha256(repo)
+    (repo / pr.LOCK_PATH).unlink()
+    (repo / "src" / "m.py").write_text("x = 6\n")
+    commit_all(repo, "fix the code, drop the lock")
+    write_lock(repo, frozen_at="2026-11-02T00:00:00+00:00")
+    commit_all(repo, "re-freeze")
+    lock = pr.verify_lock(repo)
+    assert pr.freeze_commit(repo) == pr.head_commit(repo)
+    assert lock.code_commit != pr.head_commit(repo)
+    assert pr.lock_sha256(repo) != old
+
+
+@pytest.mark.parametrize("flag", ["--skip-worktree", "--assume-unchanged"])
+def test_a_tracked_file_hiding_its_changes_is_refused(repo, flag):
+    git(repo, "update-index", flag, "src/m.py")
+    (repo / "src" / "m.py").write_text("x = 7\n")
+    assert pr.dirty_paths(repo) == []  # git status shows nothing
+    with pytest.raises(pr.PreregError, match="hidden from git status"):
+        pr.verify_lock(repo)
+
+
+def test_an_ignored_file_under_a_protected_path_is_refused_but_bytecode_is_not(repo):
+    (repo / "src" / "__pycache__").mkdir()
+    (repo / "src" / "__pycache__" / "m.cpython-312.pyc").write_bytes(b"\0")
+    pr.verify_lock(repo)
+    (repo / "src" / "data").mkdir()
+    (repo / "src" / "data" / "__init__.py").write_text("shadow = True\n")  # ignored by 'data/'
+    with pytest.raises(pr.PreregError, match="ignored"):
+        pr.verify_lock(repo)
+
+
+def test_artifact_hashes_skip_hidden_files(repo):
+    (repo / "artifacts/prereg/v1/.DS_Store").write_bytes(b"finder")
+    pr.verify_hashes(repo, pr.read_lock(repo))
+
+
+def test_the_environment_must_be_the_frozen_one(repo):
+    lock = pr.read_lock(repo)
+    pr.verify_environment(lock)
+    bumped = pr.Lock(**{**lock.__dict__, "environment": lock.environment | {"scipy": "0.0"}})
+    with pytest.raises(pr.PreregError, match=r"scipy 0\.0 at the freeze"):
+        pr.verify_environment(bumped)
+    with pytest.raises(pr.PreregError, match="no environment"):
+        pr.verify_environment(pr.Lock(**{**lock.__dict__, "environment": {}}))
+
+
+def test_the_readme_line_binds_the_artifacts_and_the_lock(repo):
+    lock = pr.read_lock(repo)
+    other = pr.Lock(**{**lock.__dict__, "artifacts": {"artifacts/prereg/v1/regions.json": "0" * 64}})
+    assert lock.readme_line() != other.readme_line()
+    assert pr.lock_sha256(repo)[:16] in lock.readme_line(pr.lock_sha256(repo))
 
 
 def test_a_dirty_tree_is_refused(repo):
@@ -183,19 +315,16 @@ def test_a_second_evaluation_is_refused(tmp_path):
 
 
 def _context(repo, tmp_path):
-    run_dir = tmp_path / "run"
-    run_dir.mkdir()
-    (run_dir / "stage_b.json").write_text("{}")
     return run_test_once.Context(
         dry=False,
         root=repo,
-        run_dir=run_dir,
-        markers=[tmp_path / "data" / "STAGE_C_STARTED.json", run_dir / "STAGE_C_STARTED.json"],
+        run_dir=tmp_path / "run",
+        markers=[tmp_path / "markers" / "STAGE_C_STARTED.json", tmp_path / "run" / "STAGE_C_STARTED.json"],
         cache_root=tmp_path / "cache",
         report=tmp_path / "test_run.md",
         persons_path=tmp_path / "persons.parquet",
         lines_path=tmp_path / "lines.parquet",
-        clips=[("SNGS-999", "test", 7)],
+        clips=[CLIP],
     )
 
 
@@ -221,6 +350,7 @@ def test_stage_c_is_not_reachable_without_a_matching_lock(repo, tmp_path, monkey
 
 def test_stage_c_refuses_when_a_test_report_exists(repo, tmp_path, monkeypatch):
     ctx = _context(repo, tmp_path)
+    ctx.report.parent.mkdir(parents=True, exist_ok=True)
     ctx.report.write_text("# Preregistered test run\n")
     with pytest.raises(pr.PreregError, match="already ran"):
         run_test_once.stage_c(ctx)
