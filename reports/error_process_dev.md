@@ -1,6 +1,6 @@
 # Position-error process on SN-GSR dev (T4.2)
 
-`uv run python scripts/error_process.py ../geometry/runs/20261031-0151_ba55bc7/players.parquet` · commit `6aa47c9`
+`uv run python scripts/error_process.py ../geometry/runs/20261031-1200_7ae1b77/players.parquet` · commit `da2cf77`
 
 Errors of predfoot's positions (ground-truth boxes, our calibration), split into a common part
 shared by the players of a frame (mostly the camera) and an individual part. σ is the marginal
@@ -9,8 +9,8 @@ Errors above 10 m are calibration failures, left to abstention, and excluded her
 
 | Reference | Player-frames | Clips | σ common (m) | ρ common 5 fps → 25 Hz | σ individual (m) | ρ individual 5 fps → 25 Hz |
 |---|---|---|---|---|---|---|
-| labels | 113980 | 49 | 0.64 | 0.46 → 0.856 | 0.63 | 0.40 → 0.832 |
-| trusted line oracle | 68112 | 49 | 0.97 | 0.49 → 0.866 | 0.62 | 0.38 → 0.826 |
+| labels | 254485 | 115 | 0.62 | 0.44 → 0.848 | 0.62 | 0.40 → 0.832 |
+| trusted line oracle | 153142 | 115 | 0.95 | 0.49 → 0.866 | 0.62 | 0.39 → 0.829 |
 
 Reading: a ρ close to 1 at 25 Hz means slow errors (a camera that is wrong for seconds at a time),
 which the KPI study found to be the least harmful to distances; ρ ≈ 0.9 (about 0.4 s) was the most
