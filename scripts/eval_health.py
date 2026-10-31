@@ -7,9 +7,9 @@ annotations only, never the position labels, whose own camera is off by several 
 only frames whose annotated lines are self-consistent (a homography fits them within 3 px), so that a
 "failure" is never an annotation that no camera could explain.
 
-Detectors: each feature alone (its sign set on the training games), logistic regression and gradient
-boosting, all evaluated leave-one-game-out. Metrics: AUROC, average precision, AURC and the share of
-failures removed when abstaining on 5 % or 10 % of frames.
+Detectors (:mod:`predfoot.health.detector`): each feature alone (its sign set on the training games),
+logistic regression and gradient boosting, all evaluated leave-one-game-out. Metrics: AUROC, average
+precision, AURC and the share of failures removed when abstaining on 5 % or 10 % of frames.
 
 Usage:
     uv run python scripts/eval_health.py runs/<run>/frames.parquet --out reports/m3_health_dev.md
@@ -23,55 +23,18 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 import typer
-from sklearn.ensemble import HistGradientBoostingClassifier
-from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import average_precision_score, roc_auc_score
-from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import StandardScaler
 
 from predfoot.eval.selective import aurc, removed_at
+from predfoot.health.detector import FAIL_LINE_PX, failure_table, logo_scores
 from predfoot.health.features import FEATURES
 
 app = typer.Typer(add_completion=False)
-FAIL_LINE_PX = 10.0
-
-
-def _impute(train: np.ndarray, test: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    med = np.nanmedian(train, axis=0)
-    med = np.where(np.isfinite(med), med, 0.0)
-    return np.where(np.isfinite(train), train, med), np.where(np.isfinite(test), test, med)
-
-
-def logo_scores(df: pl.DataFrame) -> dict[str, np.ndarray]:
-    """Out-of-game risk scores for every detector, aligned with the rows of ``df``."""
-    x = df.select(FEATURES).to_numpy().astype(float)
-    y = df["fail"].to_numpy().astype(int)
-    games = df["game"].to_numpy()
-    scores = {name: np.full(len(df), np.nan) for name in [*FEATURES, "logistic", "boosting"]}
-    for g in np.unique(games):
-        tr, te = games != g, games == g
-        x_tr, x_te = _impute(x[tr], x[te])
-        for j, name in enumerate(FEATURES):
-            sign = 1.0
-            if len(np.unique(y[tr])) == 2 and roc_auc_score(y[tr], x_tr[:, j]) < 0.5:
-                sign = -1.0
-            scores[name][te] = sign * x_te[:, j]
-        lr = make_pipeline(StandardScaler(), LogisticRegression(class_weight="balanced", max_iter=2000))
-        lr.fit(x_tr, y[tr])
-        scores["logistic"][te] = lr.predict_proba(x_te)[:, 1]
-        gb = HistGradientBoostingClassifier(
-            max_depth=3, learning_rate=0.05, max_iter=300, class_weight="balanced"
-        )
-        gb.fit(x_tr, y[tr])
-        scores["boosting"][te] = gb.predict_proba(x_te)[:, 1]
-    return scores
 
 
 @app.command()
 def main(frames_path: Path, out: Path = Path("reports/m3_health_dev.md")) -> None:
-    frames = pl.read_parquet(frames_path)
-    df = frames.filter(pl.col("ok") & pl.col("line_px").is_not_nan() & pl.col("trusted"))
-    df = df.with_columns((pl.col("line_px") > FAIL_LINE_PX).alias("fail"))
+    df = failure_table(pl.read_parquet(frames_path))
     y = df["fail"].to_numpy().astype(bool)
     line_px = df["line_px"].to_numpy().astype(float)
     scores = logo_scores(df)
