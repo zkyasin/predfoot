@@ -364,3 +364,112 @@ def test_saved_output_cameras_round_trip_exactly(tmp_path, rng):
     for name, values in flags.as_dict().items():
         np.testing.assert_array_equal(getattr(fl, name), values)
     np.testing.assert_array_equal(dg["nis"], diag["nis"])
+
+
+# --- end to end: frozen artifacts, endpoints, criteria, report --------------------------------------------
+
+
+def _camera_players(rng, games, scale, filled_rows=False):
+    """Synthetic player rows of one camera: both references (the oracle on about half of the rows) and the
+    smoothed labels, errors scaled by ``scale``."""
+    df = synthetic_players(rng, games=games, clips_per_game=4, n=60)
+    if filled_rows:
+        df = pl.concat([df, synthetic_players(rng, games=games, clips_per_game=4, n=10, filled=True)])
+    n = df.height
+    has_or = rng.random(n) < 0.5
+    return df.with_columns(
+        pl.col("ex_lab") * scale,
+        pl.col("ey_lab") * scale,
+        pl.Series("ex_or", np.where(has_or, scale * rng.standard_normal(n), np.nan)),
+        pl.Series("ey_or", np.where(has_or, scale * rng.standard_normal(n), np.nan)),
+        pl.Series("ex_sm", 0.5 * scale * rng.standard_normal(n)),
+        pl.Series("ey_sm", 0.5 * scale * rng.standard_normal(n)),
+    )
+
+
+def _camera_frames(rng, games):
+    """Frame rows of one camera: health features, line distances, output flags."""
+    f = failure_frames(rng, games=games, n=200)
+    n = f.height
+    line_px = np.where(f["fail"].to_numpy(), 15.0, 2.0)
+    flags = {name: np.zeros(n, dtype=bool) for name in fz.OUTPUT_TYPES} | {"smoothed": np.ones(n, dtype=bool)}
+    return f.drop("fail").with_columns(
+        pl.Series("frame", np.arange(n) * 5),
+        pl.Series("ok", np.ones(n, dtype=bool)),
+        pl.Series("ok_out", rng.random(n) < 0.97),
+        pl.Series("trusted", np.ones(n, dtype=bool)),
+        pl.Series("line_px", line_px),
+        pl.Series("line_px_out", line_px * 0.5),
+        *[pl.Series(k, v) for k, v in flags.items()],
+    )
+
+
+def test_artifacts_endpoints_criteria_and_report_end_to_end(tmp_path, rng):
+    dev = fz.DEV_GAMES
+    tables = fz.DevTables(
+        perframe=fz.CameraTables(_camera_players(rng, dev, 1.0), _camera_frames(rng, dev)),
+        ptz=fz.CameraTables(_camera_players(rng, dev, 1.0, filled_rows=True), _camera_frames(rng, dev)),
+        smoothing=ps.SmoothingInfo(
+            fits={"all": {"params": tm.NoiseParams().to_dict(), "training_clips": 24}}
+        ),
+        params=tm.NoiseParams(),
+        cfg=tm.SmootherConfig(),
+    )
+    written = fz.write_artifacts(tables, tmp_path / "v1", {"dev_clips": 24})
+    assert set(written) == {"analysis", "smoother", "detector"} | {
+        f"regions_{c}_{r}" for c in fz.CAMERAS for r in fz.REFERENCES
+    }
+    art = fz.load_artifacts(tmp_path / "v1")
+    for c in fz.CAMERAS:
+        for r in fz.REFERENCES:
+            fitted = fz.fit_camera_regions(fz.camera_table(tables, c).players, r)
+            assert art.regions[c, r].to_dict() == fitted.to_dict()
+    assert art.params == tm.NoiseParams()
+
+    # test games: the smoothed camera keeps the dev error scale, the per-frame camera triples it, and the
+    # smoothed camera abstains on every tenth frame
+    test_games = fz.TEST_GAMES
+    perframe = _camera_players(np.random.default_rng(1), test_games, 3.0)
+    ptz = _camera_players(np.random.default_rng(1), test_games, 1.0).filter(pl.col("frame") % 50 != 0)
+    frames = _camera_frames(rng, test_games)
+    res = fz.evaluate(
+        {"perframe": fz.CameraTables(perframe, frames), "ptz": fz.CameraTables(ptz, frames)}, art, n_boot=200
+    )
+
+    prim, crit = res["regions"]["ptz"]["lab"], res["criteria"]
+    assert fz.PRIMARY == ("ptz", "lab")
+    s = ps.score_table(ptz.filter(~pl.col("filled")), "lab")
+    q = art.regions["ptz", "lab"].quantile_for({k: s[k] for k in ps.FEATURE_NAMES}, s["source"])
+    assert prim["coverage"] == pytest.approx(np.mean(s["score"] <= q))
+    lo, hi = prim["coverage_ci"]
+    assert crit["P1"] == {"ci": prim["coverage_ci"], "pass": lo <= 0.9 <= hi}
+    area = np.pi * q * np.sqrt(np.linalg.det(s["cov"]))
+    ratio = np.median(area) / (np.pi * art.regions["ptz", "lab"].r_const ** 2)
+    assert crit["P2"]["ratio"] == pytest.approx(ratio)
+    assert crit["P2"]["pass"] == (ratio < 1)
+    assert res["regions"]["perframe"]["lab"]["coverage"] < prim["coverage"] - 0.2  # a swapped arm shows
+
+    df = hd.failure_table(frames)
+    y = df["fail"].to_numpy()
+    scores = art.detector.scores(df)
+    from sklearn.metrics import roc_auc_score
+
+    diff = roc_auc_score(y, scores["boosting"]) - roc_auc_score(y, scores[art.detector.best_single])
+    assert res["detector"]["best_single_dev"] == art.detector.best_single
+    assert crit["P3"] == {"diff": pytest.approx(diff), "pass": diff > 0}
+
+    dropped = perframe.filter(pl.col("frame") % 50 == 0).height
+    ab = prim["abstained"]
+    assert ab["n"] == dropped
+    assert ab["coverage_as_misses"] == pytest.approx(prim["coverage"] * prim["n"] / (prim["n"] + dropped))
+    assert "abstained" not in res["regions"]["perframe"]["lab"]
+
+    rs = res["residual"]
+    both = frames.filter(pl.col("ok") & pl.col("ok_out"))
+    assert rs["frames"] == both.height
+    assert rs["fail_share_perframe"] == pytest.approx(np.mean(both["line_px"].to_numpy() > 10))
+
+    md = fz.render_report(json.loads(fz.dump(res)), ["# Synthetic"])
+    assert "| P1 |" in md
+    assert "abstains" in md
+    assert md.count("**met**") + md.count("**not met**") == 3

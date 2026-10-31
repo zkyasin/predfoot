@@ -16,9 +16,10 @@ both references, with the success criteria as written, then :func:`render_report
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -75,6 +76,24 @@ def analysis_config() -> dict[str, Any]:
         "test_clips": TEST_CLIPS,
         "solver": asdict(SolverConfig()),
     }
+
+
+def clip_list_digest(clips: Iterable[tuple[str, int]]) -> str:
+    """SHA-256 of a clip list (clip id, game), order-free: the lock pins the test clips with it."""
+    text = "".join(f"{clip},{int(game)}\n" for clip, game in sorted(clips))
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def locked_clip_list(clips_parquet: Path) -> list[tuple[str, int]]:
+    """(clip id, game) of every clip of the locked split from the clip index (``index/clips.parquet``, the
+    split's structure only: no label is read); refuses games other than the preregistered ones."""
+    clips = pl.read_parquet(clips_parquet, columns=["clip_id", "split", "game_id"])
+    rows = clips.filter(pl.col("split") == "test").sort("clip_id").select("clip_id", "game_id").iter_rows()
+    out = [(str(c), int(g)) for c, g in rows]
+    games = sorted({g for _, g in out})
+    if games != list(TEST_GAMES):
+        raise ValueError(f"test games {games}, preregistered {list(TEST_GAMES)}")
+    return out
 
 
 def to_jsonable(obj: Any) -> Any:
@@ -256,8 +275,7 @@ def save_outputs(path: Path, outputs: Sequence[ps.Output], meta: Mapping[str, An
             arrays[key + "flag_" + name] = np.asarray(values)
         for name, values in o.diag.items():
             arrays[key + "diag_" + name] = np.asarray(values, dtype=np.float64)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(path, **arrays)  # type: ignore[arg-type]
+    ps.savez_atomic(path, arrays)
 
 
 SavedOutput = tuple[list[CalibResult], tm.FrameFlags, dict[str, np.ndarray]]
@@ -294,10 +312,21 @@ def _boot_stat(
 
 
 def region_endpoint(
-    players: pl.DataFrame, rm: ps.RegionModels, ref: str, rng: np.random.Generator, n_boot: int
+    players: pl.DataFrame,
+    rm: ps.RegionModels,
+    ref: str,
+    rng: np.random.Generator,
+    n_boot: int,
+    raw_ok: pl.DataFrame | None = None,
 ) -> dict[str, Any]:
-    """Coverage and size of the frozen regions of one camera against one reference (headline rows: frames
-    whose raw calibration succeeded), with clip-bootstrap intervals; filled frames reported apart."""
+    """Coverage and size of the frozen regions of one camera against one reference, with clip-bootstrap
+    intervals; filled frames reported apart.
+
+    Headline rows: player-frames whose raw calibration succeeded and for which this camera publishes a
+    position. ``raw_ok`` (the per-frame camera's rows: every raw-OK player-frame) gives the player-frames
+    where this camera abstains although the raw calibration succeeded; they are counted, and a secondary
+    coverage counts them as misses.
+    """
     d = players.filter(~pl.col("filled") & pl.col(f"ex_{ref}").is_not_nan()) if players.height else players
     if d.height == 0:
         return {"n": 0}
@@ -358,6 +387,16 @@ def region_endpoint(
             "n": filled.height,
             "coverage": float(np.mean(fs["score"] <= fq)),
             "coverage_const": float(np.mean(fs["norm"] <= rm.r_const)),
+        }
+    if raw_ok is not None and raw_ok.height:
+        base = raw_ok.filter(pl.col(f"ex_{ref}").is_not_nan()).select(KEYS)
+        missing = base.join(d.select(KEYS), on=KEYS, how="anti")
+        n_ab = missing.height
+        out["abstained"] = {
+            "n": n_ab,
+            "frames": missing.select("clip", "frame").unique().height,
+            "share": n_ab / (d.height + n_ab),
+            "coverage_as_misses": float(hit.sum()) / (d.height + n_ab),
         }
     return out
 
@@ -421,18 +460,32 @@ def detector_endpoint(
 
 
 def residual_endpoint(frames_perframe: pl.DataFrame, frames_ptz: pl.DataFrame) -> dict[str, Any]:
-    """Residual failures of the smoothed camera: frames with self-consistent lines whose output camera is
-    more than 10 px from the annotated lines, overall and per output type, next to the per-frame camera."""
-    t = frames_ptz.filter(pl.col("trusted") & pl.col("ok_out") & pl.col("line_px_out").is_not_nan())
-    p = frames_perframe.filter(pl.col("trusted") & pl.col("ok") & pl.col("line_px").is_not_nan())
+    """Residual failures of the smoothed camera: frames with self-consistent lines whose camera is more than
+    10 px from the annotated lines.
+
+    Both cameras on the same frames, as on dev (``scripts/eval_dev.py``): raw and output cameras both
+    calibrated. Frames that only the smoother fills, and raw-OK frames where it abstains, are counted apart;
+    the share per output type covers every published frame of the smoothed camera.
+    """
+    if not frames_ptz.height:
+        return {"frames": 0, "by_type": {}}
+    trusted = frames_ptz.filter(pl.col("trusted"))
+    both = trusted.filter(
+        pl.col("ok") & pl.col("ok_out") & pl.col("line_px").is_not_nan() & pl.col("line_px_out").is_not_nan()
+    )
+    filled = trusted.filter(~pl.col("ok") & pl.col("ok_out") & pl.col("line_px_out").is_not_nan())
+    t = trusted.filter(pl.col("ok_out") & pl.col("line_px_out").is_not_nan())
+    lp, lo = both["line_px"].to_numpy().astype(float), both["line_px_out"].to_numpy().astype(float)
     out: dict[str, Any] = {
-        "frames_ptz": t.height,
-        "fail_share_ptz": _mean(t["line_px_out"] > FAIL_LINE_PX) if t.height else None,
-        "line_px_p90_ptz": float(np.quantile(t["line_px_out"].to_numpy(), 0.9)) if t.height else None,
-        "frames_perframe": p.height,
-        "fail_share_perframe": _mean(p["line_px"] > FAIL_LINE_PX) if p.height else None,
-        "line_px_p90_perframe": float(np.quantile(p["line_px"].to_numpy(), 0.9)) if p.height else None,
-        "published_rate_ptz": _mean(frames_ptz["ok_out"]) if frames_ptz.height else None,
+        "frames": both.height,
+        "fail_share_perframe": float(np.mean(lp > FAIL_LINE_PX)) if both.height else None,
+        "fail_share_ptz": float(np.mean(lo > FAIL_LINE_PX)) if both.height else None,
+        "line_px_p90_perframe": float(np.quantile(lp, 0.9)) if both.height else None,
+        "line_px_p90_ptz": float(np.quantile(lo, 0.9)) if both.height else None,
+        "filled_frames": filled.height,
+        "fail_share_filled": _mean(filled["line_px_out"] > FAIL_LINE_PX) if filled.height else None,
+        "abstained_frames": trusted.filter(pl.col("ok") & ~pl.col("ok_out")).height,
+        "published_rate_ptz": _mean(frames_ptz["ok_out"]),
         "published_rate_perframe": _mean(frames_perframe["ok"]) if frames_perframe.height else None,
         "by_type": {},
     }
@@ -478,8 +531,11 @@ def evaluate(
     """Every endpoint of the preregistration, the success criteria evaluated as written."""
     rng = np.random.default_rng(seed)
     players = {c: tables[c].players for c in CAMERAS}
-    regions = {c: {r: region_endpoint(players[c], art.regions[c, r], r, rng, n_boot) for r in REFERENCES}
-               for c in CAMERAS}  # fmt: skip
+    raw_ok = {"perframe": None, "ptz": players["perframe"]}  # every per-frame row is a raw-OK player-frame
+    regions = {
+        c: {r: region_endpoint(players[c], art.regions[c, r], r, rng, n_boot, raw_ok[c]) for r in REFERENCES}
+        for c in CAMERAS
+    }
     det = detector_endpoint(tables["perframe"].frames, art.detector, rng, n_boot)
     prim = regions[PRIMARY[0]][PRIMARY[1]]
     p1 = (
@@ -577,6 +633,14 @@ def render_report(res: Mapping[str, Any], header: Sequence[str]) -> str:
                 f" {_pct(e['coverage_raw_laplace'])} | {e['median_area']:.2f} | {e['const_area']:.2f} |"
                 f" {e['area_ratio']:.2f} [{lo:.2f}, {hi:.2f}] | {_pct(e['simultaneous_coverage'])} |"
             )
+    ab = prim.get("abstained")
+    if ab:
+        md += [
+            "",
+            f"Raw-OK player-frames where the {CAMERA_TITLES[PRIMARY[0]]} abstains (not in the headline rows):"
+            f" {ab['n']} ({_pct(ab['share'])}, {ab['frames']} frames); P1 coverage counting them as misses:"
+            f" {_pct(ab['coverage_as_misses'])}.",
+        ]
     md += ["", "Per test game (Mondrian coverage [95 % CI], player-frames):", ""]
     md += ["| Camera | Reference | " + " | ".join(f"Game {g}" for g in res["games"]) + " |"]
     md += ["|---|---|" + "---|" * len(res["games"])]
@@ -659,16 +723,19 @@ def render_report(res: Mapping[str, Any], header: Sequence[str]) -> str:
                 f" {'–' if ab is None else f'{ab:.3f}'} | {'–' if bs is None else f'{bs:.3f}'} |"
             )
     rs = res["residual"]
+    md += ["", "## Residual failures of the smoothed camera", ""]
+    if rs.get("frames"):
+        md += [
+            f"{rs['frames']} frames with self-consistent lines where both cameras are calibrated: above"
+            f" {FAIL_LINE_PX:.0f} px, per-frame camera {_pct(rs['fail_share_perframe'])}, smoothed camera"
+            f" {_pct(rs['fail_share_ptz'])} (line distance p90 {rs['line_px_p90_perframe']:.1f} and"
+            f" {rs['line_px_p90_ptz']:.1f} px). Apart: {rs['filled_frames']} frames filled by the smoother"
+            f" (above {FAIL_LINE_PX:.0f} px {_pct(rs['fail_share_filled'])}) and {rs['abstained_frames']}"
+            " raw-OK frames where it abstains. Published-position rate: per-frame"
+            f" {_pct(rs['published_rate_perframe'])}, smoothed {_pct(rs['published_rate_ptz'])}.",
+            "",
+        ]
     md += [
-        "",
-        "## Residual failures of the smoothed camera",
-        "",
-        f"Frames with self-consistent lines: per-frame camera {rs['frames_perframe']} frames, above"
-        f" {FAIL_LINE_PX:.0f} px {_pct(rs['fail_share_perframe'])}; smoothed camera {rs['frames_ptz']}"
-        " frames,"
-        f" above {FAIL_LINE_PX:.0f} px {_pct(rs['fail_share_ptz'])}. Published-position rate: per-frame"
-        f" {_pct(rs['published_rate_perframe'])}, smoothed {_pct(rs['published_rate_ptz'])}.",
-        "",
         "| Output type | Frames | Above 10 px |",
         "|---|---|---|",
         *[f"| {n} | {v['frames']} | {_pct(v['fail_share'])} |" for n, v in rs["by_type"].items()],
@@ -677,7 +744,8 @@ def render_report(res: Mapping[str, Any], header: Sequence[str]) -> str:
     if kpi:
         md += [
             "",
-            "## KPI proxy (5 fps, against the smoothed labels, same player-frames)",
+            "## KPI proxy (5 fps, against the smoothed labels, same input player-frames; each camera's runs"
+            " break at its own errors above 10 m)",
             "",
             "| Camera | Runs | Distance bias | HSR-distance bias | Speed error RMS / p90 (m/s) |",
             "|---|---|---|---|---|",
