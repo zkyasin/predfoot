@@ -81,6 +81,10 @@ class RunConfig:
         }
 
 
+class ClipMismatch(ValueError):
+    """The stages cannot run on this clip, for example detections that name frames the clip does not have."""
+
+
 @dataclass(frozen=True)
 class Stages:
     """The pipeline's replaceable parts, typed by the shared contracts.
@@ -98,6 +102,9 @@ class Stages:
     description: Mapping[str, str] | None = None
     #: Provenance of the conformal model behind the regions, for meta.json; None without one.
     conformal: Mapping[str, Any] | None = None
+    #: Raises :class:`ClipMismatch` when the stages were not built for the clip; ``run_clip`` calls it before
+    #: computing anything. None: the stages run on any clip.
+    check_clip: Callable[[ClipInput], None] | None = None
 
 
 def stub_stages(config: RunConfig) -> Stages:
@@ -233,6 +240,8 @@ def run_clip(
     stages = stages or stub_stages(config)
     input_path, out_dir = Path(input_path), Path(out_dir)
     clip = load_clip(input_path)
+    if stages.check_clip is not None:
+        stages.check_clip(clip)
     input_sha = sha256_file(input_path)
     settings = config.output_settings() | {"stages": stages.version}
     config_hash = sha256_json(settings)

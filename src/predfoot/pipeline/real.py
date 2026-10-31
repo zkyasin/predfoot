@@ -8,6 +8,7 @@ region {e : eᵀ Σp⁻¹ e ≤ q̂}, and ``p90_radius_m`` = √(q̂ · λmax(Σ
 from __future__ import annotations
 
 import hashlib
+import logging
 import math
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -22,10 +23,12 @@ from predfoot.contracts import CalibResult, CalibStatus, FootObs, Localization
 from predfoot.geometry import homography as hg
 from predfoot.keypoints.cache import load_detections
 from predfoot.pipeline import stub
-from predfoot.pipeline.clip import ClipFrame
-from predfoot.pipeline.run import Stages
+from predfoot.pipeline.clip import ClipFrame, ClipInput
+from predfoot.pipeline.run import ClipMismatch, Stages
 from predfoot.uncertainty.conformal import MondrianConformal
 from predfoot.uncertainty.delta import CHI2_2_90, position_covariance
+
+log = logging.getLogger(__name__)
 
 
 def real_stages(
@@ -82,7 +85,31 @@ def real_stages(
         health=stub.health,
         description=_description(conformal),
         conformal=None if conformal is None else conformal_provenance(conformal),
+        check_clip=lambda clip: check_detection_frames(detections, clip),
     )
+
+
+def check_detection_frames(detections: Mapping[int, Any], clip: ClipInput) -> None:
+    """Detections are keyed by the 0-based index of the clip's frames (``frame`` in ``predfoot-clip/1``).
+
+    Raises :class:`ClipMismatch` when a key is beyond the clip's last frame, as with a file keyed by image
+    number (the detection cache numbers SN-GSR images from 1, one in five). Logs a warning when frame 0 has no
+    entry: a file keyed from 1 would give every frame the camera of the next one.
+    """
+    n = len(clip.frames)
+    beyond = sorted(f for f in detections if f >= n)
+    if beyond:
+        shown = ", ".join(map(str, beyond[:5])) + (", …" if len(beyond) > 5 else "")
+        raise ClipMismatch(
+            f"the detections name frames beyond the {n} frames of clip {clip.clip_id!r} ({shown}): they must "
+            "be keyed by the 0-based index of the clip's frames, not by image number"
+        )
+    if detections and 0 not in detections:
+        log.warning(
+            "the detections have no entry for frame 0 of clip %r: check that they are keyed by the 0-based "
+            "index of the clip's frames (a file keyed from 1 gives every frame the camera of the next one)",
+            clip.clip_id,
+        )
 
 
 def conformal_provenance(model: MondrianConformal) -> dict[str, Any]:

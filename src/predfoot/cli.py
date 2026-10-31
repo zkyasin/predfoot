@@ -44,8 +44,9 @@ def run(
             exists=True,
             dir_okay=False,
             readable=True,
-            help="Keypoint and line detections of the clip's frames (JSON, predfoot-detections/1): run the "
-            "real stages, which calibrate every frame from them (the clip's homographies are then ignored).",
+            help="Keypoint and line detections of the clip's frames (JSON, predfoot-detections/1), keyed by "
+            "the 0-based index of the clip's frames (not by image number): run the real stages, which "
+            "calibrate every frame from them (the clip's homographies are then ignored).",
         ),
     ] = None,
     conformal: Annotated[
@@ -69,7 +70,7 @@ def run(
     """
     from pydantic import ValidationError
 
-    from predfoot.pipeline.run import RunConfig, Stages, run_clip
+    from predfoot.pipeline.run import ClipMismatch, RunConfig, Stages, run_clip
 
     if fps <= 0:
         raise typer.BadParameter("must be positive", param_hint="--fps")
@@ -97,6 +98,8 @@ def run(
     except ValidationError as err:
         typer.echo(f"invalid clip file {clip}:\n{err}", err=True)
         raise typer.Exit(code=2) from err
+    except ClipMismatch as err:  # raised before anything is computed or written
+        raise typer.BadParameter(str(err), param_hint="--detections") from err
     typer.echo(
         f"{result.n_export} frames at {fps:g} fps from {result.n_native} native frames, "
         f"{result.n_abstained} abstained; blocks computed {result.blocks_computed}, "

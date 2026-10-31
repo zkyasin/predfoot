@@ -112,3 +112,22 @@ def test_a_bad_detections_file_is_a_usage_error(tmp_path):
     result = CliRunner(env=PLAIN_ENV).invoke(app, args)
     assert result.exit_code == 2
     assert "not a predfoot-detections/1 file" in plain(result)
+
+
+def test_detections_keyed_by_image_number_are_a_usage_error(tmp_path):
+    """Keys shifted by one, as image numbers are: refused before anything runs, not run with the cameras of
+    the neighbouring frames."""
+    dets = json.loads((GOLDEN / "detections.json").read_text(encoding="utf-8"))
+    for entry in dets["frames"]:
+        entry["frame"] += 1
+    shifted = tmp_path / "dets.json"
+    shifted.write_text(json.dumps(dets), encoding="utf-8")
+    out = tmp_path / "out"
+    args = ["run", str(GOLDEN / "clip.json"), "--out", str(out), "--detections", str(shifted)]
+    result = CliRunner(env=PLAIN_ENV).invoke(app, args)
+    assert result.exit_code == 2, result.output
+    text = plain(result)
+    assert "--detections" in text
+    assert "beyond the 20 frames of clip 'synthetic-golden-001' (20)" in text
+    assert "keyed by the 0-based index of the clip's frames" in text
+    assert not out.exists()
