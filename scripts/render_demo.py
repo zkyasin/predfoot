@@ -322,8 +322,11 @@ def main(
     missing = missing_inputs(match, weights, calibration)
     if missing:
         listing = "\n  ".join(map(str, missing))
-        hint = DOWNLOAD_HINT.format(match=match)
-        typer.echo(f"missing inputs, nothing was run:\n  {listing}\n{hint}", err=True)
+        hints = [DOWNLOAD_HINT.format(match=match)] if set(missing) - {calibration} else []
+        if calibration in missing:
+            hints.append("The default calibration file is in the repository; scripts/fit_demo_calibration.py "
+                         "rebuilds it from SN-GSR dev runs.")  # fmt: skip
+        typer.echo("\n".join([f"missing inputs, nothing was run:\n  {listing}", *hints]), err=True)
         raise typer.Exit(code=2)
     camera = "ptz" if smooth else "none"
     cal = dc.load(calibration).get(camera)
