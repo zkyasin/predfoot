@@ -103,6 +103,22 @@ def test_foot_pixel_noise_widens_the_regions():
     assert (noisy.radius > exact.radius).all()
 
 
+def test_one_threshold_per_foot_and_non_finite_ones_invalidate_their_row():
+    cam = broadcast_camera()
+    cov_theta = laplace_covariance(cam)
+    uv = hg.project(cam.H, PLAYERS)
+    q = np.array([CHI2_2_90, 11.3, np.inf, 20.0])
+    out = localize_feet(cam.H, cov_theta, uv, q=q)
+    np.testing.assert_array_equal(out.valid, [True, True, False, True])
+    np.testing.assert_array_equal(np.isnan(out.q), [False, False, True, False])
+    for i in (0, 1, 3):
+        alone = localize_feet(cam.H, cov_theta, uv[i : i + 1], q=q[i])
+        np.testing.assert_allclose(out.cov[i], alone.cov[0], rtol=1e-12)
+        assert out.radius[i] == pytest.approx(alone.radius[0], rel=1e-12)
+        assert out.q[i] == q[i]
+    assert np.isnan(out.xy[2]).all()  # a row is never half null
+
+
 def test_no_feet_no_positions():
     cam = broadcast_camera()
     out = localize_feet(cam.H, laplace_covariance(cam), np.zeros((0, 2)))

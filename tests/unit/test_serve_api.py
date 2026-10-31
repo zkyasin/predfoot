@@ -105,6 +105,18 @@ def test_feet_above_the_horizon_get_null_positions(client):
     assert all(p["x"] is not None for p in positions[:-1])
 
 
+def test_regions_that_overflow_give_null_rows(client):
+    body = localize_body(conformal_quantile=1e308)
+    body["feet"][0]["cov_uv"] = [[1e6, 0.0], [0.0, 1e6]]  # a 1000 px foot: its scaled covariance overflows
+    r = client.post("/v1/localize", json=body)
+    assert r.status_code == 200, r.text
+    positions = r.json()["positions"]
+    assert positions[0] == {"track_id": 0, "x": None, "y": None, "pos_cov_m2": None, "p90_radius_m": None}
+    for p in positions[1:]:  # the exact feet keep finite regions, however wide
+        assert np.isfinite(p["pos_cov_m2"]).all()
+        assert np.isfinite(p["p90_radius_m"])
+
+
 def _bad_bodies():
     h = CAM.H.copy()
     cov = laplace_covariance(CAM)
@@ -133,6 +145,7 @@ def _bad_bodies():
         "unknown field": localize_body(conformal_q=5.0),
         "zero quantile": localize_body(conformal_quantile=0.0),
         "negative dof": localize_body(dof=-3.0),
+        "dof below 1": localize_body(dof=0.5),  # 2·F⁻¹(0.90; 2, 0.001) is inf
         "too many feet": localize_body(feet=feet[:1] * (MAX_FEET + 1)),
         "no homography": {k: v for k, v in localize_body().items() if k != "homography"},
     }

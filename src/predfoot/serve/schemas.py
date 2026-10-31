@@ -18,6 +18,8 @@ H22_TOL = 1e-6
 MAX_CONDITION = 1e12
 
 PositiveFloat = Annotated[FiniteFloat, Field(gt=0)]
+#: Degrees of freedom of a noise scale: below 1, 2·F⁻¹(0.90; 2, dof) explodes (inf at dof = 0.001).
+Dof = Annotated[FiniteFloat, Field(ge=1)]
 Row2 = Annotated[list[FiniteFloat], Field(min_length=2, max_length=2)]
 Row3 = Annotated[list[FiniteFloat], Field(min_length=3, max_length=3)]
 Row8 = Annotated[list[FiniteFloat], Field(min_length=8, max_length=8)]
@@ -80,10 +82,11 @@ class LocalizeRequest(BaseModel):
     cov_theta: Matrix8 = Field(
         description="8 × 8 covariance of θ, the first 8 entries of H in row-major order."
     )
-    dof: PositiveFloat | None = Field(
+    dof: Dof | None = Field(
         default=None,
-        description="Degrees of freedom of the noise scale in cov_theta (the dof of /v1/calibrate). "
-        "Without a conformal quantile, the regions then use 2·F⁻¹(0.90; 2, dof) instead of χ²₂(0.90).",
+        description="Degrees of freedom (at least 1) of the noise scale in cov_theta (the dof of "
+        "/v1/calibrate). Without a conformal quantile, the regions then use 2·F⁻¹(0.90; 2, dof) instead of "
+        "χ²₂(0.90).",
     )
     feet: list[Foot] = Field(max_length=MAX_FEET)
     conformal_quantile: PositiveFloat | None = Field(
@@ -110,7 +113,8 @@ class LocalizeRequest(BaseModel):
 
 
 class Position(BaseModel):
-    """Pitch position of one foot point with its calibrated uncertainty; all null above the horizon."""
+    """Pitch position of one foot point with its calibrated uncertainty; all null above the horizon or when
+    the region is not finite."""
 
     track_id: int
     x: float | None = Field(description="Metres, internal pitch frame.")
