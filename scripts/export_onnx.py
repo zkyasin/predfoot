@@ -48,7 +48,7 @@ def git_commit() -> str:
         return subprocess.run(["git", *args], cwd=REPO_ROOT, capture_output=True, text=True).stdout.strip()
 
     sha = git("rev-parse", "--short", "HEAD") or "unknown"
-    return f"{sha}+dirty" if git("status", "--porcelain", "--untracked-files=no") else sha
+    return f"{sha}+dirty" if git("status", "--porcelain") else sha
 
 
 @app.command()
