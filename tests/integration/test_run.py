@@ -15,6 +15,7 @@ from predfoot.io.skillcorner import read_tracking
 from predfoot.io.validate import validate_tracking
 from predfoot.pipeline.run import PARTS_DIR, RunConfig, run_clip
 from predfoot.pipeline.synthetic import SPECTATOR_TRACK_ID, make_broadcast_clip
+from tests.cli_output import PLAIN_ENV, plain
 from tests.fixtures import FIXTURES
 
 CLIP = FIXTURES / "synthetic_clip.json"
@@ -181,15 +182,15 @@ def test_cli_run_then_validate(tmp_path):
 def test_cli_run_reports_invalid_clips(tmp_path):
     bad = tmp_path / "bad.json"
     bad.write_text(json.dumps({"format": "predfoot-clip/1", "clip_id": "x"}))
-    result = CliRunner().invoke(app, ["run", str(bad), "--out", str(tmp_path / "out")])
+    result = CliRunner(env=PLAIN_ENV).invoke(app, ["run", str(bad), "--out", str(tmp_path / "out")])
     assert result.exit_code == 2
-    assert "invalid clip file" in result.output
+    assert "invalid clip file" in plain(result)
 
 
 def test_cli_run_rejects_a_non_positive_rate(tmp_path):
-    result = CliRunner().invoke(app, ["run", str(CLIP), "--out", str(tmp_path), "--fps", "0"])
+    result = CliRunner(env=PLAIN_ENV).invoke(app, ["run", str(CLIP), "--out", str(tmp_path), "--fps", "0"])
     assert result.exit_code != 0
-    assert "--fps" in result.output
+    assert "--fps" in plain(result)
 
 
 def test_blocks_from_other_stages_are_never_reused(tmp_path, monkeypatch):
