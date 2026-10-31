@@ -25,18 +25,15 @@ import numpy as np
 import typer
 from scipy.stats import spearmanr
 
-from predfoot.calib.lines import intersection_correspondences, line_oracle, line_reprojection_px
-from predfoot.calib.solver import LineObservation, SolverConfig, calibrate
+from predfoot.calib.lines import line_oracle, line_reprojection_px
+from predfoot.calib.observations import observations_from_detections
+from predfoot.calib.solver import SolverConfig, calibrate
 from predfoot.geometry import homography as hg
-from predfoot.geometry.pitch import pnlcalib_keypoints, pnlcalib_lines
 from predfoot.io.conventions import sn_normalised_to_pixels, sn_to_internal_xy
 from predfoot.keypoints.cache import cached_detections
 from predfoot.uncertainty.delta import position_covariance
 
 app = typer.Typer(add_completion=False)
-KP = pnlcalib_keypoints()
-LINE_NAMES = {k: s.name for k, s in pnlcalib_lines().items()}
-LINE_WEIGHT = 0.5  # an intersection of two detected lines counts as half a keypoint
 ORACLE_MAX_PX = 3.0  # the line oracle is a reference only where it fits its own lines within 3 px
 
 
@@ -79,28 +76,6 @@ def load_labels(path: Path) -> tuple[dict, dict[int, FrameLabels]]:
             arr[:, :2], sn_to_internal_xy(arr[:, 2:4]), sn_to_internal_xy(arr[:, 4:6]), lines.get(frame, {})
         )
     return raw["info"], frames
-
-
-def correspondences(
-    det: dict, use_lines: bool
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[LineObservation]]:
-    """Planar keypoints; with ``use_lines``, also line intersections (as points) and line ends (on lines)."""
-    planar = np.array([KP[int(k)][2] for k in det["kp_ids"]], dtype=bool)
-    xy = np.array([KP[int(k)][:2] for k in det["kp_ids"]]).reshape(-1, 2)[planar]
-    uv, w = det["kp_uv"][planar], det["kp_conf"][planar]
-    observations: list[LineObservation] = []
-    if use_lines and len(det["line_ids"]):
-        segs = pnlcalib_lines()
-        lines = {LINE_NAMES[int(k)]: det["line_uv"][i] for i, k in enumerate(det["line_ids"])}
-        lxy, luv = intersection_correspondences(lines)
-        if len(lxy):
-            xy, uv = np.vstack([xy, lxy]), np.vstack([uv, luv])
-            w = np.concatenate([w, np.full(len(lxy), LINE_WEIGHT)])
-        for i, k in enumerate(det["line_ids"]):
-            seg = segs[int(k)]
-            if seg.planar:
-                observations.append(LineObservation(seg.a[:2], seg.b[:2], det["line_uv"][i], LINE_WEIGHT))
-    return xy, uv, w, observations
 
 
 def git_sha() -> str:
@@ -154,7 +129,7 @@ def main(
             if h_oracle is not None and len(lab.feet):
                 refs["line oracle"] = hg.backproject(h_oracle, lab.feet)[0]
             for name, use_lines in variants.items():
-                xy, uv, w, obs = correspondences(det, use_lines)
+                xy, uv, w, obs = observations_from_detections(det, use_lines)
                 rng = np.random.default_rng(int(frame) * 7919 + sum(map(ord, info["name"])))
                 result, _ = calibrate(xy, uv, rng, weights=w, config=cfg, lines=obs)
                 rec[f"{name} ok"] = result.ok
