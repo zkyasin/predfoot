@@ -6,18 +6,25 @@ leave-one-game-out (LOGO) conformal regions at the nominal levels 50, 80, 90 and
 ``eval_dev.logo``, and reads the model-free KPI proxy from reports/error_process_temporal_dev.json. Writes
 to reports/figures/:
 
-- ``reliability.png``: held-out coverage of the Mondrian ellipses against the nominal level, both cameras,
-  against the SN-GSR raw labels and against the trusted line oracle;
+- ``reliability.png``: held-out coverage of the Mondrian ellipses minus the nominal level, both cameras,
+  with player-frames pooled and with every clip weighted equally, against the SN-GSR raw labels and against
+  the trusted line oracle (there the regions are calibrated on oracle errors);
 - ``area.png``: median area of the Mondrian ellipses and of the constant circle at each level;
 - ``coverage_by_distance.png``: coverage at 90 % by tercile of metres per pixel at the feet;
 - ``kpi_proxy.png``: distance and high-speed-running distance biases of the KPI proxy against the smoothed
   labels: per-frame camera, smoothed camera, and the raw labels' own bias (the noise floor of the reference).
 
 Each held-out game's quantiles come from the five other games, at every level; intervals resample clips.
+Coverage is reported two ways: pooled over the held-out player-frames (eval_dev.py's headline) and with
+every clip weighted equally (the mean of the clips' own coverages), which is how the grouped conformal
+quantile weighs its calibration clips. The two differ when a clip's coverage depends on its number of
+player-frames, as it does against the line oracle; the report breaks coverage down by clip size.
+
 The PTZ table keeps each clip smoothed with the label-free noise parameters of its own held-out fold only.
 eval_dev.py fits game g's quantiles on the other games re-smoothed with fold g's parameters, which the table
 does not keep, so here they are fitted on the other games' rows as saved: per-game numbers of the smoothed
-camera can differ slightly from reports/m2_temporal_dev.md (the per-frame camera's are reproduced exactly).
+camera can differ slightly from reports/m2_temporal_dev.md. The per-frame camera's 90 % fits, intervals
+included, reproduce reports/m2_logo_dev.md: they draw from one generator, labels first, as eval_dev.py does.
 
 Usage:
     uv run python scripts/make_figures.py --none-run runs/<per-frame run> --ptz-run runs/<ptz run>
@@ -93,7 +100,10 @@ class Level:
     cov_const_ci: tuple[float, float]
     area_mond: float  # median over held-out player-frames, m²
     area_const: float
+    cov_clip: float = float("nan")  # every held-out clip weighted equally
+    cov_clip_ci: tuple[float, float] = (float("nan"), float("nan"))
     terciles: list[dict[str, Any]] = field(default_factory=list)  # at TERCILE_ALPHA only
+    size_terciles: list[dict[str, Any]] = field(default_factory=list)  # at TERCILE_ALPHA only
 
     @property
     def nominal(self) -> float:
@@ -129,6 +139,38 @@ def tercile_rows(held: pl.DataFrame, rng: np.random.Generator, n_boot: int) -> l
     return out
 
 
+def _per_clip(held: pl.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    """Each held-out clip's coverage by the Mondrian ellipses and its number of player-frames."""
+    per_clip = held.group_by("clip").agg(pl.col("hit_mond").mean().alias("cov"), pl.len().alias("n"))
+    per_clip = per_clip.sort("clip")
+    return per_clip["cov"].to_numpy(), per_clip["n"].to_numpy()
+
+
+def clip_weighted(
+    held: pl.DataFrame, rng: np.random.Generator, n_boot: int
+) -> tuple[float, tuple[float, float]]:
+    """Coverage with every held-out clip weighted equally (the mean of the clips' own coverages), as the
+    grouped quantile weighs its calibration clips, with a 95 % interval resampling clips."""
+    cov, _ = _per_clip(held)
+    boot = [cov[rng.integers(0, len(cov), len(cov))].mean() for _ in range(n_boot)]
+    lo, hi = np.quantile(boot, [0.025, 0.975])
+    return float(cov.mean()), (float(lo), float(hi))
+
+
+def size_tercile_rows(held: pl.DataFrame) -> list[dict[str, Any]]:
+    """Mean coverage of the held-out clips in each tercile of their number of player-frames (NaN for an empty
+    tercile, when many clips have the same size)."""
+    cov, n = _per_clip(held)
+    edges = np.quantile(n, [1 / 3, 2 / 3])
+    bins = np.searchsorted(edges, n)
+    out = []
+    for b in range(3):
+        sel = bins == b
+        mean = float(cov[sel].mean()) if sel.any() else float("nan")
+        out.append({"bin": b, "clips": int(sel.sum()), "edges": edges.tolist(), "cov": mean})
+    return out
+
+
 def levels(
     head: pl.DataFrame,
     filled: pl.DataFrame,
@@ -137,13 +179,20 @@ def levels(
     n_boot: int = 300,
     seed: int = 0,
 ) -> list[Level]:
-    """LOGO fits of ``eval_dev.logo`` at each level and reference, each from a generator seeded with ``seed``
-    (at α = 0.1 against the labels this is the headline call of eval_dev.py, intervals included)."""
+    """LOGO fits of ``eval_dev.logo`` at each level and reference.
+
+    The fits at eval_dev.py's level (α = 0.1) share one generator seeded with ``seed``, labels first, then
+    the oracle: eval_dev.py's own sequence, so their intervals are its intervals. Every other fit gets a fresh
+    generator with the same seed, and the extra intervals (clip-weighted, distance terciles) their own.
+    """
     out = []
+    headline = np.random.default_rng(seed)
     for ref in REFS:
         for alpha in alphas:
-            rng = np.random.default_rng(seed)
+            rng = headline if alpha == eval_dev.ALPHA else np.random.default_rng(seed)
             _, s, held, _ = eval_dev.logo(head, ref, rng, n_boot=n_boot, extra=filled, alpha=alpha)
+            extra_rng = np.random.default_rng(seed + 1)
+            cov_clip, cov_clip_ci = clip_weighted(held, extra_rng, n_boot)
             level = Level(
                 camera=camera,
                 ref=ref,
@@ -156,9 +205,12 @@ def levels(
                 cov_const_ci=s["cov_const_ci"],
                 area_mond=s["a_mond"],
                 area_const=s["a_const"],
+                cov_clip=cov_clip,
+                cov_clip_ci=cov_clip_ci,
             )
             if alpha == TERCILE_ALPHA:
-                level.terciles = tercile_rows(held, rng, n_boot)
+                level.terciles = tercile_rows(held, extra_rng, n_boot)
+                level.size_terciles = size_tercile_rows(held)
             out.append(level)
     return out
 
@@ -219,41 +271,71 @@ def _pct_err(values: list[float], cis: list[tuple[float, float]]) -> np.ndarray:
 
 
 def plot_reliability(rows: list[Level], path: Path) -> None:
-    fig, axes = _figure(7.4, 3.4, ncols=2)
+    """Coverage minus the nominal level against the nominal level: a horizontal zero line is the target, so
+    offsetting the series sideways does not bias how far each sits from it."""
+    fig, axes = _figure(7.4, 3.7, ncols=2)
+    offsets = {
+        ("none", "pooled"): -0.21,
+        ("none", "clip"): -0.07,
+        ("ptz", "pooled"): 0.07,
+        ("ptz", "clip"): 0.21,
+    }
+    nominal_levels = sorted(1 - a for a in ALPHAS)
     for ax, ref in zip(axes, REFS, strict=True):
-        ax.plot([45, 100], [45, 100], color=GREY, lw=1.0, ls="--", zorder=1)
-        for k, camera in enumerate(CAMERAS):
+        ax.axhline(0, color=GREY, lw=1.0, zorder=1)
+        for camera in CAMERAS:
             rs = _series(rows, camera, ref)
             if not rs:
                 continue
-            x = np.array([100 * r.nominal for r in rs]) + (k - 0.5) * 1.4
-            y = [r.cov_mond for r in rs]
-            ax.errorbar(
-                x,
-                100 * np.array(y),
-                yerr=_pct_err(y, [r.cov_mond_ci for r in rs]),
-                fmt="o-",
-                color=COLOURS[camera],
-                ms=5,
-                lw=1.5,
-                elinewidth=1.2,
-                capsize=0,
-                mec=SURFACE,
-                mew=1.0,
-                zorder=3,
-            )
-        ax.set(xlim=(45, 100), ylim=(45, 100), xticks=[50, 80, 90, 95], yticks=[50, 60, 70, 80, 90, 100])
+            x = np.array([nominal_levels.index(r.nominal) for r in rs], dtype=float)
+            nominal = np.array([r.nominal for r in rs])
+            for weight in ("pooled", "clip"):
+                pooled = weight == "pooled"
+                y = [r.cov_mond if pooled else r.cov_clip for r in rs]
+                ax.errorbar(
+                    x + offsets[(camera, weight)],
+                    100 * (np.array(y) - nominal),
+                    yerr=_pct_err(y, [r.cov_mond_ci if pooled else r.cov_clip_ci for r in rs]),
+                    fmt="o-" if pooled else "o--",
+                    color=COLOURS[camera],
+                    mfc=COLOURS[camera] if pooled else SURFACE,
+                    ms=5,
+                    lw=1.2,
+                    elinewidth=1.1,
+                    capsize=0,
+                    mew=1.2,
+                    zorder=3,
+                )
+        ax.set_xticks(range(len(nominal_levels)), [f"{100 * v:.0f} %" for v in nominal_levels])
+        title = "SN-GSR raw labels" if ref == "lab" else "line oracle, regions calibrated on it"
         _labels(
             ax,
-            f"Reference: {REFS[ref]}",
-            "nominal level (%)",
-            "held-out coverage (%)" if ref == "lab" else None,
+            f"Reference: {title}",
+            "nominal level",
+            "held-out coverage minus nominal (points)" if ref == "lab" else None,
         )
-    handles = [
-        Line2D([], [], color=COLOURS[c], marker="o", lw=1.5, mec=SURFACE, label=CAMERAS[c]) for c in CAMERAS
-    ]
-    handles.append(Line2D([], [], color=GREY, lw=1.0, ls="--", label="coverage = nominal level"))
-    axes[0].legend(handles=handles, loc="upper left", fontsize=8, frameon=False, handlelength=3.2)
+    low = min(ax.get_ylim()[0] for ax in axes)
+    high = max(ax.get_ylim()[1] for ax in axes)
+    for ax in axes:
+        ax.set_ylim(low, high)
+    handles = []
+    for c in CAMERAS:
+        handles.append(
+            Line2D([], [], color=COLOURS[c], marker="o", lw=1.2, label=f"{CAMERAS[c]}, player-frames pooled")
+        )
+        handles.append(
+            Line2D(
+                [],
+                [],
+                color=COLOURS[c],
+                marker="o",
+                lw=1.2,
+                ls="--",
+                mfc=SURFACE,
+                label=f"{CAMERAS[c]}, clips weighted equally",
+            )
+        )
+    fig.legend(handles=handles, loc="outside lower center", ncols=2, fontsize=7.5, frameon=False)
     fig.suptitle(
         "Mondrian ellipses, leave one game out (SN-GSR dev, 6 games); bars: 95 % CI over clips",
         fontsize=9,
@@ -425,7 +507,13 @@ def report(
         " boxes), not the preregistered test (`docs/preregistration.md`). For every level, each held-out"
         " game's conformal quantiles are fitted on the five other games (`eval_dev.logo`: Mondrian bins over"
         " metres per pixel at the feet × RANSAC inliers, within each covariance source); intervals resample"
-        f" clips ({n_boot} draws).",
+        f" clips ({n_boot} draws). Each reference calibrates its own regions: the line-oracle rows are"
+        " regions fitted on oracle errors, not the label-calibrated regions that `predfoot run` ships"
+        " (`scripts/fit_conformal.py`).",
+        "",
+        "Coverage is given pooled over the held-out player-frames, as in eval_dev.py, and with every clip"
+        " weighted equally (the mean of the clips' own coverages), as the grouped quantile weighs its"
+        " calibration clips.",
         "",
         "## Coverage and median region area at each nominal level",
         "",
@@ -433,18 +521,38 @@ def report(
         "",
         "![Region area](figures/area.png)",
         "",
-        "| Reference | Camera | Nominal | Player-frames | Mondrian ellipses [95 % CI] | Median area (m²) |"
-        " Constant circle [95 % CI] | Area (m²) |",
-        "|---|---|---|---|---|---|---|---|",
+        "| Reference | Camera | Nominal | Player-frames | Mondrian ellipses [95 % CI] | Clips weighted"
+        " equally [95 % CI] | Median area (m²) | Constant circle [95 % CI] | Area (m²) |",
+        "|---|---|---|---|---|---|---|---|---|",
     ]
     for ref in REFS:
         for camera in CAMERAS:
             for r in _series(rows, camera, ref):
                 md.append(
                     f"| {REFS[ref]} | {CAMERAS[camera]} | {r.nominal:.0%} | {r.n} | {_pct(r.cov_mond)}"
-                    f" {_ci(r.cov_mond_ci)} | {r.area_mond:.2f} | {_pct(r.cov_const)} {_ci(r.cov_const_ci)} |"
-                    f" {r.area_const:.2f} |"
+                    f" {_ci(r.cov_mond_ci)} | {_pct(r.cov_clip)} {_ci(r.cov_clip_ci)} | {r.area_mond:.2f} |"
+                    f" {_pct(r.cov_const)} {_ci(r.cov_const_ci)} | {r.area_const:.2f} |"
                 )
+    md += [
+        "",
+        f"## Coverage by clip size at {1 - TERCILE_ALPHA:.0%}",
+        "",
+        "Mean coverage of the held-out clips in each tercile of their number of held-out player-frames. Where"
+        " it rises with clip size, pooling player-frames weighs the better-covered clips more and lifts"
+        " coverage above the clip-weighted figure. Against the line oracle a clip's player-frames are its"
+        " trusted ones, frames whose annotated lines fit a homography within 3 px.",
+        "",
+        "| Reference | Camera | Clip size (player-frames) | Clips | Mean clip coverage |",
+        "|---|---|---|---|---|",
+    ]
+    for ref in REFS:
+        for camera in CAMERAS:
+            for r in _series(rows, camera, ref):
+                for t in r.size_terciles:
+                    e1, e2 = t["edges"]
+                    span = (f"≤ {e1:.0f}", f"{e1:.0f}-{e2:.0f}", f"> {e2:.0f}")[t["bin"]]
+                    cov = _pct(t["cov"]) if t["clips"] else "–"
+                    md.append(f"| {REFS[ref]} | {CAMERAS[camera]} | {span} | {t['clips']} | {cov} |")
     md += [
         "",
         f"## Coverage by distance at {1 - TERCILE_ALPHA:.0%}",
@@ -489,12 +597,16 @@ def report(
         "Notes. Frames are one in five and correlated within a clip: the effective sample is closer to the"
         " 115 clips than to the player-frames. Filled frames (raw calibration failed, camera from the"
         " smoother) calibrate their own source but are not in these coverages, as in eval_dev.py. The"
-        " grouped correction targets the level (1 − α)(1 + 1/G) for G calibration clips (about 96 per fold,"
-        " fewer per Mondrian bin), so coverage slightly above nominal is expected: 96.0 % at the 95 % level"
-        " for G = 96. The PTZ table keeps each clip smoothed with the label-free noise parameters of its own"
-        " held-out fold; eval_dev.py fits game g's quantiles on the other games re-smoothed with fold g's"
-        " parameters (not saved), so here they are fitted on the other games' saved rows, and the smoothed"
-        " camera's numbers can differ slightly from `reports/m2_temporal_dev.md`.",
+        " grouped quantile weighs every calibration clip equally at the level (1 − α)(1 + 1/G) for G"
+        " calibration clips (about 96 per fold, fewer in some Mondrian bins): with similar clips, a clip's"
+        " coverage lands about (1 − α)/G above nominal, 90.9 % at the 90 % level and 96.0 % at the 95 % level"
+        " for G = 96, a little more in bins with fewer clips; the constant circle, one quantile over all"
+        " calibration clips, shows it. The correction cannot explain more: where the pooled coverage exceeds"
+        " the clip-weighted one, the weighting does (clip-size table). The PTZ table keeps each clip"
+        " smoothed with the label-free noise parameters of its own held-out fold; eval_dev.py fits game g's"
+        " quantiles on the other games re-smoothed with fold g's parameters (not saved), so here they are"
+        " fitted on the other games' saved rows, and the smoothed camera's numbers can differ slightly from"
+        " `reports/m2_temporal_dev.md`.",
     ]
     return "\n".join(md) + "\n"
 

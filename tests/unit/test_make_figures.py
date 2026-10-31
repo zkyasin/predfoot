@@ -85,14 +85,44 @@ def test_levels_cover_about_the_nominal_level_and_reproduce_the_default_fit(tmp_
         assert [t["bin"] for t in at90.terciles] == [0, 1, 2]
         assert sum(t["n"] for t in at90.terciles) == at90.n
         assert all(not r.terciles for r in series if r.alpha != figures.TERCILE_ALPHA)
+        assert [t["bin"] for t in at90.size_terciles] == [0, 1, 2]
+        assert sum(t["clips"] for t in at90.size_terciles) == at90.clips
+        for r in series:
+            assert r.cov_clip_ci[0] <= r.cov_clip <= r.cov_clip_ci[1]
+    # eval_dev.py's own sequence at 90 %: one generator, the labels' fit first, then the oracle's.
     eval_dev = figures.eval_dev
-    _, summary, _, _ = eval_dev.logo(head, "lab", np.random.default_rng(0), n_boot=20, extra=filled)
-    lab90 = next(r for r in rows if r.ref == "lab" and r.alpha == 0.1)
-    assert (lab90.cov_mond, lab90.cov_mond_ci, lab90.area_mond) == (
-        summary["cov_mond"],
-        summary["cov_mond_ci"],
-        summary["a_mond"],
+    rng = np.random.default_rng(0)
+    for ref in ("lab", "or"):
+        _, summary, held, _ = eval_dev.logo(head, ref, rng, n_boot=20, extra=filled)
+        at90 = next(r for r in rows if r.ref == ref and r.alpha == 0.1)
+        assert (at90.cov_mond, at90.cov_mond_ci, at90.area_mond) == (
+            summary["cov_mond"],
+            summary["cov_mond_ci"],
+            summary["a_mond"],
+        )
+        per_clip = held.group_by("clip").agg(pl.col("hit_mond").mean())["hit_mond"]
+        assert at90.cov_clip == pytest.approx(per_clip.mean())
+
+
+def test_clip_weighted_coverage_weighs_every_clip_once(rng):
+    # A large clip fully covered and three small ones half covered: pooling the player-frames favours the
+    # large clip; weighting clips equally does not.
+    sizes, covered = [400, 20, 20, 20], [1.0, 0.5, 0.5, 0.5]
+    held = pl.DataFrame(
+        {
+            "clip": np.repeat([f"c{k}" for k in range(4)], sizes),
+            "hit_mond": np.concatenate([np.arange(n) < c * n for n, c in zip(sizes, covered, strict=True)]),
+        }
     )
+    assert held["hit_mond"].mean() == pytest.approx(430 / 460)
+    cov, (lo, hi) = figures.clip_weighted(held, rng, n_boot=200)
+    assert cov == pytest.approx(0.625)
+    assert 0.5 <= lo <= cov <= hi <= 1.0
+    terciles = figures.size_tercile_rows(held)
+    assert [t["clips"] for t in terciles] == [3, 0, 1]  # three clips of 20 at or below both edges
+    assert terciles[0]["cov"] == pytest.approx(0.5)
+    assert np.isnan(terciles[1]["cov"])
+    assert terciles[2]["cov"] == pytest.approx(1.0)
 
 
 def test_load_run_refuses_rows_of_another_fold(tmp_path, rng):
@@ -134,6 +164,10 @@ def test_main_writes_four_small_figures_and_the_report(tmp_path, rng):
     assert "runs/a_none" in text
     assert "runs/b_ptz" in text
     assert str(tmp_path) not in text  # run folders are named, local paths are not
-    assert text.count("| SN-GSR raw labels | per-frame camera | ") == 4 + 3  # four levels, three terciles
+    # four levels, three distance terciles, three clip-size terciles
+    assert text.count("| SN-GSR raw labels | per-frame camera | ") == 4 + 3 + 3
+    assert "Clips weighted equally [95 % CI]" in text
+    assert "## Coverage by clip size at 90%" in text
+    assert "regions fitted on oracle errors" in text
     assert "| raw labels (noise floor) | +18.0% | +43.0% |" in text
     assert "| PTZ-smoothed camera | +3.0% | +6.0% |" in text
