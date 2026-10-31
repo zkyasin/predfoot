@@ -19,9 +19,10 @@ Camera (``--smooth``):
   smoothed with every fold's parameters, fold g's quantiles are fitted on the other games' rows of fold g and
   game g is only scored. ``--fit-scope all`` fits one label-free set on all games (exchangeability check).
 Frames whose raw calibration failed but which the smoother fills are kept out of the headline coverage and
-reported separately. With smoothing, the covariances of smoothed, PTZ-projected and passed-through frames
-come from different models, so Mondrian bins are formed within each source. Calibrations are saved to
-``runs/<run>/calib.npz``; ``--calib-from`` reuses them, so variants differ only by the camera.
+reported separately. With smoothing, the covariances of smoothed frames, of frames bridged across a gap and of
+single frames come from different models, so conformal quantiles are fitted within each source
+(:func:`cov_sources`). Calibrations are saved to ``runs/<run>/calib.npz``; ``--calib-from`` reuses them, so
+variants differ only by the camera.
 
 Usage:
     uv run python scripts/eval_dev.py                  # full per-frame run, writes reports/m2_logo_dev.md
@@ -72,8 +73,19 @@ ALPHA = 0.1
 NATIVE_FPS = 25.0
 IMAGE_SIZE = (1920, 1080)
 FAIL_LINE_PX = 10.0
-FLAGS = ("smoothed", "repaired", "filled", "projected", "passthrough", "duplicate", "rejected")
+STEP_MAX_ERROR_M = 10.0  # as scripts/error_process.py: larger errors are calibration failures (abstention)
+FLAGS = (
+    "smoothed", "repaired", "filled", "bridged", "projected", "passthrough", "duplicate", "rejected",
+    "unchecked",
+)  # fmt: skip
 DEFAULT_REPORT = Path("reports/m2_logo_dev.md")
+#: Mondrian bins of a covariance source; the sources in POOLED_SOURCES (few rows) get one pooled quantile.
+MONDRIAN_BINS = {"mpp": 3, "n_inliers": 2}
+POOLED_SOURCES = frozenset({"gap"})
+#: Fewest calibration clips G for which the clip-level conformal level (1 − α)(1 + 1/G) is below 1 (10 at
+#: α = 0.1). A source with fewer calibration clips gets the model fitted on all sources: its own quantile
+#: would be its largest score.
+MIN_SOURCE_CLIPS = next(g for g in range(1, 10_000) if (1 - ALPHA) * (1 + 1 / g) < 1)
 
 
 class Smooth(StrEnum):
@@ -200,11 +212,17 @@ def _flag_arrays(flags: tm.FrameFlags | None, n: int) -> dict[str, np.ndarray]:
 
 
 def cov_sources(flags: tm.FrameFlags | None, n: int) -> np.ndarray:
-    """Model behind each output covariance: "smoother" (smoothed, repaired, filled: pooled over a segment),
-    "projected" (one frame on the PTZ manifold) or "frame" (per-frame calibration, raw or passed through).
+    """Model behind each output covariance, so that each gets its own conformal quantiles:
 
-    Their scales differ by an order of magnitude, so each gets its own Mondrian bins. A duplicate takes the
-    source of the frame it copies.
+    - "smoother": smoothed and repaired frames, the RTS state pooled over a segment;
+    - "gap": filled and bridged frames, the state across a gap without a measurement, whose steps carry the
+      gap factor λ: relative to its error, that covariance is about two orders of magnitude wider than a
+      smoothed frame's;
+    - "frame": one frame's own calibration, passed through or per-frame, or projected on the PTZ manifold in
+      the projection ablation (κ² Σθ and A κ² Σφ Aᵀ, Σφ being Σθ projected on the manifold: the same
+      single-frame information and scale).
+
+    A duplicate takes the source of the frame it copies.
     """
     out = np.full(n, "frame", dtype=object)
     if flags is None:
@@ -212,10 +230,10 @@ def cov_sources(flags: tm.FrameFlags | None, n: int) -> np.ndarray:
     for k in range(n):
         if k and flags.duplicate[k]:
             out[k] = out[k - 1]
-        elif flags.smoothed[k] or flags.repaired[k] or flags.filled[k]:
+        elif flags.smoothed[k] or flags.repaired[k]:
             out[k] = "smoother"
-        elif flags.projected[k]:
-            out[k] = "projected"
+        elif flags.filled[k] or flags.bridged[k]:
+            out[k] = "gap"
     return out
 
 
@@ -521,8 +539,9 @@ def logo(
     with quantiles fitted on the other games), including coverage by distance tercile, the held-out rows with
     their hits, and ``extra`` rows (e.g. filled frames) scored with the same fold models. With ``fold_col``,
     fold g calibrates on rows (fold == g) & (game != g) and tests on rows (fold == g) & (game == g).
-    Mondrian bins are formed within each covariance source (column ``cov_source``, see :func:`cov_sources`);
-    the pooled quantile and the constant circle ignore it.
+    Mondrian models are fitted within each covariance source (column ``cov_source``, see :func:`cov_sources`
+    and :func:`_mondrian_by_source`); the ``extra`` rows of the other games calibrate their own source and
+    nothing else. The pooled quantile, the constant circle and the fallback model use the ``df`` rows only.
     """
     d = df.filter(pl.col(f"ex_{ref}").is_not_nan())
     s = _scores(d, ref)
@@ -538,18 +557,30 @@ def logo(
     xs = _scores(x, ref) if x is not None and x.height else None
     x_mond = np.zeros(x.height if x is not None else 0, bool)
     x_const, x_held, x_area = x_mond.copy(), x_mond.copy(), np.zeros(len(x_mond))
+    x_folds = x[fold_col].to_numpy() if fold_col and x is not None else None
+    # Calibration pool of the per-source models: the df rows, then the extra rows (base marks the df rows).
+    pool = {"score": score, "groups": groups, "source": source, "games": games, **feats}
+    if xs is not None:
+        pool = {k: np.concatenate([v, xs[k]]) for k, v in pool.items()}
+    base = np.arange(len(pool["score"])) < len(score)
+    pool_folds = None if folds is None else np.concatenate([folds, x_folds]) if x_folds is not None else folds
+    pool_feats = {k: pool[k] for k in feats}
     rows = []
     for g in np.unique(games):
         if folds is None:
             cal, tst = games != g, games == g
+            cal_pool = pool["games"] != g
         else:
             cal, tst = (folds == g) & (games != g), (folds == g) & (games == g)
+            cal_pool = (pool_folds == g) & (pool["games"] != g)
         if not cal.any() or not tst.any():
             warnings.warn(f"fold {g}: empty calibration or test set, skipped", stacklevel=2)
             continue
         held |= tst
         q_pool = grouped_quantile(score[cal], groups[cal], ALPHA)
-        models = _mondrian_by_source(score, groups, feats, source, cal)
+        models = _mondrian_by_source(
+            pool["score"], pool["groups"], pool_feats, pool["source"], cal_pool, base
+        )
         q_mond = np.full(len(d), np.nan)
         for src in np.unique(source[tst]):
             sel = tst & (source == src)
@@ -563,13 +594,16 @@ def logo(
         area_mond[tst] = np.pi * q_mond * np.sqrt(np.clip(np.linalg.det(cov[tst]), 0, None))
         r_const_all[tst] = r_const
         if xs is not None:
-            xt = (xs["games"] == g) & ((x[fold_col].to_numpy() == g) if fold_col and x is not None else True)
+            xt = (xs["games"] == g) & ((x_folds == g) if x_folds is not None else True)
             if xt.any():
-                # extra rows are filled frames: their covariance comes from the smoother
-                model = models.get("smoother", models[None])
-                qx = model.quantile_for({"mpp": xs["mpp"][xt], "n_inliers": xs["n_inliers"][xt]})
-                x_mond[xt], x_const[xt], x_held[xt] = xs["score"][xt] <= qx, xs["norm"][xt] <= r_const, True
-                x_area[xt] = np.pi * qx * np.sqrt(np.clip(np.linalg.det(xs["cov"][xt]), 0, None))
+                qx = np.full(len(xt), np.nan)
+                for src in np.unique(xs["source"][xt]):
+                    sel = xt & (xs["source"] == src)
+                    model = models.get(str(src), models[None])
+                    qx[sel] = model.quantile_for({k: xs[k][sel] for k in feats})
+                x_mond[xt], x_const[xt] = xs["score"][xt] <= qx[xt], xs["norm"][xt] <= r_const
+                x_held[xt] = True
+                x_area[xt] = np.pi * qx[xt] * np.sqrt(np.clip(np.linalg.det(xs["cov"][xt]), 0, None))
         rows.append(
             {
                 "game": int(g),
@@ -623,26 +657,33 @@ def _mondrian_by_source(
     feats: dict[str, np.ndarray],
     source: np.ndarray,
     cal: np.ndarray,
+    base: np.ndarray | None = None,
 ) -> dict[str | None, MondrianConformal]:
-    """Mondrian models fitted on the calibration rows of each covariance source, plus one on all of them
-    (key None) for a source that has no calibration rows. With a single source the two are the same fit."""
+    """Mondrian models fitted on the calibration rows of each covariance source, plus one on the calibration
+    rows of ``base`` (default: all rows; key None) for a source without a model of its own.
 
-    def fit(sel: np.ndarray) -> MondrianConformal:
+    A source gets its own model when its calibration rows come from at least ``MIN_SOURCE_CLIPS`` clips: with
+    fewer, the clip-level level (1 − α)(1 + 1/G) reaches 1 and the quantile would be the source's largest
+    score (the PTZ-projected source of the first full run had 5-9 calibration clips per fold, hence regions
+    of 60,000 m²). Sources in ``POOLED_SOURCES`` get one pooled quantile instead of bins. With a single source
+    and no ``base`` restriction the two models are the same fit.
+    """
+    keep = np.ones(len(score), dtype=bool) if base is None else np.asarray(base, dtype=bool)
+
+    def fit(sel: np.ndarray, bins: dict[str, int]) -> MondrianConformal:
         return MondrianConformal.fit(
-            score[sel],
-            groups[sel],
-            {k: v[sel] for k, v in feats.items()},
-            {"mpp": 3, "n_inliers": 2},
-            alpha=ALPHA,
+            score[sel], groups[sel], {k: v[sel] for k, v in feats.items()}, bins, alpha=ALPHA
         )
 
     present = np.unique(source[cal])
-    if len(present) == 1:
-        model = fit(cal)
+    if len(present) == 1 and keep[cal].all():
+        model = fit(cal, MONDRIAN_BINS)
         return {None: model, str(present[0]): model}
-    models: dict[str | None, MondrianConformal] = {None: fit(cal)}
+    models: dict[str | None, MondrianConformal] = {None: fit(cal & keep, MONDRIAN_BINS)}
     for src in present:
-        models[str(src)] = fit(cal & (source == src))
+        sel = cal & (source == src)
+        if len(np.unique(groups[sel])) >= MIN_SOURCE_CLIPS:
+            models[str(src)] = fit(sel, {} if src in POOLED_SOURCES else MONDRIAN_BINS)
     return models
 
 
@@ -660,23 +701,39 @@ def _err(d: pl.DataFrame, ref: str) -> np.ndarray:
     return np.hypot(d[f"ex_{ref}"].to_numpy(), d[f"ey_{ref}"].to_numpy())
 
 
-def common_steps(d: pl.DataFrame, ref: str = "sm") -> tuple[float, int]:
-    """Sum of squared lag-1 steps of the per-frame median error over consecutive cached frames, and count."""
-    total, count = 0.0, 0
+def common_steps(d: pl.DataFrame, ref: str = "sm", max_error_m: float | None = None) -> np.ndarray:
+    """Lag-1 steps (n, 2) of the per-frame median error over consecutive cached frames, pooled over clips.
+
+    With ``max_error_m``, player-frames whose error is at least that large are left out first, as in
+    scripts/error_process.py.
+    """
+    if max_error_m is not None:
+        d = d.filter((pl.col(f"ex_{ref}") ** 2 + pl.col(f"ey_{ref}") ** 2) < max_error_m**2)
+    parts = [np.zeros((0, 2))]
     for (_clip,), g in d.partition_by("clip", as_dict=True).items():
         c = g.group_by("frame").agg(pl.col(f"ex_{ref}").median(), pl.col(f"ey_{ref}").median()).sort("frame")
         f = c["frame"].to_numpy()
         e = c.select(f"ex_{ref}", f"ey_{ref}").to_numpy()
         step = np.diff(e, axis=0)[np.diff(f) == 5]
-        step = step[np.isfinite(step).all(axis=1)]
-        total += float(np.sum(step**2))
-        count += step.size
-    return total, count
+        parts.append(step[np.isfinite(step).all(axis=1)])
+    return np.concatenate(parts)
 
 
-def step_rms(d: pl.DataFrame, ref: str = "sm") -> float:
-    total, count = common_steps(d, ref)
-    return float(np.sqrt(total / count)) if count else float("nan")
+def step_rms(d: pl.DataFrame, ref: str = "sm", max_error_m: float | None = None) -> float:
+    """RMS per axis of the common-mode steps (see :func:`common_steps`)."""
+    s = common_steps(d, ref, max_error_m)
+    return float(np.sqrt(np.mean(s**2))) if s.size else float("nan")
+
+
+def step_median(d: pl.DataFrame, ref: str = "sm") -> float:
+    """Median absolute common-mode step per axis: a few huge steps (one failed frame) do not move it."""
+    s = common_steps(d, ref)
+    return float(np.median(np.abs(s))) if s.size else float("nan")
+
+
+def step_stats(d: pl.DataFrame, ref: str = "sm") -> tuple[float, float, float]:
+    """Common-mode step RMS, RMS without errors of ``STEP_MAX_ERROR_M`` or more, and median absolute step."""
+    return step_rms(d, ref), step_rms(d, ref, STEP_MAX_ERROR_M), step_median(d, ref)
 
 
 def temporal_section(
@@ -708,29 +765,32 @@ def temporal_section(
             "Noise parameters (fitted without labels; fold g excludes game g):",
             "",
             "| Fold | Training clips | κ² | √q pan (°/s^1.5) | √q tilt (°/s^1.5) | √q log f (1/s^1.5) |"
-            " NLL per term | NIS mean (truncated) / median | Evaluations |",
-            "|---|---|---|---|---|---|---|---|---|",
+            " Gap factor λ (innovations after a gap, their median NIS) | NLL per term |"
+            " NIS mean (truncated) / median | Evaluations |",
+            "|---|---|---|---|---|---|---|---|---|---|",
         ]
         for fold, f in info.fits.items():
             p = f["params"]
             sq_pan, sq_tilt = np.degrees(np.sqrt(p["q_pan"])), np.degrees(np.sqrt(p["q_tilt"]))
             nis = f"{f.get('mean_nis_truncated', np.nan):.2f} / {f.get('median_nis', np.nan):.2f}"
             evals = f"{f['nfev']}" + ("" if f["converged"] else " (not converged)")
+            held = "" if f.get("gap_fitted") else ", held"
+            gap = (
+                f"{p['gap']:.2f} ({f.get('gap_terms', 0)}, {f.get('median_nis_after_gap', np.nan):.2f}{held})"
+            )
             md.append(
                 f"| {fold} | {f['training_clips']} | {p['kappa2']:.2f} | {sq_pan:.2f} | {sq_tilt:.3f} |"
-                f" {np.sqrt(p['q_logf']):.3f} | {f['nll'] / max(f['n_terms'], 1):.2f} | {nis} | {evals} |"
+                f" {np.sqrt(p['q_logf']):.3f} | {gap} | {f['nll'] / max(f['n_terms'], 1):.2f} | {nis} |"
+                f" {evals} |"
             )
         if len(info.fits) > 1:
-            logs = np.log(
-                [
-                    [f["params"][k] for k in ("kappa2", "q_pan", "q_tilt", "q_logf")]
-                    for f in info.fits.values()
-                ]
-            )
+            names = ("kappa2", "q_pan", "q_tilt", "q_logf", "gap")
+            logs = np.log([[f["params"][k] for k in names] for f in info.fits.values()])
             spread = np.exp(np.abs(logs - np.median(logs, axis=0)).max(axis=0))
             md += [
                 "",
-                "Largest ratio of a fold's parameter to the median over folds (κ², q pan, q tilt, q log f): "
+                "Largest ratio of a fold's parameter to the median over folds"
+                " (κ², q pan, q tilt, q log f, λ): "
                 + ", ".join(f"×{v:.2f}" for v in spread)
                 + " (target: within ×1.5).",
             ]
@@ -812,28 +872,40 @@ def temporal_section(
         " the common-mode error (per-frame median over players) against the smoothed labels:",
         "",
         "| Camera | Labels p50 | p90 | p99 | Line oracle p50 | p90 | p99 | Smoothed labels p50 | p90 | p99 |"
-        " Common-mode step RMS (m) |",
-        "|---|---|---|---|---|---|---|---|---|---|---|",
+        f" Common-mode step RMS (m) | RMS, errors < {STEP_MAX_ERROR_M:g} m | Median abs. step (m) |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     raw_view = joined.select(*keys, *[pl.col(f"{c}_raw").alias(c) for c in err_cols])
-    s_raw, s_out = step_rms(raw_view), step_rms(joined)
-    for name, view in (("per-frame", raw_view), (f"{smooth}", joined)):
+    s_raw, s_out = step_stats(raw_view), step_stats(joined)
+    for name, view, st in (("per-frame", raw_view, s_raw), (f"{smooth}", joined, s_out)):
         md.append(
             f"| {name} | {q3(_err(view, 'lab'))} | {q3(_err(view, 'or'))} | {q3(_err(view, 'sm'))} |"
-            f" {step_rms(view):.3f} |"
+            f" {st[0]:.3f} | {st[1]:.3f} | {st[2]:.3f} |"
         )
     ratios = []
     for (clip,), g in joined.partition_by("clip", as_dict=True).items():
-        rv = raw_view.filter(pl.col("clip") == clip)
-        ratios.append((clip, step_rms(rv), step_rms(g)))
+        a, b = step_stats(raw_view.filter(pl.col("clip") == clip)), step_stats(g)
+        ratios.append((clip, a, b))
+    per_clip = np.array([[b[i] / a[i] for i in range(3)] for _, a, b in ratios])
     md += [
         "",
-        f"Common-mode step RMS ratio {smooth} / per-frame: pooled {s_out / s_raw:.2f}; per clip median"
-        f" {np.median([b / a for _, a, b in ratios]):.2f}, worst {max(b / a for _, a, b in ratios):.2f}.",
+        f"Common-mode step ratio {smooth} / per-frame, pooled over clips: RMS {s_out[0] / s_raw[0]:.2f},"
+        f" RMS without errors of {STEP_MAX_ERROR_M:g} m or more {s_out[1] / s_raw[1]:.2f}, median absolute"
+        f" step {s_out[2] / s_raw[2]:.2f}; RMS ratio per clip: median {np.nanmedian(per_clip[:, 0]):.2f},"
+        f" worst {np.nanmax(per_clip[:, 0]):.2f}. One failed frame makes steps of tens of metres that"
+        " dominate the plain RMS: read the robust ratios.",
     ]
     if len(ratios) <= 10:
-        md += ["", "| Clip | Step RMS per-frame (m) | Step RMS output (m) | Ratio |", "|---|---|---|---|"]
-        md += [f"| {c} | {a:.3f} | {b:.3f} | {b / a:.2f} |" for c, a, b in sorted(ratios)]
+        md += [
+            "",
+            "| Clip | Step RMS per-frame (m) | Step RMS output (m) | Ratio |"
+            f" Ratio, errors < {STEP_MAX_ERROR_M:g} m | Median-step ratio |",
+            "|---|---|---|---|---|---|",
+        ]
+        md += [
+            f"| {c} | {a[0]:.3f} | {b[0]:.3f} | {b[0] / a[0]:.2f} | {b[1] / a[1]:.2f} | {b[2] / a[2]:.2f} |"
+            for c, a, b in sorted(ratios)
+        ]
     # filled frames
     filled = players.filter(pl.col("filled"))
     md += [
@@ -848,16 +920,31 @@ def temporal_section(
         for ref, (_, _, extra) in logo_extra.items():
             if extra is not None and extra.height:
                 md[-1] += (
-                    f" Coverage ({ref}, same fold models): Mondrian {extra['hit_mond'].mean():.1%},"
+                    f" Coverage ({ref}, gap source): Mondrian {extra['hit_mond'].mean():.1%},"
                     f" constant circle {extra['hit_const'].mean():.1%} (n = {extra.height})."
                 )
     else:
         md[-1] += "."
-    # coverage per output type (Mondrian bins are formed within each covariance source)
+    bridged = joined.filter(pl.col("bridged"))
     md += [
         "",
-        "Coverage per output type (Mondrian bins within each covariance source: smoother, PTZ projection,"
-        " per-frame), Mondrian ellipses / constant circle, and median Mondrian area:",
+        f"Bridged frames (run of off-model frames of at most {cfg.max_misfit_run_s:g} s inside a segment, raw"
+        f" camera replaced by the smoothed state): {bridged.height} player-frames",
+    ]
+    if bridged.height:
+        raw_bridged = bridged.select(*keys, *[pl.col(f"{c}_raw").alias(c) for c in err_cols])
+        md[-1] += (
+            f" on {bridged.select('clip', 'frame').n_unique()} frames; error p50 | p90 | p99 against labels"
+            f" {q3(_err(raw_bridged, 'lab'))} m per-frame, {q3(_err(bridged, 'lab'))} m output."
+        )
+    else:
+        md[-1] += "."
+    # coverage per output type (quantiles are fitted within each covariance source)
+    md += [
+        "",
+        "Coverage per output type (quantiles fitted within each covariance source: smoother for smoothed and"
+        " repaired frames, gap for filled and bridged frames, single frame for the others), Mondrian ellipses"
+        " / constant circle, and median Mondrian area:",
         "",
         "| Reference | Type | Player-frames | Mondrian | Constant circle | Median area (m²) |",
         "|---|---|---|---|---|---|",
@@ -1154,9 +1241,15 @@ def main(
         "",
         "Notes. Exploratory dev numbers, not the preregistered test. Frames are subsampled at 5 fps and",
         "remain correlated within a clip, hence clip-level bootstrap intervals. Mondrian bins: metres per",
-        "pixel at the feet (3 bins) × number of RANSAC inliers (2 bins), formed within each covariance",
-        "source when the camera is smoothed (smoother, PTZ projection, per-frame); small bins use the",
-        "pooled quantile of their source.",
+        "pixel at the feet (3 bins) × number of RANSAC inliers (2 bins); small bins use the pooled",
+        "quantile"
+        + (
+            " of their source. With smoothing, quantiles are fitted within each covariance source"
+            " (smoother; gap, one pooled quantile; single frame); a source with fewer than"
+            f" {MIN_SOURCE_CLIPS} calibration clips uses the model fitted on all sources."
+            if smooth is not Smooth.none
+            else "."
+        ),
     ]
     if smooth is not Smooth.none:
         raw_players = pl.concat(

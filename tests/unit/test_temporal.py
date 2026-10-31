@@ -1,4 +1,5 @@
 import time
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -49,6 +50,11 @@ def h_true(phi):
 
 def norms(e):
     return np.linalg.norm(e, axis=2)
+
+
+def flag_count(flags):
+    """Number of flags each frame carries (a raw-OK frame carries exactly one)."""
+    return np.sum([v for k, v in flags.as_dict().items() if k != "segment"], axis=0)
 
 
 def steady_pan_path(n=150):
@@ -176,7 +182,8 @@ def test_game_centre_and_fallback_order():
 def dense_gls(dt, has, z, r, params, cfg, accepted=None):
     """Posterior of the whole trajectory by one dense least-squares solve (independent of the filter).
 
-    λ applies next to frames without an accepted measurement (``accepted`` defaults to ``has``).
+    λ = ``params.gap`` applies next to frames without an accepted measurement (``accepted`` defaults to
+    ``has``).
     """
     acc = has if accepted is None else accepted
     n, dim = len(dt), 8
@@ -195,7 +202,7 @@ def dense_gls(dt, has, z, r, params, cfg, accepted=None):
     p0[:4, :4], p0[4:, 4:] = r[0], np.diag(np.square(cfg.v0))
     add(rows, np.concatenate([z[0], np.zeros(4)]), p0)
     for k in range(1, n):
-        lam = 1.0 if (acc[k] and acc[k - 1]) else cfg.gap_noise_factor
+        lam = 1.0 if (acc[k] and acc[k - 1]) else params.gap
         f = np.block([[np.eye(4), dt[k] * np.eye(4)], [np.zeros((4, 4)), np.eye(4)]])
         q = lam * np.diag(qc)
         qq = np.block([[dt[k] ** 3 / 3 * q, dt[k] ** 2 / 2 * q], [dt[k] ** 2 / 2 * q, dt[k] * q]])
@@ -214,17 +221,28 @@ def dense_gls(dt, has, z, r, params, cfg, accepted=None):
 
 def test_filter_and_smoother_equal_the_dense_gls_solution(rng):
     meas = toy_clip(rng, 30, missing=(9, 17))
-    params = tm.NoiseParams(kappa2=1.0, q_pan=0.7, q_tilt=0.3, q_logf=1.2)
+    params = tm.NoiseParams(kappa2=1.0, q_pan=0.7, q_tilt=0.3, q_logf=1.2, gap=7.0)
     cfg = tm.SmootherConfig(q_roll=0.5, v0=(1.0, 0.8, 0.6, 1.2))
     mask = meas.accepted.copy()
     batch = tm.stack_clips([meas], [mask], [np.zeros(30, np.int64)], cfg)
-    np.testing.assert_array_equal(np.flatnonzero(batch.lam[0] == cfg.gap_noise_factor), [9, 10, 17, 18])
+    np.testing.assert_array_equal(np.flatnonzero(batch.gap[0]), [9, 10, 17, 18])
+    assert not batch.loose.any()
     fwd = tm.forward(batch, params, cfg, store=True)
     ms, ps = tm.rts(fwd, batch)
     r = tm.measurement_cov(meas, params, cfg)
     mean, cov = dense_gls(batch.dt[0], mask, np.nan_to_num(meas.z), r, params, cfg)
     np.testing.assert_allclose(ms[0], mean, rtol=1e-8, atol=1e-8 * np.abs(mean).max())
     np.testing.assert_allclose(ps[0], cov, rtol=1e-8, atol=1e-8 * np.abs(cov).max())
+
+
+def test_step_factors_separate_gaps_from_manoeuvres():
+    """Gap steps take the fitted λ, manoeuvre steps the fixed manoeuvre factor, the larger when both."""
+    params = tm.NoiseParams(gap=1.7)
+    gap = np.array([False, True, False, True])
+    loose = np.array([False, False, True, True])
+    np.testing.assert_array_equal(tm.step_factors(gap, loose, params, CFG), [1.0, 1.7, 20.0, 20.0])
+    big = tm.NoiseParams(gap=40.0)
+    np.testing.assert_array_equal(tm.step_factors(gap, loose, big, CFG), [1.0, 40.0, 20.0, 40.0])
 
 
 def test_batched_nll_is_the_sum_of_the_clips(rng):
@@ -255,7 +273,7 @@ def test_a_deleted_measurement_keeps_the_process_noise(rng):
     deleted = used.copy()
     deleted[20] = False
     batch = tm.stack_clips([meas], [deleted], [seg], cfg)
-    np.testing.assert_array_equal(np.flatnonzero(batch.lam[0] == cfg.gap_noise_factor), [9, 10])
+    np.testing.assert_array_equal(np.flatnonzero(batch.gap[0]), [9, 10])
     fwd = tm.forward(batch, params, cfg, store=True)
     ms, ps = tm.rts(fwd, batch)
     r = tm.measurement_cov(meas, params, cfg)
@@ -467,9 +485,7 @@ def test_an_outlier_at_a_segment_edge_is_never_published_raw(rng):
     track = tm.smooth_clip(meas, PARAMS, CFG)
     res, flags = tm.to_calib_results(calibs, meas, track, PARAMS, CFG)
     raw_ok = np.array([c.ok for c in calibs])
-    one_flag = np.sum([getattr(flags, f) for f in ("smoothed", "repaired", "filled", "projected",
-                                                   "passthrough", "duplicate", "rejected")], 0)  # fmt: skip
-    np.testing.assert_array_equal(one_flag[raw_ok], 1)
+    np.testing.assert_array_equal(flag_count(flags)[raw_ok], 1)
     assert not flags.passthrough[edges].any()
     assert track.rejected[edges].all()
     for k in edges:
@@ -477,6 +493,92 @@ def test_an_outlier_at_a_segment_edge_is_never_published_raw(rng):
         if flags.rejected[k]:
             assert res[k].status is CalibStatus.UNHEALTHY
             assert res[k].H is None
+
+
+def test_a_lone_frame_after_a_long_failure_gap_abstains(rng):
+    """After 2.2 s of failed calibrations, the first frames back are 30° off in pan (consistent with the PTZ
+    model, so accepted) and the next ones are right: the persistent-jump rule leaves the wrong frames in a
+    segment of their own, too short for any innovation to test them. They abstain (flag unchecked) instead of
+    being published as their PTZ projection; the frames around them are smoothed."""
+    _, phi = steady_pan_path()
+    n = len(phi)
+    failed = range(40, 51)
+    for wrong in ([51], [51, 52]):
+        obs = phi.copy()
+        obs[wrong, 0] += np.radians(30.0)
+        calibs = gaussian_calibs(obs, CENTRE, np.random.default_rng(int(rng.integers(2**31))), failed=failed)
+        meas = measure(calibs)
+        assert meas.accepted[wrong].all()
+        track = tm.smooth_clip(meas, PARAMS, CFG)
+        res, flags = tm.to_calib_results(calibs, meas, track, PARAMS, CFG)
+        after = wrong[-1] + 1
+        assert track.short[wrong].all()
+        assert len({track.segment[39], track.segment[wrong[0]], track.segment[after]}) == 3
+        assert flags.unchecked.tolist() == [k in wrong for k in range(n)]
+        for k in wrong:
+            assert res[k].status is CalibStatus.UNHEALTHY
+            assert res[k].H is None
+        assert flags.smoothed[[39, after]].all()
+        assert not any(res[k].ok for k in failed)
+        raw_ok = np.array([c.ok for c in calibs])
+        np.testing.assert_array_equal(flag_count(flags)[raw_ok], 1)
+
+
+def test_a_short_misfit_run_inside_a_segment_gets_the_smoothed_state(rng):
+    """Frames of another camera (calibrated, but off the clip's PTZ model): one frame (30) and two (100-101)
+    strictly inside a segment are calibration failures and get the smoothed state, close to the truth; three
+    (120-122, 0.6 s) may be a cut-away and pass through, as do misfits at the clip edges (0 and n - 1), which
+    no smoothed state brackets."""
+    _, phi = ptz_path()
+    n = len(phi)
+    bridged, kept = [30, 100, 101], [0, 120, 121, 122, n - 1]
+    calibs = gaussian_calibs(phi, CENTRE, rng, other_camera=(bridged + kept, C2))
+    assert all(calibs[k].ok for k in bridged + kept)
+    meas = measure(calibs)
+    assert meas.misfit[bridged + kept].all()
+    track = tm.smooth_clip(meas, PARAMS, CFG)
+    res, flags = tm.to_calib_results(calibs, meas, track, PARAMS, CFG)
+    assert flags.bridged.tolist() == [k in bridged for k in range(n)]
+    assert flags.passthrough[kept].all()
+    np.testing.assert_array_equal(flag_count(flags), 1)
+    for k, used_before in zip(bridged, (29, 99, 99), strict=True):
+        np.testing.assert_allclose(res[k].H, ptz.homography(track.mean[k, :4], CENTRE))
+        assert res[k].n_inliers == calibs[k].n_inliers
+        assert track.used[used_before]
+        assert np.trace(track.cov[k, :4, :4]) > np.trace(track.cov[used_before, :4, :4])  # no measurement
+    e_out = norms(probe_errors([r.H for r in res], h_true(phi)))
+    e_raw = norms(probe_errors([c.H for c in calibs], h_true(phi)))
+    assert np.nanmax(e_out[bridged]) < 0.5
+    assert np.nanmedian(e_raw[bridged]) > 5.0
+    for k in kept:
+        np.testing.assert_array_equal(res[k].H, calibs[k].H)
+
+
+def test_the_misfit_run_limit_is_a_duration(rng):
+    """``max_misfit_run_s`` = 0.5 s from the run's first frame to the frame after its last: at 5 fps (one
+    native frame in five) runs of up to two frames are bridged, at 25 fps runs of up to twelve. A run that
+    touches the edge of its segment, or lies in a short segment, is never bridged."""
+    n = 60
+    for step, longest in ((5, 2), (1, 12)):
+        frames = step * np.arange(n)
+        meas = toy_clip(rng, n)
+        fits, too_long = list(range(10, 10 + longest)), list(range(30, 31 + longest))
+        misfit = np.zeros(n, bool)
+        misfit[fits + too_long] = True
+        meas = tm.ClipMeasurements(
+            **{**meas.__dict__, "frames": frames, "times": frames / CFG.fps, "misfit": misfit,
+               "accepted": meas.accepted & ~misfit}
+        )  # fmt: skip
+        track = replace(
+            tm.empty_track(meas, PARAMS, CFG), segment=np.zeros(n, np.int64), mean=np.zeros((n, 8))
+        )
+        assert tm.bridged_frames(meas, track, CFG).tolist() == [k in fits for k in range(n)]
+        edge = track.segment.copy()
+        edge[: fits[0]] = -1  # the run now starts its segment
+        assert not tm.bridged_frames(meas, replace(track, segment=edge), CFG).any()
+        short = np.zeros(n, bool)
+        short[fits] = True
+        assert not tm.bridged_frames(meas, replace(track, short=short), CFG)[fits].any()
 
 
 def test_a_nominal_one_second_gap_is_bridged_wherever_it_falls(rng):
@@ -512,7 +614,8 @@ def test_all_frames_failed():
     assert (track.segment == -1).all()
 
 
-def test_one_accepted_frame_is_projected():
+def test_one_accepted_frame_abstains():
+    """A lone measurement is its own short segment: nothing tests its camera, so it is not published."""
     meas0 = toy_clip(np.random.default_rng(1), 5, missing=(0, 1, 3, 4))
     phi = np.array([0.1, np.radians(17), 0.005, np.log(2500)])
     z = meas0.z.copy()
@@ -526,8 +629,12 @@ def test_one_accepted_frame_is_projected():
     raw = [CalibResult(CalibStatus.FEW_POINTS) for _ in range(5)]
     raw[2] = CalibResult(CalibStatus.OK, H=ptz.homography(phi, CENTRE), cov_theta=np.eye(8), n_inliers=9)
     res, flags = tm.to_calib_results(raw, meas, track, PARAMS, CFG)
-    assert flags.projected.tolist() == [False, False, True, False, False]
-    assert [r.ok for r in res] == [False, False, True, False, False]
+    assert flags.unchecked.tolist() == [False, False, True, False, False]
+    assert not flags.projected.any()
+    assert not any(r.ok for r in res)
+    assert res[2].status is CalibStatus.UNHEALTHY
+    assert res[2].H is None
+    assert res[2].n_inliers == 9
 
 
 def test_duplicates_are_copied_not_measured(rng):
@@ -625,11 +732,7 @@ def test_outputs_honour_the_calibration_contract(rng):
     track = tm.smooth_clip(meas, PARAMS, CFG)
     res, flags = tm.to_calib_results(calibs, meas, track, PARAMS, CFG)
     raw_ok = np.array([c.ok for c in calibs])
-    one_flag = np.sum(
-        [flags.smoothed, flags.repaired, flags.projected, flags.passthrough, flags.duplicate, flags.rejected],
-        0,
-    )
-    np.testing.assert_array_equal(one_flag[raw_ok], 1)
+    np.testing.assert_array_equal(flag_count(flags)[raw_ok], 1)
     stages = real_stages({}, None, "t")
     feet = [FootObs(track_id=i, uv=uv) for i, uv in enumerate(GRID_FEET)]
     for r in res:
@@ -663,16 +766,26 @@ def test_projection_only_ablation(rng):
 # --- statistics of the noise fit ----------------------------------------------------------------------
 
 
-def cv_clips(rng, n_clips, n, params, cfg):
-    """Clips whose φ is a constant-velocity process with the given noise, measured with R = κ² Σ."""
+def cv_clips(rng, n_clips, n, params, cfg, n_failed=0):
+    """Clips whose φ is a constant-velocity process with the given noise, measured with R = κ² Σ.
+
+    With ``n_failed``, that many single frames per clip (never adjacent) have no measurement, and the process
+    noise of the steps into and out of them is multiplied by ``params.gap``.
+    """
     sigma = np.diag(np.square([1.5e-3, 6e-4, 3e-4, 1.5e-3]))
     q = (params.q_pan, params.q_tilt, cfg.q_roll, params.q_logf)
     clips, truths = [], []
     root = np.linalg.cholesky(params.kappa2 * sigma)
     for c in range(n_clips):
-        phi = cv_process(rng, n, 0.2, q)
-        z = phi + rng.standard_normal((n, 4)) @ root.T
         ok = np.ones(n, bool)
+        factors = None
+        if n_failed:
+            failed = rng.choice(np.arange(5, n - 5, 3), size=n_failed, replace=False)
+            ok[failed] = False
+            factors = np.where(ok & np.roll(ok, 1), 1.0, params.gap)
+        phi = cv_process(rng, n, 0.2, q, factors=factors)
+        z = phi + rng.standard_normal((n, 4)) @ root.T
+        z[~ok] = np.nan
         no = np.zeros(n, bool)
         clips.append(
             tm.ClipMeasurements(
@@ -685,11 +798,29 @@ def cv_clips(rng, n_clips, n, params, cfg):
 
 
 def test_noise_fit_recovers_the_true_parameters(rng):
+    """Without failed frames no innovation follows a gap: λ is not identifiable and keeps its value."""
     true = tm.NoiseParams(kappa2=1.8, q_pan=2e-3, q_tilt=2e-4, q_logf=4e-3)
     clips, _ = cv_clips(rng, 20, 150, true, CFG)
     fitted, diag = tm.fit_noise(clips, CFG)
     assert diag["converged"]
+    assert diag["gap_terms"] == 0
+    assert not diag["gap_fitted"]
+    assert fitted.gap == true.gap
     np.testing.assert_allclose(fitted.log_vector(), true.log_vector(), atol=np.log(1.25))
+
+
+def test_noise_fit_recovers_the_gap_factor(rng):
+    """Eight single failed frames per clip with the process noise × 6 on the steps next to them: the
+    innovations after the gaps recover λ (the first version fixed it at 20), and the other parameters stay
+    close to the truth."""
+    true = tm.NoiseParams(kappa2=1.8, q_pan=2e-3, q_tilt=2e-4, q_logf=4e-3, gap=6.0)
+    clips, _ = cv_clips(rng, 20, 150, true, CFG, n_failed=8)
+    assert not clips[0].accepted.all()
+    fitted, diag = tm.fit_noise(clips, CFG)
+    assert diag["converged"]
+    assert diag["gap_fitted"]
+    assert diag["gap_terms"] >= 140
+    np.testing.assert_allclose(fitted.log_vector(), true.log_vector(), atol=np.log(1.3))
 
 
 def test_truncated_likelihood_is_unbounded_below(rng):

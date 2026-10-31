@@ -103,13 +103,63 @@ def test_mondrian_bins_are_formed_within_each_covariance_source(rng):
 
 
 def test_cov_sources_follow_the_flags_and_duplicates():
-    flags = tm.FrameFlags.empty(6)
+    flags = tm.FrameFlags.empty(8)
     flags.smoothed[0] = flags.duplicate[1] = flags.projected[2] = flags.duplicate[3] = True
-    flags.passthrough[4] = flags.repaired[5] = True
-    assert eval_dev.cov_sources(flags, 6).tolist() == [
-        "smoother", "smoother", "projected", "projected", "frame", "smoother",
+    flags.passthrough[4] = flags.repaired[5] = flags.filled[6] = flags.duplicate[7] = True
+    assert eval_dev.cov_sources(flags, 8).tolist() == [
+        "smoother", "smoother", "frame", "frame", "frame", "smoother", "gap", "gap",
     ]  # fmt: skip
     assert eval_dev.cov_sources(None, 2).tolist() == ["frame", "frame"]
+
+
+def test_a_source_with_too_few_clips_uses_the_model_of_all_sources(rng):
+    """A source seen in three clips (one per game) has at most two calibration clips per fold: at the clip
+    level its conformal quantile would be its largest score (here 10⁸, one wild row), so it takes the model
+    fitted on all sources instead."""
+    alpha, g_min = eval_dev.ALPHA, eval_dev.MIN_SOURCE_CLIPS
+    assert (1 - alpha) * (1 + 1 / g_min) < 1 <= (1 - alpha) * (1 + 1 / (g_min - 1))
+    df = players(rng, n_per_clip=100)
+    odd = pl.col("clip").is_in(["g1-c0", "g2-c0", "g3-c0"])
+    df = df.with_columns(
+        pl.when(odd).then(pl.lit("odd")).otherwise(pl.col("cov_source")).alias("cov_source"),
+        pl.when(odd & (pl.col("frame") == 0)).then(1e4).otherwise(pl.col("ex_lab")).alias("ex_lab"),
+    )
+    _, summary, held, _ = eval_dev.logo(df, "lab", rng, n_boot=10)
+    odd_rows = held.filter(pl.col("cov_source") == "odd")
+    assert odd_rows.height == 300
+    assert odd_rows["area_mond"].max() < 100  # about π · χ²₂(0.9); its own quantile would give 3 · 10⁸
+    assert summary["cov_mond"] >= 0.88
+
+
+def test_filled_rows_calibrate_their_own_pooled_gap_quantile(rng, monkeypatch):
+    """Filled frames (source "gap") have covariances about a hundred times wider than smoothed ones relative
+    to their errors. Calibrated on the filled rows of the other games with one pooled quantile, they cover at
+    the nominal level; scored with the smoother's quantile they covered 100 % with regions a hundred times too
+    large. The held-out game's filled rows are never used to calibrate."""
+    head = players(rng, scale={"smoother": 10.0, "frame": 10.0}, folds=True)
+    filled = players(rng, n_per_clip=20, clips_per_game=10, folds=True).with_columns(
+        pl.lit("gap").alias("cov_source")
+    )  # 30 calibration clips per fold: level (1 − α)(1 + 1/30) = 0.93
+    calls = []
+    real_fit = eval_dev.MondrianConformal.fit
+
+    def spy(scores, groups, features, n_bins, *args, **kwargs):
+        calls.append((np.unique(groups), dict(n_bins)))
+        return real_fit(scores, groups, features, n_bins, *args, **kwargs)
+
+    monkeypatch.setattr(eval_dev.MondrianConformal, "fit", staticmethod(spy))
+    _, summary, held, extra = eval_dev.logo(head, "lab", rng, n_boot=10, fold_col="fold", extra=filled)
+    assert extra is not None
+    assert extra.height == filled.filter(pl.col("fold") == pl.col("game")).height
+    assert 0.87 <= extra["hit_mond"].mean() <= 0.97
+    assert extra["area_mond"].median() < 0.05 * held["area_mond"].median()
+    assert summary["cov_mond"] >= 0.88  # 12 calibration clips per fold: conservative level 0.975
+    assert len(calls) == 4 * 4  # per fold: all sources, then frame, gap and smoother
+    bins = eval_dev.MONDRIAN_BINS
+    for g, fold_calls in zip((1, 2, 3, 4), (calls[i : i + 4] for i in range(0, 16, 4)), strict=True):
+        assert [b for _, b in fold_calls] == [bins, bins, {}, bins]  # the gap source gets one pooled quantile
+        for groups, _ in fold_calls:
+            assert not any(str(c).startswith(f"g{g}-") for c in groups)
 
 
 def test_saved_calibrations_round_trip_exactly(tmp_path, rng):
@@ -184,3 +234,29 @@ def test_compare_labels_are_distinct(tmp_path):
     runs = [tmp_path / "run_a" / "players.parquet", tmp_path / "run_b" / "players.parquet"]
     assert error_process.camera_labels(runs) == ["run_a", "run_b"]
     assert error_process.camera_labels([tmp_path / "players.parquet"])[0]
+
+
+def test_robust_common_mode_steps_ignore_one_failed_frame():
+    """Common-mode errors alternating by ±0.1 m on both axes (every step 0.2 m) and one frame 50 m off: the
+    two steps around it dominate the pooled RMS, while the RMS without errors of 10 m or more and the median
+    absolute step stay at 0.2 m. Steps across a missing cached frame are not steps."""
+    n = 40
+    sign = (-1.0) ** np.arange(n)
+    ex, ey = 0.1 * sign, 0.1 * sign
+    ex[20] = 50.0
+    d = pl.DataFrame(
+        {
+            "clip": "c",
+            "frame": np.repeat(5 * np.arange(n), 3),
+            "track_id": np.tile([1, 2, 3], n),
+            "ex_sm": np.repeat(ex, 3),
+            "ey_sm": np.repeat(ey, 3),
+        }
+    )
+    assert eval_dev.common_steps(d).shape == (n - 1, 2)
+    assert eval_dev.common_steps(d, max_error_m=10.0).shape == (n - 3, 2)
+    rms, rms_robust, median = eval_dev.step_stats(d)
+    assert rms == pytest.approx(np.sqrt((37 * 2 * 0.04 + 2 * (50.1**2 + 0.04)) / 78), rel=1e-9)
+    assert rms > 30 * rms_robust  # 8.0 m against 0.2 m
+    assert rms_robust == pytest.approx(0.2, rel=1e-9)
+    assert median == pytest.approx(0.2, rel=1e-9)

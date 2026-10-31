@@ -13,14 +13,16 @@ Per clip, without labels:
    it does not explain the clip (:func:`measure_at_centre`).
 2. :func:`measure_clip`: each OK homography is projected onto the PTZ manifold at C with the shape of its
    Laplace covariance (:func:`project_to_ptz`). Frames the model cannot explain (another camera, a wrong
-   RANSAC basin) are flagged ``misfit`` and pass through unchanged.
+   RANSAC basin) are flagged ``misfit``: a brief run of them inside a segment is a calibration failure and
+   gets the smoothed state (:func:`bridged_frames`), a longer one may be another camera and passes through.
 3. :func:`smooth_clip`: constant-velocity Kalman filter and RTS smoother on φ inside shot segments
    (:func:`segments`), with deletion of outlying measurements to a fixed point.
 4. :func:`to_calib_results`: H and cov_theta rebuilt as :class:`~predfoot.contracts.CalibResult`, so position
-   covariances, conformal calibration, health and export are unchanged.
+   covariances, conformal calibration, health and export are unchanged. Frames of a segment too short for
+   any innovation to test them abstain.
 
-The noise parameters (κ², q) are fitted by maximum likelihood on the innovations of other games
-(:func:`fit_noise`); every other setting is fixed a priori in :class:`SmootherConfig`.
+The noise parameters (κ², q and the gap factor λ) are fitted by maximum likelihood on the innovations of
+other games (:func:`fit_noise`); every other setting is fixed a priori in :class:`SmootherConfig`.
 """
 
 from __future__ import annotations
@@ -68,14 +70,27 @@ class SmootherConfig:
     gate_level: float = 0.999  # deletion test and NLL truncation, χ²₄ quantile
     max_gap_s: float = 1.0  # a longer gap between used measurements closes the segment
     max_rate: tuple[float, float, float, float] = (0.70, 0.26, 0.035, 1.0)  # rad/s (pan, tilt, roll), 1/s
-    # λ: process noise × λ on steps next to a frame without an accepted measurement (failed, duplicate,
-    # misfit, not projected). A measurement deleted as an outlier keeps λ = 1, so its deletion and prediction
-    # statistics are the same leave-one-out test under one model.
-    gap_noise_factor: float = 20.0
+    # Process noise × this factor on every step of a manoeuvre hypothesis (manoeuvre segments, single freed
+    # steps): the looser motion model a camera move must fit. The factor on the steps next to a frame without
+    # an accepted measurement is a fitted noise parameter instead (NoiseParams.gap).
+    manoeuvre_factor: float = 20.0
+    # fit_noise fits the gap factor only when at least this many innovations follow a gap step, so that a
+    # handful of gaps cannot set it; with fewer it keeps its value.
+    min_gap_terms: int = 20
     q_roll: float = 1e-8  # rad²/s³, fixed
     floor_px: float = 0.0  # fixed pixel floor added to the measurement covariance; off in v1
     v0: tuple[float, float, float, float] = (1.0, 0.3, 0.05, 0.5)  # prior sd of the rates at a segment start
-    min_segment: int = 3  # fewer used measurements: the segment is "short" (projection only)
+    # Fewer used measurements: the segment is "short" and its frames abstain. The first innovation that enters
+    # the likelihood is the third measurement's; one measurement has no test at all (deletion statistic 0) and
+    # two only test each other through the loose rate prior v0.
+    min_segment: int = 3
+    # A run of off-model frames (misfit or not projected) strictly inside a segment that lasts at most this
+    # long (from its first frame to the frame after its last) gets the smoothed state; a longer one passes
+    # through. A priori: a cut-away to another camera and back (replay, close-up, crowd) lasts seconds, and a
+    # live director does not cut a shot shorter than half a second, so a shorter run between frames of the
+    # main camera is a calibration failure. Half the gap limit (max_gap_s) also keeps the main camera seen for
+    # at least half of every bridged second. At 5 fps: runs of 1-2 frames are bridged, of 3-4 passed through.
+    max_misfit_run_s: float = 0.5
     split_run: int = 3  # this many consecutive flagged measurements are tried as their own segment
     # A single-step manoeuvre must lower the innovation NLL of the other measurements by more than this. At 0
     # it is a likelihood comparison of two fixed models on the same data, the log det of the freed step being
@@ -106,30 +121,39 @@ class SmootherConfig:
 
 @dataclass(frozen=True)
 class NoiseParams:
-    """Fitted noise: measurement inflation κ² and process spectral densities q (per s³).
+    """Fitted noise: measurement inflation κ², process spectral densities q (per s³) and the gap factor λ.
 
-    The defaults are geometric means of the prototype's per-clip fits; :func:`fit_noise` replaces them.
+    λ multiplies the process noise on the steps next to a frame without an accepted measurement (failed,
+    duplicate, misfit, not projected): calibrations fail when the camera moves fast or zooms. A measurement
+    deleted as an outlier keeps λ = 1, so its deletion and prediction statistics are the same leave-one-out
+    test under one model. The defaults are geometric means of the prototype's per-clip fits, and λ = 20 the
+    a-priori value of the first version; :func:`fit_noise` replaces them.
     """
 
     kappa2: float = 2.0
     q_pan: float = 1e-3  # rad²/s³
     q_tilt: float = 1e-4  # rad²/s³
     q_logf: float = 6e-3  # 1/s³
+    gap: float = 20.0  # λ
 
     def to_dict(self) -> dict[str, float]:
         return {k: float(v) for k, v in asdict(self).items()}
 
     @classmethod
     def from_dict(cls, d: Mapping[str, Any]) -> NoiseParams:
-        return cls(**{k: float(d[k]) for k in ("kappa2", "q_pan", "q_tilt", "q_logf")})
+        """Inverse of :meth:`to_dict`; a dictionary without ``gap`` (first version) gets the default λ."""
+        keys = ("kappa2", "q_pan", "q_tilt", "q_logf", "gap")
+        return cls(**{k: float(d[k]) for k in keys if k in d})
 
     def log_vector(self) -> FloatArray:
-        return np.log(np.array([self.kappa2, self.q_pan, self.q_tilt, self.q_logf], dtype=np.float64))
+        """log (κ², q_pan, q_tilt, q_logf, λ)."""
+        v = [self.kappa2, self.q_pan, self.q_tilt, self.q_logf, self.gap]
+        return np.log(np.array(v, dtype=np.float64))
 
     @classmethod
     def from_log_vector(cls, h: ArrayLike) -> NoiseParams:
         e = np.exp(np.asarray(h, dtype=np.float64))
-        return cls(float(e[0]), float(e[1]), float(e[2]), float(e[3]))
+        return cls(*(float(v) for v in e[:5]))
 
     def digest(self) -> str:
         return hashlib.sha256(json.dumps(self.to_dict(), sort_keys=True).encode()).hexdigest()[:12]
@@ -193,8 +217,8 @@ class SmoothedTrack:
     used: BoolArray  # measurement used by the final pass
     rejected: BoolArray  # accepted but deleted by the robust passes
     short: BoolArray  # inside a segment with fewer than min_segment used measurements
-    manoeuvre: BoolArray  # inside a manoeuvre segment: process noise × λ on all its steps
-    # process noise × λ on the step into this frame beyond the gap rule (manoeuvre segments and single-step
+    manoeuvre: BoolArray  # inside a manoeuvre segment: process noise × manoeuvre_factor on all its steps
+    # process noise × manoeuvre_factor on the step into this frame (manoeuvre segments and single-step
     # manoeuvres); what fit_noise must reuse to evaluate the same model
     loose: BoolArray
     nis: FloatArray  # (T,) innovation χ² of the final pass; NaN for the first two used of a segment
@@ -212,10 +236,12 @@ class FrameFlags:
     smoothed: BoolArray
     repaired: BoolArray  # rejected measurement replaced by the smoothed state
     filled: BoolArray  # failed raw calibration inside a segment
-    projected: BoolArray  # PTZ projection only (short segment, or the projection ablation)
+    bridged: BoolArray  # off-model frame in a brief run inside a segment, replaced by the smoothed state
+    projected: BoolArray  # PTZ projection only (the projection ablation)
     passthrough: BoolArray  # raw homography, covariance scaled by κ²
     duplicate: BoolArray  # same detections as the previous frame: output copied
     rejected: BoolArray  # deleted measurement with no smoothed state to replace it: abstains
+    unchecked: BoolArray  # other raw-OK frame of a short segment: nothing tests its camera, abstains
     segment: IntArray
 
     @classmethod
@@ -227,10 +253,12 @@ class FrameFlags:
             smoothed=z(),
             repaired=z(),
             filled=z(),
+            bridged=z(),
             projected=z(),
             passthrough=z(),
             duplicate=z(),
             rejected=z(),
+            unchecked=z(),
             segment=np.full(n, -1, dtype=np.int64),
         )
 
@@ -592,7 +620,8 @@ class Batch:
     index: IntArray  # (B, L) frame index in the clip, -1 on padding
     length: IntArray  # (B,)
     dt: FloatArray  # (B, L) seconds since the previous step; 0 at the first step and on padding
-    lam: FloatArray  # (B, L) process-noise factor of the step into k (from the accepted mask); 0 on padding
+    gap: BoolArray  # (B, L) the step into k is next to a frame without an accepted measurement
+    loose: BoolArray  # (B, L) the step into k belongs to a manoeuvre hypothesis
     has: BoolArray  # (B, L) a used measurement at step k
     z: FloatArray  # (B, L, 4) measurement, 0 where none
     sigma: FloatArray  # (B, L, 4, 4) unscaled Σφ, identity where none
@@ -631,9 +660,10 @@ def stack_clips(
 ) -> Batch:
     """Stack every segment of every clip; ``masks`` mark the used measurements, ``segs`` the segment ids.
 
-    λ = ``gap_noise_factor`` on the steps next to a frame that has no accepted measurement and on the steps
-    marked in ``loose`` (index i: the step from frame i − 1 to frame i); a measurement that is accepted but
-    left out of ``masks`` (deleted as an outlier) does not change the process noise.
+    Gap steps are next to a frame that has no accepted measurement, loose steps are marked in ``loose``
+    (index i: the step from frame i − 1 to frame i); :func:`step_factors` turns them into process-noise
+    factors. A measurement that is accepted but left out of ``masks`` (deleted as an outlier) does not change
+    the process noise.
     """
     rows: list[tuple[int, int, IntArray]] = []
     for ci, seg in enumerate(segs):
@@ -644,7 +674,8 @@ def stack_clips(
     index = np.full((b_n, length), -1, dtype=np.int64)
     lengths = np.zeros(b_n, dtype=np.int64)
     dt = np.zeros((b_n, length))
-    lam = np.zeros((b_n, length))
+    gap = np.zeros((b_n, length), dtype=bool)
+    lse = np.zeros((b_n, length), dtype=bool)
     has = np.zeros((b_n, length), dtype=bool)
     z = np.zeros((b_n, length, N_PHI))
     sigma = np.tile(np.eye(N_PHI), (b_n, length, 1, 1))
@@ -659,10 +690,9 @@ def stack_clips(
         index[b, :n], lengths[b] = idx, n
         dt[b, 1:n] = np.diff(meas.times[idx])
         acc = np.asarray(meas.accepted, dtype=bool)[idx]
-        wide = ~(acc[1:] & acc[:-1])
+        gap[b, 1:n] = ~(acc[1:] & acc[:-1])
         if loose is not None:
-            wide |= np.asarray(loose[ci], dtype=bool)[idx][1:]
-        lam[b, 1:n] = np.where(wide, cfg.gap_noise_factor, 1.0)
+            lse[b, 1:n] = np.asarray(loose[ci], dtype=bool)[idx][1:]
         has[b, :n] = h
         z[b, :n][h] = meas.z[idx][h]
         sigma[b, :n][h] = meas.sigma_phi[idx][h]
@@ -674,13 +704,22 @@ def stack_clips(
         index=index,
         length=lengths,
         dt=dt,
-        lam=lam,
+        gap=gap,
+        loose=lse,
         has=has,
         z=z,
         sigma=sigma,
         floor=floor,
         term=term,
     )
+
+
+def step_factors(gap: ArrayLike, loose: ArrayLike, params: NoiseParams, cfg: SmootherConfig) -> FloatArray:
+    """Process-noise factor of each step: λ = ``params.gap`` next to a frame without an accepted measurement,
+    ``cfg.manoeuvre_factor`` on a manoeuvre step, the larger of the two when both, 1 elsewhere."""
+    g = np.where(np.asarray(gap, dtype=bool), params.gap, 1.0)
+    m = np.where(np.asarray(loose, dtype=bool), cfg.manoeuvre_factor, 1.0)
+    return np.asarray(np.maximum(g, m), dtype=np.float64)
 
 
 def _transition(dt: FloatArray) -> FloatArray:
@@ -739,7 +778,7 @@ def forward(
     qc = np.array([params.q_pan, params.q_tilt, cfg.q_roll, params.q_logf])
     r_all = params.kappa2 * batch.sigma + batch.floor
     f_all = _transition(batch.dt)
-    q_all = _process_noise(batch.dt, batch.lam, qc)
+    q_all = _process_noise(batch.dt, step_factors(batch.gap, batch.loose, params, cfg), qc)
     m = np.zeros((b_n, N_STATE))
     m[:, :N_PHI] = batch.z[:, 0]
     p = np.zeros((b_n, N_STATE, N_STATE))
@@ -937,8 +976,7 @@ def _edge_statistics(
     def step(i: int, backwards: bool) -> tuple[FloatArray, FloatArray]:
         """F (or F⁻¹) and Q of the step from frame i − 1 to frame i."""
         dt = np.asarray(t[i] - t[i - 1])
-        wide = not (acc[i] and acc[i - 1]) or bool(loose[i])
-        lam = np.asarray(cfg.gap_noise_factor if wide else 1.0)
+        lam = step_factors(not (acc[i] and acc[i - 1]), bool(loose[i]), params, cfg)
         return _transition(-dt if backwards else dt), _process_noise(dt, lam, qc)
 
     def blocked(a: int, b: int) -> bool:
@@ -1044,14 +1082,14 @@ def smooth_clip(
     it brings the deleted measurements back with no used measurement above the gate:
 
     - a run of ``split_run`` or more consecutive flagged measurements becomes its own segment with process
-      noise × λ on all its steps (deletion passes again), kept if every member is then used in a segment that
-      is not short: a real camera move fits the looser motion model, a burst of mutually inconsistent
-      calibrations does not and stays deleted;
-    - a single flagged measurement comes back with process noise × λ on one step, into it or out of it, if
-      that looser step first lowers the innovation NLL of the other measurements (the flagged one still
-      deleted) by more than ``step_gain``, and the step on its other side stays tight to a used neighbour.
-      A kink in the camera path strains its neighbours until the step is freed; once a spike is deleted its
-      neighbours fit, so the looser step brings nothing and the spike stays deleted.
+      noise × ``manoeuvre_factor`` on all its steps (deletion passes again), kept if every member is then used
+      in a segment that is not short: a real camera move fits the looser motion model, a burst of mutually
+      inconsistent calibrations does not and stays deleted;
+    - a single flagged measurement comes back with process noise × ``manoeuvre_factor`` on one step, into it
+      or out of it, if that looser step first lowers the innovation NLL of the other measurements (the flagged
+      one still deleted) by more than ``step_gain``, and the step on its other side stays tight to a used
+      neighbour. A kink in the camera path strains its neighbours until the step is freed; once a spike is
+      deleted its neighbours fit, so the looser step brings nothing and the spike stays deleted.
 
     Segments with fewer than ``min_segment`` used measurements are marked short.
     """
@@ -1174,15 +1212,31 @@ def smooth_clip(
 # --- noise fit ----------------------------------------------------------------------------------------
 
 
+def after_gap(batch: Batch) -> BoolArray:
+    """NLL terms whose prediction from the previous used measurement crosses a gap step: the innovations that
+    carry the information on the gap factor λ."""
+    out = np.zeros_like(batch.term)
+    pending = np.zeros(batch.size, dtype=bool)
+    for k in range(batch.has.shape[1]):
+        pending |= batch.gap[:, k]
+        out[:, k] = pending & batch.term[:, k]
+        pending &= ~batch.has[:, k]
+    return out
+
+
 def fit_noise(
     clips: Sequence[ClipMeasurements], cfg: SmootherConfig, init: NoiseParams | None = None, rounds: int = 2
 ) -> tuple[NoiseParams, dict[str, Any]]:
-    """Label-free maximum-likelihood fit of (κ², q_pan, q_tilt, q_logf) on the innovations of ``clips``.
+    """Label-free maximum-likelihood fit of (κ², q_pan, q_tilt, q_logf, λ) on the innovations of ``clips``.
 
     Each round cleans every clip with the smoother itself (:func:`smooth_clip` with the current parameters:
     deletions, manoeuvres), then minimises the Gaussian innovation NLL of the remaining measurements, segments
     and freed steps held fixed, by Nelder-Mead in log units from the simplex h + I. The next round re-cleans
     with the fitted parameters (skipped when the cleaned measurements do not change).
+
+    The gap factor λ only enters the predictions across a gap step (:func:`after_gap`); it is fitted when at
+    least ``cfg.min_gap_terms`` innovations follow one, and keeps its current value otherwise (on clips
+    without failures it is not identifiable).
 
     Why not the gate-truncated NLL on every accepted measurement: it bounds the pull of an outlier, but it is
     unbounded below, and on two dev clips Nelder-Mead ran off to κ² ≈ 1e-13, q ≈ 1e-31. Deleting outliers
@@ -1201,12 +1255,19 @@ def fit_noise(
         if not batch.term.any():
             diag |= {"converged": False, "n_terms": 0}
             break
-        h0 = params.log_vector()
+        n_gap = int(after_gap(batch).sum())
+        free = 5 if n_gap >= cfg.min_gap_terms else 4
+        h0 = params.log_vector()[:free]
+
+        def unpack(h: FloatArray, base: NoiseParams = params) -> NoiseParams:
+            """``base`` with its first len(h) parameters set to exp(h); a held λ is kept exactly."""
+            p = NoiseParams.from_log_vector(np.concatenate([h, base.log_vector()[len(h) :]]))
+            return p if len(h) == 5 else replace(p, gap=base.gap)
 
         def objective(h: FloatArray, batch: Batch = batch) -> float:
             try:
                 with np.errstate(all="ignore"):
-                    nll = forward(batch, NoiseParams.from_log_vector(h), cfg).nll
+                    nll = forward(batch, unpack(h), cfg).nll
             except np.linalg.LinAlgError:
                 return float("inf")
             return nll if np.isfinite(nll) else float("inf")
@@ -1216,26 +1277,29 @@ def fit_noise(
             h0,
             method="Nelder-Mead",
             options={
-                "initial_simplex": np.vstack([h0, h0 + np.eye(len(h0))]),
+                "initial_simplex": np.vstack([h0, h0 + np.eye(free)]),
                 "xatol": 0.02,
                 "fatol": 0.5,
-                "maxfev": 400,
+                "maxfev": 100 * free,
             },
         )
-        params = NoiseParams.from_log_vector(sol.x)
+        params = unpack(np.asarray(sol.x, dtype=np.float64))
         diag["rounds"] += 1
         diag["nfev"] += int(sol.nfev)
         diag["converged"] = bool(sol.success)
         diag["deleted"] = int(sum(int(t.rejected.sum()) for t in tracks))
         diag["n_segments"] = batch.size
+        diag |= {"gap_terms": n_gap, "gap_fitted": free == 5}
         fwd = forward(batch, params, cfg)
         nis = fwd.nis[np.isfinite(fwd.nis)]
+        gap_nis = fwd.nis[after_gap(batch) & np.isfinite(fwd.nis)]
         diag |= {
             "nll": float(fwd.nll),
             "n_terms": fwd.n_terms,
             "mean_nis": fwd.mean_nis,
             "mean_nis_truncated": float(np.minimum(nis, cfg.gate).mean()),
             "median_nis": float(np.median(nis)),
+            "median_nis_after_gap": float(np.median(gap_nis)) if gap_nis.size else float("nan"),
         }
     diag.setdefault("converged", False)
     diag.setdefault("n_terms", 0)
@@ -1268,6 +1332,28 @@ def _ptz_result(
     )
 
 
+def bridged_frames(meas: ClipMeasurements, track: SmoothedTrack, cfg: SmootherConfig) -> BoolArray:
+    """Off-model frames (raw OK, misfit or not projected) to replace by the smoothed state.
+
+    They are the maximal runs of consecutive off-model frames strictly inside one segment that is not short
+    (so used measurements of that segment, at most ``max_gap_s`` apart, bracket the run) and that last at most
+    ``max_misfit_run_s`` from the run's first frame to the frame after its last. A duplicate of an off-model
+    frame is off-model too, so it lengthens the run. Longer runs may be a cut to another camera and pass
+    through.
+    """
+    n = len(meas)
+    out = np.zeros(n, dtype=bool)
+    seg = track.segment
+    off = np.asarray(meas.raw_ok & (meas.misfit | ~meas.projected), dtype=bool)
+    inside = (seg >= 0) & ~track.short & np.isfinite(track.mean[:, 0])
+    for run in _runs(np.arange(n), off & inside, seg):
+        first, after = int(run[0]), int(run[-1]) + 1
+        strict = first > 0 and after < n and seg[first - 1] == seg[first] == seg[after]
+        if strict and meas.times[after] - meas.times[first] <= cfg.max_misfit_run_s + 1e-9:
+            out[run] = True
+    return out
+
+
 def to_calib_results(
     raw: Sequence[CalibResult],
     meas: ClipMeasurements,
@@ -1278,21 +1364,26 @@ def to_calib_results(
     """Per-frame outputs, rules applied in order:
 
     1. duplicate detections (k > 0): copy of output k − 1;
-    2. inside a segment that is not short (and not a misfit or failed projection): smoothed state,
-       cov_theta = A (P|T + β R_k [used]) Aᵀ with A = ∂θ/∂φ, dof None; flag smoothed / repaired / filled;
-    3. used frame of a short segment: PTZ projection, cov_theta = A R_k Aᵀ; flag projected;
-    4. measurement deleted by the robust passes with no smoothed state to replace it (outside every segment,
+    2. inside a segment that is not short: smoothed state, cov_theta = A (P|T + β R_k [used]) Aᵀ with
+       A = ∂θ/∂φ, dof None, for used (flag smoothed), deleted (repaired) and failed frames (filled), and for
+       off-model frames (misfit or failed projection) in a brief run (:func:`bridged_frames`, flag bridged);
+    3. measurement deleted by the robust passes with no smoothed state to replace it (outside every segment,
        or in a short one): abstains (status UNHEALTHY), since its raw camera was judged an outlier; flag
        rejected;
+    4. any other raw-OK frame of a short segment (fewer than ``min_segment`` used measurements, so no
+       innovation tests it, typically a lone frame after a long failure gap): abstains (status UNHEALTHY);
+       flag unchecked. Its camera is either its own raw one or that camera's PTZ projection, and the smoother
+       has no evidence for either;
     5. any other raw-OK frame: raw H with cov_theta = κ² Σθ, dof None; flag passthrough. This covariance is
        per-frame, while a smoothed one pools the whole segment, and their scales differ: the evaluation
        calibrates the conformal quantiles of the two kinds separately;
-    6. failed raw calibration outside segments: the raw result (abstains).
+    6. failed raw calibration outside segments or in a short one: the raw result (abstains).
     """
     n = len(raw)
     flags = FrameFlags.empty(n)
     out: list[CalibResult] = []
     centre = meas.centre.centre if meas.centre is not None else None
+    bridge = bridged_frames(meas, track, cfg)
     for k in range(n):
         r = raw[k]
         if k > 0 and meas.duplicate[k]:
@@ -1310,6 +1401,8 @@ def to_calib_results(
             if smooth and track.rejected[k]
             else flags.filled
             if smooth and not raw_ok
+            else flags.bridged
+            if bridge[k]
             else None
         )
         if centre is not None and flag is not None:
@@ -1318,12 +1411,12 @@ def to_calib_results(
                 p = p + cfg.beta * track.R[k]
             out.append(_ptz_result(track.mean[k, :N_PHI], p, centre, r, raw_ok, cfg))
             flag[k] = True
-        elif centre is not None and in_seg and track.short[k] and track.used[k]:
-            out.append(_ptz_result(meas.z[k], track.R[k], centre, r, raw_ok, cfg))
-            flags.projected[k] = True
         elif track.rejected[k]:
             out.append(CalibResult(CalibStatus.UNHEALTHY, n_inliers=r.n_inliers))
             flags.rejected[k] = True
+        elif raw_ok and in_seg and track.short[k]:
+            out.append(CalibResult(CalibStatus.UNHEALTHY, n_inliers=r.n_inliers))
+            flags.unchecked[k] = True
         elif raw_ok:
             out.append(replace(r, cov_theta=params.kappa2 * np.asarray(r.cov_theta), dof=None))
             flags.passthrough[k] = True
