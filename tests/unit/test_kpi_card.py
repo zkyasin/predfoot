@@ -36,6 +36,23 @@ def test_card_line_arithmetic():
     assert math.isnan(card_line("x", 1.0, [2.0]).half_width)  # one draw is not enough
 
 
+def test_quadratic_extrapolation_arithmetic():
+    """K(0) = 10, mean K(1) = 12, mean K(2) = 15: the parabola gives K(−1) = 3·10 − 3·12 + 15 = 9."""
+    line = card_line("distance_m", 10.0, [11.0, 13.0, 12.0, 12.0], draws2=[15.0, 15.0, 14.0, 16.0])
+    assert line.estimate == pytest.approx(9.0)
+    sd1, var2 = float(np.std([1.0, 3.0, 2.0, 2.0], ddof=1)), float(np.var([5.0, 5.0, 4.0, 6.0], ddof=1))
+    want = float(student_t.ppf(0.95, 3)) * math.sqrt(sd1**2 + 9 * sd1**2 / 4 + var2 / 4)
+    assert line.half_width == pytest.approx(want)
+    with pytest.raises(ValueError, match="method"):
+        kpi_card(
+            [np.zeros((10, 2))],
+            SpectralErrorModel("none"),
+            KpiConfig(),
+            np.random.default_rng(0),
+            method="cubic",
+        )
+
+
 def test_card_without_error_returns_the_exact_kpi(rng):
     cfg = KpiConfig()
     track = line_track(6.5, 60.0)  # 6.5 m/s is above the 20 km/h HSR threshold
@@ -51,10 +68,11 @@ def test_bias_correction_moves_a_ghost_distance_towards_zero_but_not_all_the_way
     cfg = KpiConfig()
     model = smooth_model(0.3)
     observed = np.zeros((25 * 300 + 1, 2)) + sample_player_errors(model, 25 * 300 + 1, 1, rng)[:, 0]
-    card = kpi_card([observed], model, cfg, rng, n_draws=20)
+    card = kpi_card([observed], model, cfg, np.random.default_rng(1), n_draws=20)
+    linear = kpi_card([observed], model, cfg, np.random.default_rng(1), n_draws=20, method="linear")
     d = card["distance_m"]
     assert d.observed > 50.0
-    assert 0.0 < d.estimate < 0.8 * d.observed
+    assert 0.0 < d.estimate < linear["distance_m"].estimate < 0.8 * d.observed
 
 
 def test_cards_on_synthetic_runs_with_known_kpis(rng):

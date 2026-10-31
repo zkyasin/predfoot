@@ -4,20 +4,21 @@ Inputs: the player's observed positions (native rate, NaN where missing, one arr
 position-error model of the camera that produced them (:mod:`predfoot.kpi.noise`). Nothing else: no clean
 track and no labels.
 
-Method: a parametric bootstrap on the observed track ("noise on noise"). B fresh error tracks e*_b are drawn
-from the model and added to the observed track y, and the 10 fps pipeline and the KPIs run on each
-y + e*_b. If a KPI responds to a second dose of error as it did to the first (the first, linear step of
-SIMEX, Cook & Stefanski 1994), D_b = K(y + e*_b) − K(y) is distributed like K(y) − K(x), x being the
-error-free track, so:
+Method: simulation-extrapolation (SIMEX, Cook & Stefanski 1994) on the observed track. Fresh error tracks
+e*_b are drawn from the model and added to the observed track y at doses λ = 1 and λ = 2 (y + √λ·e*_b, so
+that the total error variance is (1 + λ) times the original), and the 10 fps pipeline and the KPIs run on
+each copy. With K(λ) the mean KPI at dose λ (K(0) = K(y)):
 
-- the bias estimate is b̂ = mean(D) and the bias-corrected estimate K̂ = K(y) − b̂;
-- the 90 % interval is K̂ ± t·sd(D)·sqrt(1 + 1/B), t being the Student quantile with B − 1 degrees of
-  freedom (the second factor covers the Monte Carlo error of b̂);
-- the naive interval has the same half-width around K(y), without bias correction.
+- ``linear``: K̂ = K(0) − (K(1) − K(0)), the noise-on-noise bias correction, right when the KPI error grows
+  linearly with the error variance;
+- ``quadratic``: the parabola through λ = 0, 1, 2 extrapolated to λ = −1 (no error), K̂ = 3K(0) − 3K(1) +
+  K(2), which also follows a curved response (error-induced distance of a slow player grows like σ, not σ²;
+  speed-threshold KPIs respond convexly).
 
-The linear step is right when the KPI error grows like the error variance (a moving player's distance); it
-under-corrects where the error grows more slowly, such as the "ghost" distance of a nearly motionless
-player, which grows like σ. ``scripts/kpi_card.py`` measures the resulting coverage on IDSSE.
+The 90 % interval is K̂ ± t·s, t being the Student quantile with B − 1 degrees of freedom and s² the variance
+of one dose's effect, sd(D₁)² with D₁ = K(y + e*) − K(y), plus the Monte Carlo variance of K̂. The naive
+interval has the same half-width around K(y), without bias correction. ``scripts/kpi_card.py`` measures the
+coverage on IDSSE.
 """
 
 from __future__ import annotations
@@ -73,18 +74,69 @@ class CardLine:
         )
 
 
-def card_line(kpi: str, observed: float, draws: ArrayLike, level: float = 0.9) -> CardLine:
-    """Summarise B bootstrap values K(y + e*_b) of one KPI around its observed value K(y)."""
-    d = np.asarray(draws, dtype=np.float64) - observed
-    d = d[np.isfinite(d)]
-    b = d.size
+def card_line(
+    kpi: str,
+    observed: float,
+    draws: ArrayLike,
+    level: float = 0.9,
+    draws2: ArrayLike | None = None,
+) -> CardLine:
+    """Summarise bootstrap values of one KPI: ``draws`` at dose 1 (K(y + e*_b)) and, for the quadratic
+    extrapolation, ``draws2`` at dose 2 (K(y + √2·e*_b)); see the module docstring."""
+    d1 = np.asarray(draws, dtype=np.float64) - observed
+    d1 = d1[np.isfinite(d1)]
+    b = d1.size
     if b < 2 or not math.isfinite(observed):
         return CardLine(kpi, observed, math.nan, math.nan, math.nan, b, level)
-    sd = float(np.std(d, ddof=1))
+    sd1 = float(np.std(d1, ddof=1))
     t = float(student_t.ppf(0.5 + level / 2.0, b - 1))
-    return CardLine(
-        kpi, observed, observed - float(np.mean(d)), t * sd * math.sqrt(1.0 + 1.0 / b), sd, b, level
-    )
+    if draws2 is None:
+        return CardLine(
+            kpi, observed, observed - float(np.mean(d1)), t * sd1 * math.sqrt(1.0 + 1.0 / b), sd1, b, level
+        )
+    d2 = np.asarray(draws2, dtype=np.float64) - observed
+    d2 = d2[np.isfinite(d2)]
+    if d2.size < 2:
+        return CardLine(kpi, observed, math.nan, math.nan, math.nan, b, level)
+    estimate = observed - 3.0 * float(np.mean(d1)) + float(np.mean(d2))
+    mc_var = 9.0 * sd1**2 / b + float(np.var(d2, ddof=1)) / d2.size
+    return CardLine(kpi, observed, estimate, t * math.sqrt(sd1**2 + mc_var), sd1, b, level)
+
+
+def kpi_draws(
+    parts: Sequence[ArrayLike],
+    model: SpectralErrorModel,
+    cfg: KpiConfig,
+    rng: np.random.Generator,
+    *,
+    n_draws: int = 50,
+    doses: Sequence[float] = (1.0, 2.0),
+    chunk: int = 25,
+) -> tuple[dict[str, float], dict[float, dict[str, list[float]]]]:
+    """Observed KPIs of a player-match and their bootstrap values at each error dose (one error draw is
+    shared by all doses, scaled by √λ). Minutes played are left out."""
+    observed_parts: list[FloatArray] = [np.asarray(p, dtype=np.float64) for p in parts]
+    observed = compute_kpis([pipeline(p, cfg, resample_to=cfg.output_hz) for p in observed_parts], cfg)
+    names = [k for k in observed if k != "minutes"]
+    draws: dict[float, dict[str, list[float]]] = {lam: {k: [] for k in names} for lam in doses}
+    done = 0
+    while done < n_draws:
+        size = min(chunk, n_draws - done)
+        errors = [
+            sample_player_errors(model, p.shape[0], size, rng, hz=cfg.native_hz) for p in observed_parts
+        ]
+        for j in range(size):
+            for lam in doses:
+                scale = math.sqrt(lam)
+                kins = [
+                    pipeline(p + scale * e[:, j], cfg, resample_to=cfg.output_hz)
+                    for p, e in zip(observed_parts, errors, strict=True)
+                ]
+                values = compute_kpis(kins, cfg)
+                for k in names:
+                    draws[lam][k].append(values[k])
+        done += size
+    return {k: observed[k] for k in names}, draws
 
 
 def kpi_card(
@@ -93,31 +145,17 @@ def kpi_card(
     cfg: KpiConfig,
     rng: np.random.Generator,
     *,
-    n_draws: int = 100,
+    n_draws: int = 50,
     level: float = 0.9,
-    chunk: int = 25,
+    method: str = "quadratic",
 ) -> dict[str, CardLine]:
     """The card of one player-match from its observed positions (one (n, 2) array per period at the native
-    rate) and the error model of its camera. KPIs are those of :func:`~predfoot.kpi.metrics.compute_kpis`,
-    without minutes played."""
-    observed_parts: list[FloatArray] = [np.asarray(p, dtype=np.float64) for p in parts]
-    kins = [pipeline(p, cfg, resample_to=cfg.output_hz) for p in observed_parts]
-    observed = compute_kpis(kins, cfg)
-    names = [k for k in observed if k != "minutes"]
-    draws: dict[str, list[float]] = {k: [] for k in names}
-    done = 0
-    while done < n_draws:
-        size = min(chunk, n_draws - done)
-        errors = [
-            sample_player_errors(model, p.shape[0], size, rng, hz=cfg.native_hz) for p in observed_parts
-        ]
-        for j in range(size):
-            kin_b = [
-                pipeline(p + e[:, j], cfg, resample_to=cfg.output_hz)
-                for p, e in zip(observed_parts, errors, strict=True)
-            ]
-            values = compute_kpis(kin_b, cfg)
-            for k in names:
-                draws[k].append(values[k])
-        done += size
-    return {k: card_line(k, observed[k], draws[k], level) for k in names}
+    rate) and the error model of its camera, with the ``linear`` or ``quadratic`` extrapolation."""
+    if method not in ("linear", "quadratic"):
+        raise ValueError(f"unknown method {method!r}")
+    doses = (1.0,) if method == "linear" else (1.0, 2.0)
+    observed, draws = kpi_draws(parts, model, cfg, rng, n_draws=n_draws, doses=doses)
+    return {
+        k: card_line(k, v, draws[1.0][k], level, draws[2.0][k] if method == "quadratic" else None)
+        for k, v in observed.items()
+    }

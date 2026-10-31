@@ -35,7 +35,7 @@ import numpy as np
 import polars as pl
 
 from predfoot.io import idsse
-from predfoot.kpi.card import CardLine, kpi_card
+from predfoot.kpi.card import CardLine, card_line, kpi_draws
 from predfoot.kpi.config import load_kpi_config
 from predfoot.kpi.noise import KERNELS, fit_error_model, sample_errors
 from predfoot.kpi.report import bootstrap_by_group
@@ -95,7 +95,7 @@ def main() -> None:
     parser.add_argument("--family", default="matern32", choices=KERNELS)
     parser.add_argument("--marginal", default="copula", choices=("gauss", "copula"))
     parser.add_argument("--matches", nargs="*", default=sorted(idsse.IDSSE_MATCHES))
-    parser.add_argument("--n-draws", type=int, default=60)
+    parser.add_argument("--n-draws", type=int, default=40, help="error draws per card (each at two doses)")
     parser.add_argument("--min-minutes", type=float, default=45.0)
     parser.add_argument("--n-boot", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=20261031)
@@ -146,24 +146,31 @@ def main() -> None:
                     if span is not None:
                         parts.append((t.xy + errors[p])[span[0] : span[1], i])
                 rng = seeded_rng(args.seed, match_id, camera, pid, "bootstrap")
-                card = kpi_card(parts, model, cfg, rng, n_draws=args.n_draws, level=LEVEL)
+                observed, draws = kpi_draws(parts, model, cfg, rng, n_draws=args.n_draws, doses=(1.0, 2.0))
+                card: dict[str, CardLine] = {}
                 for kpi in CARD_KPIS:
-                    line: CardLine = card[kpi]
-                    rows.append(
-                        {
-                            "match_id": match_id,
-                            "player_id": pid,
-                            "team": team.get(pid, ""),
-                            "shirt": shirt.get(pid, -1),
-                            "camera": camera,
-                            "kpi": kpi,
-                            "truth": truth[pid][kpi],
-                            "observed": line.observed,
-                            "estimate": line.estimate,
-                            "half_width": line.half_width,
-                            "sd": line.sd,
-                        }
-                    )
+                    lines = {
+                        "linear": card_line(kpi, observed[kpi], draws[1.0][kpi], LEVEL),
+                        "quadratic": card_line(kpi, observed[kpi], draws[1.0][kpi], LEVEL, draws[2.0][kpi]),
+                    }
+                    card[kpi] = lines["quadratic"]
+                    for method, line in lines.items():
+                        rows.append(
+                            {
+                                "match_id": match_id,
+                                "player_id": pid,
+                                "team": team.get(pid, ""),
+                                "shirt": shirt.get(pid, -1),
+                                "camera": camera,
+                                "kpi": kpi,
+                                "method": method,
+                                "truth": truth[pid][kpi],
+                                "observed": line.observed,
+                                "estimate": line.estimate,
+                                "half_width": line.half_width,
+                                "sd": line.sd,
+                            }
+                        )
                 examples.setdefault(f"{match_id}:{pid}", {})[camera] = card
         print(f"{match_id}: {len(population)} player-matches in {time.perf_counter() - t0:.1f} s", flush=True)
 
@@ -178,6 +185,7 @@ def main() -> None:
         "git_dirty": dirty,
         "date": dt.datetime.now().isoformat(timespec="seconds"),
         "model": f"{args.family}:{args.marginal}:white",
+        "doses": [1.0, 2.0],
         "matches": args.matches,
         "n_draws": args.n_draws,
         "n_boot": args.n_boot,
@@ -185,7 +193,7 @@ def main() -> None:
         "runtime_s": round(time.perf_counter() - t_start, 1),
     }
     (run_dir / "meta.json").write_text(json.dumps(meta, indent=2))
-    plot(table, cameras, args.figure)
+    plot(table.filter(pl.col("method") == "quadratic"), cameras, args.figure)
     args.report.write_text(render(meta, table, cameras, examples, args), encoding="utf-8")
     print(f"report: {args.report}\nfigure: {args.figure}\nrun: {run_dir}\n{meta['runtime_s']} s")
 
@@ -211,31 +219,39 @@ def render(
 ) -> str:
     dirty = " (with uncommitted changes)" if meta["git_dirty"] else ""
     n_pm = table.filter(pl.col("camera") == cameras[0]).select("match_id", "player_id").unique().height
+    quad = table.filter(pl.col("method") == "quadratic")
     cov_rows = []
     for camera in cameras:
         for kpi, (label, unit, digits) in CARD_KPIS.items():
-            d = table.filter(
-                (pl.col("camera") == camera) & (pl.col("kpi") == kpi) & pl.col("half_width").is_finite()
-            )
-            c, lo, hi = coverage_ci(d, "covered", args.n_boot, args.seed)
-            nc, nlo, nhi = coverage_ci(d, "naive_covered", args.n_boot, args.seed)
-            lomo, factor = lomo_coverage(d)
-            truth_sum = float(d["truth"].sum())
-            positive = d.filter(pl.col("truth") > 0)
+            sel = (pl.col("camera") == camera) & (pl.col("kpi") == kpi) & pl.col("half_width").is_finite()
+            q = table.filter(sel & (pl.col("method") == "quadratic"))
+            lin = table.filter(sel & (pl.col("method") == "linear"))
+            c, lo, hi = coverage_ci(q, "covered", args.n_boot, args.seed)
+            cl, cl_lo, cl_hi = coverage_ci(lin, "covered", args.n_boot, args.seed)
+            nc, nlo, nhi = coverage_ci(q, "naive_covered", args.n_boot, args.seed)
+            lomo, factor = lomo_coverage(q)
+            truth_sum = float(q["truth"].sum())
+            positive = q.filter(pl.col("truth") > 0)
             rel_hw = (
                 float((positive["half_width"] / positive["truth"]).median()) if positive.height else math.nan
             )
+
+            def bias(d: pl.DataFrame, col: str, total: float = truth_sum) -> str:
+                return f"{100 * float((d[col] - d['truth']).sum()) / total:+.1f} %"
+
             cov_rows.append(
                 [
                     camera,
                     label,
                     f"{100 * c:.0f} % [{100 * lo:.0f}, {100 * hi:.0f}]",
+                    f"{100 * cl:.0f} % [{100 * cl_lo:.0f}, {100 * cl_hi:.0f}]",
                     f"{100 * nc:.0f} % [{100 * nlo:.0f}, {100 * nhi:.0f}]",
                     f"{100 * lomo:.0f} % (×{factor:.2f})",
-                    f"{fmt(float(d['half_width'].median()), digits)} {unit}".strip()
+                    f"{fmt(float(q['half_width'].median()), digits)} {unit}".strip()
                     + f" ({100 * rel_hw:.0f} %)",
-                    f"{100 * float((d['observed'] - d['truth']).sum()) / truth_sum:+.1f} %",
-                    f"{100 * float((d['estimate'] - d['truth']).sum()) / truth_sum:+.1f} %",
+                    bias(q, "observed"),
+                    bias(lin, "estimate"),
+                    bias(q, "estimate"),
                 ]
             )
     lines = [
@@ -253,18 +269,20 @@ def render(
         f"- **Error model** per camera: `{meta['model']}` from `reports/error_process_temporal_dev.json`"
         " (`predfoot.kpi.noise.fit_error_model`).",
         f"- **Data**: IDSSE (Bassek, Rein, Weber & Memmert 2025, CC BY 4.0), {len(meta['matches'])} matches,"
-        f" {n_pm} outfield player-matches with ≥ 45 min; {meta['n_draws']} bootstrap draws per card; coverage"
+        f" {n_pm} outfield player-matches with ≥ 45 min; {meta['n_draws']} error draws per card, each at two"
+        f" doses; coverage"
         f" intervals: {meta['n_boot']} bootstrap resamples over matches; seed {meta['seed']}.",
         "",
         "## The card",
         "",
-        "From the observed track and the camera's error model only (`predfoot.kpi.card.kpi_card`): fresh",
-        "errors are drawn from the model and added to the observed track, and"
-        " the 10 fps KPI pipeline runs on",
-        "each copy. The mean change estimates the bias that the errors added to the observed KPI (the first,",
-        "linear step of SIMEX, Cook & Stefanski 1994); the estimate is the observed KPI minus that bias, and",
-        "the 90 % interval is ± t·sd·sqrt(1 + 1/B) around it. The **naive** interval has the same half-width",
-        "around the observed value. The truth is the clean track through the same 10 fps pipeline.",
+        "From the observed track and the camera's error model only (`predfoot.kpi.card`): fresh errors",
+        "are drawn from the model and added to the observed track at one and two extra doses of error",
+        "variance, and the 10 fps KPI pipeline runs on each copy (SIMEX, Cook & Stefanski 1994). The",
+        "**linear** estimate removes the change caused by one extra dose (noise on noise); the **quadratic**",
+        "one extrapolates the parabola through zero, one and two extra doses back to no error. The 90 %",
+        "interval adds the spread of one dose's effect and the Monte Carlo error; the **naive** interval has",
+        "the same half-width around the observed value. The truth is the clean track through the same 10 fps",
+        "pipeline.",
         "",
         "## Coverage of the clean truth",
         "",
@@ -277,12 +295,14 @@ def render(
             [
                 "Camera",
                 "KPI",
-                "Corrected",
+                "Quadratic",
+                "Linear",
                 "Naive",
-                "LOMO-calibrated",
+                "Quadratic, LOMO-calibrated",
                 "Median half-width (rel.)",
                 "Bias, observed",
-                "Bias, corrected",
+                "Bias after linear",
+                "Bias after quadratic",
             ],
             cov_rows,
         ),
@@ -292,7 +312,7 @@ def render(
         "## Example cards",
         "",
     ]
-    picks = pick_examples(table, cameras[-1])
+    picks = pick_examples(quad, cameras[-1])
     for key in picks:
         match_id, pid = key.split(":")
         info = table.filter((pl.col("match_id") == match_id) & (pl.col("player_id") == pid)).row(
@@ -308,7 +328,7 @@ def render(
                     f"{fmt(line.estimate, digits)} ± {fmt(line.half_width, digits)} {unit}".strip()
                     + f" (observed {fmt(line.observed, digits)})"
                 )
-            truth = table.filter(
+            truth = quad.filter(
                 (pl.col("match_id") == match_id) & (pl.col("player_id") == pid) & (pl.col("kpi") == kpi)
             )["truth"][0]
             cells.append(f"{fmt(truth, digits)} {unit}".strip())
@@ -317,18 +337,15 @@ def render(
     lines += [
         "## Reading it",
         "",
-        "- The bias correction is the point of the card: with these error models every distance KPI is",
-        "  inflated by the errors, by several interval half-widths, so a naive interval around the observed",
-        "  value misses the truth almost always (column *Naive*).",
-        "- The noise-on-noise step assumes the KPI responds to a second dose"
-        " of error as it did to the first.",
-        "  Where that fails (threshold KPIs, nearly motionless phases where"
-        " error-induced distance grows like σ",
-        "  rather than σ²) the raw interval under-covers; the"
-        " leave-one-match-out factor shows by how much the",
-        "  half-width must grow, and is fitted on other matches only.",
-        "- Everything here is conditional on the error model: on real tracking the card is only as good as",
-        "  the error process measured on SN-GSR (stationary, independent of motion, 5 fps, smoothed-label",
+        "- A naive interval around the observed value inherits the whole error-induced bias, which for",
+        "  distance KPIs is many half-widths (column *Naive*): the bias correction is the core of the card.",
+        "- The extrapolation assumes a smooth response of each KPI to the error variance. The linear step",
+        "  cannot follow a curved response (distance of slow phases grows like σ, threshold KPIs respond",
+        "  convexly); the quadratic one follows curvature but adds Monte Carlo variance. Whatever the",
+        "  raw coverage, the leave-one-match-out factor shows how much the half-width must grow to reach",
+        "  90 %; it is fitted on the other matches only.",
+        "- Everything is conditional on the error model: on real tracking the card is only as good as the",
+        "  error process measured on SN-GSR (stationary, independent of motion, 5 fps, smoothed-label",
         "  reference; see `reports/kpi_budget_spectral.md`).",
         "",
     ]
@@ -358,7 +375,14 @@ def plot(table: pl.DataFrame, cameras: list[str], path: Path) -> None:
         ax.vlines(
             x - 0.18, obs - hw, obs + hw, color=grey, lw=1.2, label="naive interval (observed ± half-width)"
         )
-        ax.vlines(x + 0.18, est - hw, est + hw, color=blue, lw=1.2, label="bias-corrected 90 % interval")
+        ax.vlines(
+            x + 0.18,
+            est - hw,
+            est + hw,
+            color=blue,
+            lw=1.2,
+            label="corrected 90 % interval (quadratic SIMEX)",
+        )
         ax.plot(x, truth, "o", ms=2.6, color=ink, label="clean truth")
         cov = float(d["covered"].mean())
         ax.set_title(f"{camera} camera: corrected interval covers {100 * cov:.0f} %", color=ink, fontsize=10)
