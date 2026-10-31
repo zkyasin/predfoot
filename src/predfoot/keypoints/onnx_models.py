@@ -24,6 +24,10 @@ OUTPUT_NAME = "heatmaps"
 MODEL_FILES = {"kp": "pnlcalib-sv-kp.onnx", "lines": "pnlcalib-sv-lines.onnx"}
 #: Acceptance of ticket T5.4: decoded keypoints and line ends within 0.5 px of PyTorch's.
 PARITY_TOLERANCE_PX = 0.5
+#: Largest heatmap difference accepted between two float32 CPU runtimes (2.7e-6 measured). A wrong head, a
+#: rescaled output or a constant background shows far above it even where the decoded peaks do not move, and
+#: the heatmap values matter: the keypoint scores weigh the solver and decide which detections pass.
+HEATMAP_TOLERANCE = 1e-4
 
 Heatmaps = tuple[NDArray[np.float32], NDArray[np.float32]]
 
@@ -104,18 +108,38 @@ class Parity:
     n_points: int  # keypoints and line ends compared
     n_flips: int  # detections above the threshold in one runtime only
 
+    def problems(self) -> list[str]:
+        """Why the other runtime fails the check, empty when it passes. NaN fails every comparison."""
+        out = []
+        if not self.max_abs_heatmap <= HEATMAP_TOLERANCE:
+            out.append(f"heatmaps differ by up to {self.max_abs_heatmap:.3g} (at most {HEATMAP_TOLERANCE:g})")
+        if self.n_flips:
+            out.append(f"{self.n_flips} detections found by one runtime only")
+        if self.n_points == 0:
+            out.append("no detection to compare")
+        if not (self.max_keypoint_px <= PARITY_TOLERANCE_PX and self.max_line_end_px <= PARITY_TOLERANCE_PX):
+            shift = max(self.max_keypoint_px, self.max_line_end_px)
+            out.append(f"decoded detections move by up to {shift:.3g} px (at most {PARITY_TOLERANCE_PX} px)")
+        return out
+
     @property
     def ok(self) -> bool:
-        return max(self.max_keypoint_px, self.max_line_end_px) <= PARITY_TOLERANCE_PX
+        return not self.problems()
 
     def as_dict(self) -> dict[str, Any]:
-        return asdict(self) | {"ok": self.ok, "tolerance_px": PARITY_TOLERANCE_PX}
+        return asdict(self) | {
+            "ok": self.ok,
+            "problems": self.problems(),
+            "tolerance_px": PARITY_TOLERANCE_PX,
+            "heatmap_tolerance": HEATMAP_TOLERANCE,
+        }
 
 
 def parity(reference: Heatmaps, other: Heatmaps, frame_size: tuple[int, int]) -> Parity:
     """Compare heatmaps of the same frames, then the detections decoded from them in frames of frame_size."""
     (hk_r, hl_r), (hk_o, hl_o) = reference, other
-    max_abs = max(float(np.abs(hk_r - hk_o).max()), float(np.abs(hl_r - hl_o).max()))
+    with np.errstate(invalid="ignore"):  # NaN and inf propagate, and fail the check
+        max_abs = float(np.max([np.abs(hk_r - hk_o).max(), np.abs(hl_r - hl_o).max()]))
     kp_px = line_px = 0.0
     n_points = n_flips = 0
     decoded = zip(

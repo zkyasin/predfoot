@@ -6,7 +6,8 @@ Usage:
 
 Writes PREDFOOT_DATA_DIR/models/onnx/pnlcalib-sv-{kp,lines}.onnx (derived from the CC BY 4.0 weights, so
 never in git) and export.json (versions, opset, hashes, parity). Parity: PyTorch and ONNX Runtime both run
-on the CPU, batch 1, on frames of a dev clip; the export fails (exit code 1) when a decoded keypoint or line
+on the CPU, batch 1, on frames of a dev clip; the export fails (exit code 1) when the heatmaps differ by more
+than 1e-4, when a detection is found by one runtime only or none is found, or when a decoded keypoint or line
 end moves by more than 0.5 px between the two.
 """
 
@@ -97,7 +98,7 @@ def main(
         f"line ends {result.max_line_end_px:.4f} px, detections in one runtime only {result.n_flips}"
     )
     if not result.ok:
-        typer.echo("FAILED: decoded detections differ by more than 0.5 px", err=True)
+        typer.echo("FAILED: " + "; ".join(result.problems()), err=True)
         raise typer.Exit(code=1)
     typer.echo(f"OK → {out}")
 
