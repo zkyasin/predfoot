@@ -12,7 +12,9 @@ estimates the camera from the pitch lines of each broadcast frame, then gives ev
 
 Outputs follow the SkillCorner open-data JSONL schema, with the uncertainty as extra fields.
 
-> Status: early development (milestone M0). Numbers will appear here only once measured.
+> Status: early development. The pipeline runs end to end on real broadcast frames; development results are
+> in [`reports/`](reports/). Test-set numbers will appear here only after the preregistered run
+> ([`docs/preregistration.md`](docs/preregistration.md), draft).
 
 ## Layout
 
@@ -28,6 +30,20 @@ Outputs follow the SkillCorner open-data JSONL schema, with the uncertainty as e
 | `assets/` | Images for the documentation |
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the pipeline and [CLAUDE.md](CLAUDE.md) for the working rules.
+
+## Real pipeline on a development clip
+
+```bash
+uv sync --extra vision
+uv run python scripts/download_data.py sn-gsr-labels --splits train valid
+uv run python scripts/build_index.py
+uv run python scripts/download_data.py sn-gsr-frames --clips SNGS-056 --every 5
+uv run python scripts/download_data.py pnlcalib-weights
+uv run python scripts/cache_keypoints.py --splits valid      # network inference, once per clip
+uv run python scripts/run_real_clip.py SNGS-056 --out runs/real/SNGS-056
+```
+
+SoccerNet-derived outputs stay local: they are for evaluation only and are never published.
 
 ## Tracer bullet
 
