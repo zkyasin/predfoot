@@ -1,22 +1,25 @@
 """Public demo on SoccerTrack v2 pixels (CC BY 4.0, Scott et al.): a virtual broadcast camera that follows the
 play inside the fixed panorama, predfoot's camera and positions on it, and the minimap with 90 % regions.
 
-    uv run python scripts/render_demo.py --match 117092 --start 0 --frames 10 --step 5 --fps 5 \\
+    uv run python scripts/render_demo.py --match 117093 --start 0 --frames 10 --step 5 --fps 5 \\
         --still assets/demo.jpg --gif runs/demo.gif
 
-Per rendered frame: the virtual view (PTZ camera at the panorama's centre, known pitch homography: the
-reference camera) is rendered from the MOT clip frame with one remap; PnLCalib keypoints and lines →
-robust calibration → optionally the PTZ smoother (noise parameters reused from the dev run, not refitted) →
-delta-method positions of the MOT foot points with conformal quantiles fitted on the SN-GSR dev players
-table (Mondrian bins per covariance source, as in scripts/eval_dev.py). That transfers a calibration from
-SN-GSR broadcast frames to SoccerTrack virtual views: a domain shift, reported as such.
+Per rendered frame: the virtual view (PTZ camera at the panorama's centre, known pitch homography under the
+released calibration: the reference camera) is rendered from the MOT clip frame with one remap; PnLCalib
+keypoints and lines → robust calibration → by default the PTZ smoother → delta-method positions of the MOT
+ground-truth foot points. The smoother's noise parameters and the conformal quantiles of the 90 % regions come
+from the SN-GSR dev evaluation (``src/predfoot/demo/dev_calibration.json``, see
+:mod:`predfoot.demo.calibration`), not refitted: that transfers a calibration from SN-GSR broadcast frames to
+SoccerTrack virtual views, a domain shift, reported as such. ``--no-smooth`` uses the per-frame camera and
+the quantiles fitted for it.
 
 Two references are scored on the rendered frames: the reference camera (the released calibration, whose own
 error is metres on the far half, see reports/soccertrack_v2.md) and the annotated keypoints mapped into each
-view (true correspondences up to annotation noise).
+view (true correspondences up to annotation noise; the released calibration was fitted on them).
 
 Writes ``runs/<date>_<sha>_demo/``: demo.mp4 (virtual view | minimap), metrics.json, players.parquet,
-keypoints.parquet. Network inference runs once per rendered frame.
+keypoints.parquet. Every input is checked before anything runs; network inference runs once per rendered
+frame.
 """
 
 from __future__ import annotations
@@ -40,51 +43,56 @@ from PIL import Image
 from predfoot.calib.observations import observations_from_detections
 from predfoot.calib.solver import SolverConfig
 from predfoot.calib.solver import calibrate as solve
-from predfoot.calib.temporal import NoiseParams, SmootherConfig, duplicate_mask, smooth_results
+from predfoot.calib.temporal import SmootherConfig, duplicate_mask, smooth_results
 from predfoot.contracts import CalibResult, Localization
+from predfoot.demo import calibration as dc
 from predfoot.demo import virtual_camera as vc
 from predfoot.geometry import homography as hg
 from predfoot.geometry.pitch import Arc, sn_line_elements
 from predfoot.io import soccertrack as st
 from predfoot.io.skillcorner import TrackingFrame
 from predfoot.paths import REPO_ROOT, data_dir
-from predfoot.uncertainty.conformal import MondrianConformal
 from predfoot.uncertainty.delta import CHI2_2_90, mahalanobis2, position_covariance
 from predfoot.viz.minimap import SURFACE, draw_frame
 
-DEV_RUN = REPO_ROOT.parent / "temporal" / "runs" / "20261031-153059_c3861c7_ptz"
-ALPHA = 0.1
 #: Foot-point colours (BGR) by calibrated 90 % radius: confident, wider, wide; grey when the frame abstains.
 RADIUS_BINS_M = (1.0, 2.5)
 COLOURS_BGR = ((80, 200, 60), (40, 170, 245), (60, 60, 230))
 ABSTAIN_BGR = (150, 150, 150)
-OURS_BGR = (255, 255, 255)
-REFERENCE_BGR = (255, 160, 40)
+#: Camera overlays, in colours the painted (white) lines and the foot points do not use.
+OURS_BGR = (255, 0, 255)  # magenta
+REFERENCE_BGR = (255, 255, 0)  # cyan
 CREDIT = "Pixels: SoccerTrack v2 (CC BY 4.0, Scott et al.), virtual view of the panorama"
 FLAG_NAMES = ("smoothed", "repaired", "filled", "projected", "passthrough", "duplicate", "rejected")
+CLIP_FPS = 25.0
+DOWNLOAD_HINT = (
+    "Download them with:\n"
+    "  uv run python scripts/download_data.py soccertrack-v2 --match {match} --parts raw mot clip\n"
+    "  uv run python scripts/download_data.py pnlcalib-weights"
+)
 
 app = typer.Typer(add_completion=False)
 
 
 def git_sha() -> str:
-    out = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, check=False)
-    return out.stdout.strip() or "nogit"
+    """Short commit of the checkout, with ``-dirty`` when tracked files have uncommitted changes."""
+
+    def git(*args: str) -> str:
+        out = subprocess.run(["git", *args], cwd=REPO_ROOT, capture_output=True, text=True, check=False)
+        return out.stdout.strip()
+
+    sha = git("rev-parse", "--short", "HEAD")
+    if not sha:
+        return "nogit"
+    return sha + ("-dirty" if git("status", "--porcelain", "--untracked-files=no") else "")
 
 
-def fit_conformal(table: Path) -> dict[str, MondrianConformal]:
-    """Mondrian models per covariance source, fitted on every dev player-frame (reference: labels)."""
-    d = pl.read_parquet(table).filter(pl.col("ex_lab").is_not_nan())
-    e = d.select("ex_lab", "ey_lab").to_numpy()
-    cov = np.stack([d["c00"], d["c01"], d["c01"], d["c11"]], axis=1).reshape(-1, 2, 2)
-    score, groups, source = mahalanobis2(e, cov), d["clip"].to_numpy(), d["cov_source"].to_numpy()
-    feats = {"mpp": d["mpp"].to_numpy(), "n_inliers": d["n_inliers"].to_numpy().astype(float)}
-    models = {}
-    for src in np.unique(source):
-        sel = source == src
-        models[str(src)] = MondrianConformal.fit(
-            score[sel], groups[sel], {k: v[sel] for k, v in feats.items()}, {"mpp": 3, "n_inliers": 2}, ALPHA
-        )
-    return models
+def missing_inputs(match: str, weights: Path, calibration: Path) -> list[Path]:
+    """Inputs of a demo run that are not on disk (checked before rendering and network inference)."""
+    raw = ("camera_intrinsics.npz", "mapx.npy", "mapy.npy", "keypoints.json")
+    needed = [st.raw_path(match, n) for n in raw] + [st.mot_path(match), st.clip_path(match)]
+    needed += [weights / "SV_kp", weights / "SV_lines", calibration]
+    return [p for p in needed if not p.is_file()]
 
 
 def pitch_polylines() -> list[np.ndarray]:
@@ -109,6 +117,84 @@ def draw_pitch_lines(img: np.ndarray, H: np.ndarray, colour: tuple[int, int, int
             if ok[run[0]] and len(run) > 1:
                 pts = np.round(uv[run] * 4).astype(np.int32).reshape(-1, 1, 2)
                 cv2.polylines(img, [pts], False, colour, thickness, cv2.LINE_AA, shift=2)
+
+
+def inside(uv: np.ndarray, size: tuple[int, int]) -> np.ndarray:
+    """Mask of the finite pixels (n, 2) that lie inside an image of ``size`` (width, height)."""
+    return np.isfinite(uv).all(axis=1) & (uv >= 0).all(axis=1) & (uv[:, 0] < size[0]) & (uv[:, 1] < size[1])
+
+
+def keypoint_rows(
+    frame: int,
+    names: list[str],
+    kp_xy: np.ndarray,
+    kp_view: np.ndarray,
+    size: tuple[int, int],
+    H_ref: np.ndarray,
+    H_ours: np.ndarray | None,
+) -> list[dict[str, Any]]:
+    """One row per annotated keypoint inside the view: error of the reference camera and of ours (None when
+    our camera abstains, ``H_ours`` None), in view pixels and in pitch metres, with the keypoint's group."""
+    groups, marked = st.keypoint_groups(kp_xy)
+    rows = []
+    for i in np.flatnonzero(inside(kp_view, size)):
+        row: dict[str, Any] = {"frame": frame, "keypoint": names[i], "group": str(groups[i]),
+                               "marked": bool(marked[i])}  # fmt: skip
+        for who, H in (("ref", H_ref), ("ours", H_ours)):
+            px = None if H is None else float(np.linalg.norm(hg.project(H, kp_xy[i : i + 1])[0] - kp_view[i]))
+            back = None if H is None else hg.backproject(H, kp_view[i : i + 1])[0][0]
+            row[f"{who}_px"] = px
+            row[f"{who}_m"] = None if back is None else float(np.linalg.norm(back - kp_xy[i]))
+        rows.append(row)
+    return rows
+
+
+def table(rows: list[dict[str, Any]]) -> pl.DataFrame:
+    """Rows → DataFrame with the schema inferred from every row: by default polars reads the first 100 rows
+    only and silently drops keys that first appear later (for example after abstained frames)."""
+    return pl.DataFrame(rows, infer_schema_length=None) if rows else pl.DataFrame()
+
+
+def stats(col: str, d: pl.DataFrame) -> dict[str, float] | None:
+    if d.is_empty() or col not in d.columns:
+        return None
+    v = d[col].drop_nulls().to_numpy()
+    return {"n": len(v), "p50": float(np.median(v)), "p90": float(np.quantile(v, 0.9))} if len(v) else None
+
+
+def keypoint_summary(kps: pl.DataFrame) -> dict[str, Any]:
+    """Keypoint errors of both cameras, over all keypoints in the views and per group."""
+
+    def one(d: pl.DataFrame) -> dict[str, Any]:
+        out: dict[str, Any] = {"n": d.height}
+        for who, label in (("ref", "reference"), ("ours", "ours")):
+            out |= {f"{label}_px": stats(f"{who}_px", d), f"{label}_m": stats(f"{who}_m", d)}
+        return out
+
+    summary = {"all": one(kps)}
+    if not kps.is_empty():
+        summary |= {g: one(kps.filter(pl.col("group") == g)) for g in sorted(kps["group"].unique().to_list())}
+    return summary
+
+
+def player_summary(players: pl.DataFrame) -> dict[str, Any] | None:
+    """Our positions against the reference camera's, over all player-frames and per half of the pitch."""
+    if players.is_empty():
+        return None
+
+    def one(d: pl.DataFrame) -> dict[str, Any]:
+        return {
+            "n": d.height,
+            "err_m": stats("err_m", d),
+            "p90_radius_m": stats("p90_radius_m", d),
+            "q_hat": stats("q", d),
+            "coverage": float(d["hit"].mean()) if d.height else None,
+        }
+
+    return one(players) | {
+        "near_half": one(players.filter(pl.col("y_ref") < 0)),
+        "far_half": one(players.filter(pl.col("y_ref") >= 0)),
+    }
 
 
 def detections_of(nets: Any, rgb: np.ndarray) -> dict[str, Any]:
@@ -139,14 +225,26 @@ def compose(view: np.ndarray, minimap: np.ndarray, caption: str) -> np.ndarray:
     left = cv2.resize(view, (round(view.shape[1] * h / view.shape[0]), h), interpolation=cv2.INTER_AREA)
     out = np.concatenate([left, minimap], axis=1)
     bar = np.full((34, out.shape[1], 3), 20, np.uint8)
-    cv2.putText(bar, caption, (12, 23), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (235, 235, 235), 1, cv2.LINE_AA)
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    (text_w, _), _ = cv2.getTextSize(caption, font, 0.6, 1)
+    scale = min(0.6, 0.6 * (out.shape[1] - 24) / max(text_w, 1))  # shrink a caption wider than the frame
+    cv2.putText(bar, caption, (12, 23), font, scale, (235, 235, 235), 1, cv2.LINE_AA)
     return np.concatenate([out, bar], axis=0)
 
 
 def write_gif(
-    frames_bgr: list[np.ndarray], path: Path, width: int, fps: float, max_bytes: int = 1_000_000
+    frames_bgr: list[np.ndarray],
+    path: Path,
+    width: int,
+    fps: float,
+    max_bytes: int = 1_000_000,
+    min_width: int = 160,
 ) -> int:
-    """Animated GIF (palette, optimised); halves the width until the file is under ``max_bytes``."""
+    """Animated GIF (palette, optimised); halves the width until the file is under ``max_bytes``.
+
+    ValueError, and no file written, when it is still larger at the narrowest width not below ``min_width``:
+    render fewer frames.
+    """
     while True:
         imgs = []
         for f in frames_bgr:
@@ -159,10 +257,15 @@ def write_gif(
         imgs[0].save(
             buf, format="GIF", save_all=True, append_images=imgs[1:], duration=duration, loop=0, optimize=True
         )
-        if buf.tell() <= max_bytes or width <= 160:
+        if buf.tell() <= max_bytes:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(buf.getvalue())
             return buf.tell()
+        if width // 2 < min_width:
+            raise ValueError(
+                f"a GIF of {len(frames_bgr)} frames is {buf.tell() / 1e3:.0f} kB at {width} px wide, over "
+                f"the {max_bytes / 1e3:.0f} kB cap: render fewer frames"
+            )
         width //= 2
 
 
@@ -180,26 +283,26 @@ def write_still(frame_bgr: np.ndarray, path: Path, width: int = 1280, quality: i
     return len(data)
 
 
-def dev_noise_params(dev_run: Path) -> NoiseParams:
-    """Median of the per-fold noise parameters fitted (without labels) on the SN-GSR dev clips."""
-    folds = json.loads((dev_run / "smoothing.json").read_text())["folds"].values()
-    keys = ("kappa2", "q_pan", "q_tilt", "q_logf")
-    return NoiseParams(**{k: float(np.median([f["params"][k] for f in folds])) for k in keys})
-
-
 @app.command()
 def main(
     match: Annotated[
         str, typer.Option(help="SoccerTrack v2 match with raw/, mot/ and its MOT clip on disk.")
-    ] = "117092",
+    ] = "117093",
     start: Annotated[int, typer.Option(help="First clip frame (0-based, 25 fps).")] = 0,
     frames: Annotated[int, typer.Option(help="Number of frames to render (network inference on each).")] = 10,
     step: Annotated[int, typer.Option(help="Clip frames between rendered frames.")] = 5,
     fps: Annotated[float, typer.Option(help="Frame rate of demo.mp4.")] = 5.0,
-    smooth: Annotated[bool, typer.Option(help="PTZ smoother with the dev noise parameters.")] = True,
+    smooth: Annotated[
+        bool, typer.Option(help="PTZ smoother with the dev noise parameters (else the per-frame camera).")
+    ] = True,
     device: Annotated[str, typer.Option(help="Torch device for PnLCalib.")] = "auto",
-    dev_run: Annotated[Path, typer.Option(help="Dev run with players.parquet and smoothing.json.")] = DEV_RUN,
-    show_reference: Annotated[bool, typer.Option(help="Also draw the reference camera's lines.")] = False,
+    calibration: Annotated[
+        Path,
+        typer.Option(help="Noise parameters and conformal models from the SN-GSR dev evaluation (JSON)."),
+    ] = dc.DEFAULT_PATH,
+    show_reference: Annotated[
+        bool, typer.Option(help="Also draw the reference camera's lines (cyan).")
+    ] = True,
     hfov: Annotated[tuple[float, float], typer.Option(help="Horizontal field of view range, degrees.")] = (
         25.0,
         45.0,
@@ -211,12 +314,29 @@ def main(
     still: Annotated[
         Path | None, typer.Option(help="Write the middle composite frame as a JPEG here.")
     ] = None,
-    gif: Annotated[Path | None, typer.Option(help="Write an animated GIF (< 1 MB) here.")] = None,
+    gif: Annotated[Path | None, typer.Option(help="Write an animated GIF (at most 1 MB) here.")] = None,
     gif_width: Annotated[int, typer.Option(help="GIF width before automatic shrinking.")] = 800,
 ) -> None:
+    t0 = time.perf_counter()
+    weights = data_dir() / "weights" / "pnlcalib"
+    missing = missing_inputs(match, weights, calibration)
+    if missing:
+        listing = "\n  ".join(map(str, missing))
+        hint = DOWNLOAD_HINT.format(match=match)
+        typer.echo(f"missing inputs, nothing was run:\n  {listing}\n{hint}", err=True)
+        raise typer.Exit(code=2)
+    camera = "ptz" if smooth else "none"
+    cal = dc.load(calibration).get(camera)
+    if cal is None:
+        typer.echo(f"{calibration} has no calibration for the {camera!r} camera", err=True)
+        raise typer.Exit(code=2)
+    digest = cal.provenance.get("smoother_config_digest")
+    if smooth and digest is not None and digest != SmootherConfig().digest():
+        typer.echo(f"warning: noise parameters fitted with smoother config {digest}, running with "
+                   f"{SmootherConfig().digest()}", err=True)  # fmt: skip
+
     from predfoot.keypoints.pnlcalib import PnLCalibNetworks
 
-    t0 = time.perf_counter()
     out = out or REPO_ROOT / "runs" / f"{datetime.now():%Y%m%d-%H%M%S}_{git_sha()}_demo"
     out.mkdir(parents=True, exist_ok=True)
     pano = vc.PanoramaCamera(st.load_fisheye(match), *st.load_rectify_maps(match))
@@ -227,9 +347,8 @@ def main(
     boxes = {f: mot.filter(pl.col("frame") == f) for f in idx}
     feet_video = {f: st.foot_points(b) for f, b in boxes.items()}
     feet_model = [hg.backproject(pano.homography(), pano.video_to_rectified(feet_video[f]))[0] for f in idx]
-    clip_fps = 25.0
     follow = vc.FollowConfig(hfov_deg=hfov, aim_offset_m=(0.0, aim_y))
-    phis = vc.follow_action(feet_model, centre, fps=clip_fps / step, config=follow)
+    phis = vc.follow_action(feet_model, centre, fps=CLIP_FPS / step, config=follow)
     views = [vc.VirtualView(phi) for phi in phis]
 
     cap = cv2.VideoCapture(str(st.clip_path(match)))
@@ -242,7 +361,6 @@ def main(
         rendered.append(vc.render(img, vc.remap_tables(view, pano)))
     cap.release()
 
-    weights = data_dir() / "weights" / "pnlcalib"
     nets = PnLCalibNetworks(weights / "SV_kp", weights / "SV_lines", device=device)
     t_net = time.perf_counter()
     dets = [detections_of(nets, cv2.cvtColor(img, cv2.COLOR_BGR2RGB)) for img in rendered]
@@ -256,40 +374,38 @@ def main(
                 xy, uv, np.random.default_rng(int(match) * 100_003 + f), weights=w, config=solver, lines=lines
             )[0]
         )
-    results, sources, smooth_info = raw, ["frame"] * len(raw), {"used": False}
+    # Per-frame camera: raw Laplace covariance, scored with the quantiles of the per-frame dev run.
+    results, sources = raw, ["frame"] * len(raw)
+    smooth_info: dict[str, Any] = {"used": False}
     if smooth:
-        params = dev_noise_params(dev_run)
-        sm, flags, _ = smooth_results(np.array(idx), raw, duplicate_mask(dets), SmootherConfig(), params)
-        results = sm
-        sources = ["smoother" if (flags.smoothed[k] or flags.repaired[k] or flags.filled[k])
-                   else "projected" if flags.projected[k] else "frame" for k in range(len(idx))]  # fmt: skip
+        assert cal.noise is not None  # checked when the calibration file is loaded
+        sm, flags, _ = smooth_results(np.array(idx), raw, duplicate_mask(dets), SmootherConfig(), cal.noise)
+        results, sources = sm, dc.cov_sources(flags)
         smooth_info = {
             "used": True,
-            "params": params.to_dict(),
-            "params_from": str(dev_run / "smoothing.json") + " (median of the six fold fits, not refitted)",
+            "params": cal.noise.to_dict(),
             "flags": {name: np.asarray(getattr(flags, name), dtype=bool).tolist() for name in FLAG_NAMES},
-        }  # fmt: skip
-    models = fit_conformal(dev_run / "players.parquet")
+        }
 
     player_rows: list[dict[str, Any]] = []
     kp_rows: list[dict[str, Any]] = []
     composites = []
     for k, (f, view, img, res) in enumerate(zip(idx, views, rendered, results, strict=True)):
         H_ref = view.homography(centre)
+        H_ours = res.H if res.ok and res.H is not None and res.cov_theta is not None else None
         feet = vc.video_to_view(feet_video[f], view, pano)
         ids = boxes[f]["track_id"].to_numpy()
-        in_view = np.isfinite(feet).all(axis=1) & (feet[:, 0] >= 0) & (feet[:, 0] < view.size[0])
-        in_view &= (feet[:, 1] >= 0) & (feet[:, 1] < view.size[1])
+        in_view = inside(feet, view.size)
         ref_xy = hg.backproject(H_ref, feet)[0]
         locs: list[Localization] = []
         canvas = img.copy()
         if show_reference:
             draw_pitch_lines(canvas, H_ref, REFERENCE_BGR, 2)
-        if res.ok and res.H is not None and res.cov_theta is not None:
-            draw_pitch_lines(canvas, res.H, OURS_BGR, 2)
-            pred, cov, valid = position_covariance(res.H, res.cov_theta, feet[in_view])
-            mpp = np.sqrt(np.abs(np.linalg.det(hg.jacobian_backproject_uv(res.H, feet[in_view]))))
-            model = models.get(sources[k], models["frame"])
+        if H_ours is not None and res.cov_theta is not None:
+            draw_pitch_lines(canvas, H_ours, OURS_BGR, 2)
+            pred, cov, valid = position_covariance(H_ours, res.cov_theta, feet[in_view])
+            mpp = np.sqrt(np.abs(np.linalg.det(hg.jacobian_backproject_uv(H_ours, feet[in_view]))))
+            model = cal.model_for(sources[k])
             qhat = model.quantile_for({"mpp": mpp, "n_inliers": np.full(len(mpp), float(res.n_inliers))})
             for j, i in enumerate(np.flatnonzero(in_view)):
                 if not valid[j]:
@@ -312,30 +428,21 @@ def main(
             for i in np.flatnonzero(in_view):
                 cv2.circle(canvas, tuple(np.round(feet[i]).astype(int)), 9, ABSTAIN_BGR, 2, cv2.LINE_AA)
         kp_view = vc.video_to_view(kp_uv, view, pano)
-        seen = np.isfinite(kp_view).all(axis=1) & (kp_view[:, 0] >= 0) & (kp_view[:, 0] < view.size[0])
-        seen &= (kp_view[:, 1] >= 0) & (kp_view[:, 1] < view.size[1])
-        for i in np.flatnonzero(seen):
-            row: dict[str, Any] = {"frame": f, "keypoint": names[i], "ref_px": float(np.linalg.norm(
-                hg.project(H_ref, kp_xy[i : i + 1])[0] - kp_view[i])), "ref_m": float(np.linalg.norm(
-                hg.backproject(H_ref, kp_view[i : i + 1])[0][0] - kp_xy[i]))}  # fmt: skip
-            if res.ok and res.H is not None:
-                row["ours_px"] = float(np.linalg.norm(hg.project(res.H, kp_xy[i : i + 1])[0] - kp_view[i]))
-                row["ours_m"] = float(
-                    np.linalg.norm(hg.backproject(res.H, kp_view[i : i + 1])[0][0] - kp_xy[i])
-                )
-            kp_rows.append(row)
+        kp_rows += keypoint_rows(f, names, kp_xy, kp_view, view.size, H_ref, H_ours)
         corners = None
-        if res.ok and res.H is not None:
+        if H_ours is not None:
             w_, h_ = view.size
             img_corners = np.array([[0, 0], [w_ - 1, 0], [w_ - 1, h_ - 1], [0, h_ - 1]], dtype=np.float64)
-            c_xy, c_ok = hg.backproject(res.H, img_corners)
+            c_xy, c_ok = hg.backproject(H_ours, img_corners)
             corners = np.clip(c_xy, [-60, -45], [60, 39]) if c_ok.all() else None
-        tf = TrackingFrame(frame=f, players=tuple(locs), timestamp=f"{f / clip_fps:5.1f} s", corners=corners,
+        tf = TrackingFrame(frame=f, players=tuple(locs), timestamp=f"{f / CLIP_FPS:5.1f} s", corners=corners,
                            abstain=not res.ok)  # fmt: skip
-        hfov = np.degrees(2 * np.arctan(view.size[0] / 2 / np.exp(view.phi[3])))
+        hfov_now = np.degrees(2 * np.arctan(view.size[0] / 2 / np.exp(view.phi[3])))
         caption = (
-            f"{CREDIT} · frame {f} · hfov {hfov:.0f} deg · predfoot camera (white lines), feet coloured by"
-            f" 90 % radius: <{RADIUS_BINS_M[0]:g} m, <{RADIUS_BINS_M[1]:g} m, wider; grey = abstained"
+            f"{CREDIT} · frame {f} · hfov {hfov_now:.0f} deg · magenta: predfoot camera"
+            + (" · cyan: reference camera (released calibration)" if show_reference else "")
+            + f" · feet by 90 % radius: <{RADIUS_BINS_M[0]:g} m, <{RADIUS_BINS_M[1]:g} m, wider"
+            + "; grey = abstained"
         )
         composites.append(compose(canvas, minimap_rgb(tf, 720), caption))
 
@@ -344,42 +451,41 @@ def main(
     for c in composites:
         writer.write(c)
     writer.release()
-    players = pl.DataFrame(player_rows) if player_rows else pl.DataFrame()
-    kps = pl.DataFrame(kp_rows) if kp_rows else pl.DataFrame()
+    players, kps = table(player_rows), table(kp_rows)
     players.write_parquet(out / "players.parquet")
     kps.write_parquet(out / "keypoints.parquet")
-
-    def stats(col: str, d: pl.DataFrame) -> dict[str, float] | None:
-        if d.is_empty() or col not in d.columns:
-            return None
-        v = d[col].drop_nulls().to_numpy()
-        return (
-            {"n": len(v), "p50": float(np.median(v)), "p90": float(np.quantile(v, 0.9))} if len(v) else None
-        )
 
     metrics = {
         "match": match, "frames": idx, "step": step, "commit": git_sha(), "follow": follow.__dict__,
         "calibrated": [r.ok for r in results], "raw_calibrated": [r.ok for r in raw],
         "n_inliers": [r.n_inliers for r in results], "rms_px": [r.rms_px for r in raw],
-        "hfov_deg": [float(np.degrees(2 * np.arctan(960 / np.exp(v.phi[3])))) for v in views],
+        "hfov_deg": [float(np.degrees(2 * np.arctan(v.size[0] / 2 / np.exp(v.phi[3])))) for v in views],
         "smoothing": smooth_info, "cov_sources": sources,
-        "conformal": {s: json.loads(m.to_json()) for s, m in models.items()},
-        "players_vs_reference_camera": {
-            "err_m": stats("err_m", players), "p90_radius_m": stats("p90_radius_m", players),
-            "coverage": float(players["hit"].mean()) if not players.is_empty() else None,
+        "calibration": {
+            "file": str(calibration), "camera": camera, "provenance": cal.provenance,
+            "models": {s: json.loads(m.to_json()) for s, m in cal.models.items()},
         },
-        "keypoints_in_views": {"reference_px": stats("ref_px", kps), "reference_m": stats("ref_m", kps),
-                               "ours_px": stats("ours_px", kps), "ours_m": stats("ours_m", kps)},
+        "players_vs_reference_camera": player_summary(players),
+        "keypoints_in_views": keypoint_summary(kps),
+        "notes": ["the reference camera was fitted by the provider on the annotated keypoints (in-sample)",
+                  "foot points are the ground-truth MOT boxes, not detections"],
         "network_seconds": t_net, "total_seconds": time.perf_counter() - t0,
     }  # fmt: skip
     (out / "metrics.json").write_text(json.dumps(metrics, indent=2, default=float))
     if still is not None:
         typer.echo(f"still: {still} ({write_still(composites[len(composites) // 2], still) / 1e3:.0f} kB)")
+    gif_error = None
     if gif is not None:
-        typer.echo(f"gif: {gif} ({write_gif(composites, gif, gif_width, fps) / 1e3:.0f} kB)")
+        try:
+            typer.echo(f"gif: {gif} ({write_gif(composites, gif, gif_width, fps) / 1e3:.0f} kB)")
+        except ValueError as err:
+            gif_error = str(err)
     summary_keys = ("calibrated", "players_vs_reference_camera", "keypoints_in_views", "network_seconds")
     typer.echo(json.dumps({k: metrics[k] for k in summary_keys}, indent=2))
     typer.echo(f"wrote {out}")
+    if gif_error is not None:
+        typer.echo(f"gif not written: {gif_error}", err=True)
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":
