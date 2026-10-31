@@ -167,6 +167,31 @@ def test_metrics_count_requests_by_route(client):
     assert 'predfoot_http_request_duration_seconds_count{route="/healthz"} 1.0' in text
 
 
+def test_made_up_methods_share_one_metrics_label(client):
+    for i in range(3):  # any token is a valid HTTP method: each one must not open a new series
+        client.request(f"M{i:05d}", "/no/such/page")
+    text = client.get("/metrics").text
+    assert 'predfoot_http_requests_total{method="other",route="other",status="404"} 3.0' in text
+    assert 'method="M0' not in text
+
+
+def test_routes_are_matched_under_a_root_path():
+    # Behind a proxy that mounts the API under /predfoot, uvicorn --root-path puts the prefix in the path.
+    client = TestClient(create_app(detector=SyntheticDetector(CAM)), root_path="/predfoot")
+    noise = np.random.default_rng(0).integers(0, 256, size=(576, 1024, 3), dtype=np.uint8)
+    ok, buf = cv2.imencode(".png", noise)
+    assert ok
+    assert len(buf) > MAX_JSON_BYTES  # an upload above the limit of the JSON endpoints
+    files = {"image": ("f.png", buf.tobytes(), "image/png")}
+    r = client.post("/predfoot/v1/calibrate", files=files)
+    assert r.status_code == 200, r.text
+    # with a trailing slash the router redirects; the size limit is still the one of /v1/calibrate
+    assert client.post("/predfoot/v1/calibrate/", files=files, follow_redirects=False).status_code == 307
+    text = client.get("/predfoot/metrics").text
+    assert 'predfoot_http_requests_total{method="POST",route="/v1/calibrate",status="200"} 1.0' in text
+    assert 'predfoot_http_requests_total{method="POST",route="/v1/calibrate",status="307"} 1.0' in text
+
+
 def test_calibrate_returns_a_camera_that_localize_accepts():
     detector = SyntheticDetector(CAM)
     client = TestClient(create_app(detector=detector))
