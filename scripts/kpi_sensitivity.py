@@ -385,6 +385,9 @@ def summary_lines(comp: pl.DataFrame) -> list[str]:
     mid_word = "more" if worse else "less"
     control = comp.filter((pl.col("baseline") == "reference") & (pl.col("condition") == "control"))
     passed = [KPI_LABELS[r["kpi"]] for r in control.iter_rows(named=True) if r["mape"] < G4_MAPE_PCT]
+    explosive = ("explosive_to_hsr", "explosive_to_sprint")
+    max_bias = max(abs(r["bias"]) for r in control.iter_rows(named=True) if r["kpi"] not in explosive)
+    mean_expl = cell(comp, "reference", "control", "explosive_to_hsr", "ref_mean")
     failed = [
         f"{KPI_LABELS[r['kpi']]} {fmt(r['mape'])} %"
         for r in control.iter_rows(named=True)
@@ -393,10 +396,19 @@ def summary_lines(comp: pl.DataFrame) -> list[str]:
     return [
         f"- **Gate G4** (clean data, 10 fps vs 25 Hz, MAPE < {G4_MAPE_PCT:g} %): passed by "
         f"{', '.join(passed)}; "
-        f"not passed by {', '.join(failed) if failed else 'none'}. The remaining differences come from the "
-        "sampling rate and from how much the Savitzky-Golay filter flattens speed peaks at each rate, not "
-        "from "
-        "noise: speed-threshold KPIs are sensitive to the processing itself.",
+        f"not passed by {', '.join(failed) if failed else 'none'}. Totals stay close (bias within "
+        f"±{max_bias:.2f} % for every KPI except explosive accelerations): the misses come from "
+        "discretisation at "
+        "thresholds, where an effort near the minimum duration or an acceleration near 3 m/s² flips "
+        "between the "
+        f"two pipelines, on small per-player counts ({mean_expl:.1f} explosive accelerations to HSR per "
+        "player-match on average).",
+        f"- **Smoothing** is the main lever: with i.i.d. σ = 0.2 m, the distance error is "
+        f"{m('iid_0.2', 'distance_m', base='control')} % with the 1 s window and "
+        f"{m('smooth_2s_iid_0.2', 'distance_m', base='smooth_2s')} % with 2 s, but on clean data the 2 s "
+        "window "
+        f"already moves explosive accelerations to HSR by {m('smooth_2s', 'explosive_to_hsr', 'bias')} % "
+        "(definitions and noise robustness pull in opposite directions).",
         f"- **Distance**: MAPE {m('iid_0.1', 'distance_m')} % for i.i.d. σ = 0.1 m and "
         f"{m('iid_0.2', 'distance_m')} % for σ = 0.2 m, an overestimate (bias "
         f"{m('iid_0.2', 'distance_m', 'bias')} % at 0.2 m). At σ = 0.2 m, slow errors (AR(1) ρ = 0.99, about "
