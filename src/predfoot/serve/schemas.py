@@ -89,11 +89,18 @@ class LocalizeRequest(BaseModel):
         "χ²₂(0.90).",
     )
     feet: list[Foot] = Field(max_length=MAX_FEET)
+    n_inliers: int | None = Field(
+        default=None,
+        ge=0,
+        description="RANSAC inliers of the calibration (the n_inliers of /v1/calibrate). Required when the "
+        "server's conformal model bins on them.",
+    )
     conformal_quantile: PositiveFloat | None = Field(
         default=None,
-        description="Threshold q̂ of the 90 % regions {e : eᵀ Σp⁻¹ e ≤ q̂}, fitted by conformal calibration "
-        "on held-out games. Default: the uncalibrated χ²₂(0.90) = 4.605, which covers far less than 90 % on "
-        "real broadcast frames.",
+        description="One threshold q̂ for the 90 % regions {e : eᵀ Σp⁻¹ e ≤ q̂} of all feet, fitted by "
+        "conformal calibration on held-out games; it overrides the server's conformal model. Default: the "
+        "server's Mondrian model (q̂ per foot, from its bin) when it has one, else the uncalibrated Laplace "
+        "threshold, which covers far less than 90 % on real broadcast frames.",
     )
 
     @field_validator("homography")
@@ -123,11 +130,15 @@ class Position(BaseModel):
         description="Calibrated 2 × 2 covariance (m²): its χ²₂(0.90) = 4.605 ellipse is the 90 % region."
     )
     p90_radius_m: float | None = Field(description="Radius of the circle that contains the 90 % ellipse.")
+    quantile: float | None = Field(description="Threshold q of this foot's region {e : eᵀ Σp⁻¹ e ≤ q}.")
 
 
 class LocalizeResponse(BaseModel):
-    quantile: float = Field(description="Threshold q of the regions {e : eᵀ Σp⁻¹ e ≤ q}.")
-    quantile_source: Literal["conformal", "laplace_f", "laplace_chi2"]
+    quantile_source: Literal["conformal", "mondrian", "laplace_f", "laplace_chi2"] = Field(
+        description="Where the thresholds come from: conformal, the request's conformal_quantile; mondrian, "
+        "the server's conformal model (one q̂ per foot, from its bin); laplace_f and laplace_chi2, the "
+        "uncalibrated Laplace threshold with and without dof."
+    )
     positions: list[Position]
 
 

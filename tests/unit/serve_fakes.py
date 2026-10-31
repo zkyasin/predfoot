@@ -11,6 +11,7 @@ from predfoot.geometry import homography as hg
 from predfoot.geometry.camera import Camera, look_at
 from predfoot.geometry.pitch import pnlcalib_keypoints
 from predfoot.keypoints.pnlcalib import LineEnds
+from predfoot.uncertainty.conformal import MondrianConformal
 
 
 def broadcast_camera(width: int = 1920, height: int = 1080) -> Camera:
@@ -69,3 +70,14 @@ def jpeg_with_orientation(width: int, height: int, orientation: int) -> bytes:
     buf = io.BytesIO()
     Image.fromarray(np.zeros((height, width, 3), dtype=np.uint8)).save(buf, "JPEG", exif=exif.tobytes())
     return buf.getvalue()
+
+
+def mondrian_model() -> MondrianConformal:
+    """A Mondrian model on metres per pixel at the feet × RANSAC inliers. The test players (5, -10), (20, 5),
+    (30, 15), (45, -30) seen by :func:`broadcast_camera` have 0.043, 0.066, 0.083 and 0.028 m/px."""
+    return MondrianConformal(
+        alpha=0.1,
+        edges={"mpp": [0.05, 0.075], "n_inliers": [20.0]},
+        quantiles={"0-1": 30.0, "1-1": 60.0, "2-1": 120.0, "1-0": 70.0},
+        pooled=50.0,
+    )

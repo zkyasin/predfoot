@@ -1,5 +1,6 @@
 """Numpy cores of the HTTP API: localisation, upload checks, calibration of detections, lazy model loading."""
 
+import dataclasses
 import io
 import threading
 import time
@@ -24,13 +25,21 @@ from predfoot.serve.calibrate import (
     solver_config_for,
 )
 from predfoot.serve.images import ImageRejected, decode_rgb, inspect_image
-from predfoot.serve.localize import localize_feet, region_threshold
+from predfoot.serve.localize import (
+    check_conformal,
+    load_conformal,
+    localize_feet,
+    mondrian_quantiles,
+    region_threshold,
+)
+from predfoot.uncertainty.conformal import MondrianConformal
 from predfoot.uncertainty.delta import CHI2_2_90, position_covariance
 from tests.unit.serve_fakes import (
     SyntheticDetector,
     broadcast_camera,
     jpeg_with_orientation,
     laplace_covariance,
+    mondrian_model,
 )
 
 PLAYERS = np.array([[5.0, -10.0], [20.0, 5.0], [30.0, 15.0], [45.0, -30.0]])
@@ -77,6 +86,49 @@ def test_same_definitions_as_the_pipeline_stage():
         np.testing.assert_allclose(out.cov[i], loc.cov_xy, rtol=1e-12)
         assert out.radius[i] == pytest.approx(loc.p90_radius_m, rel=1e-12)
     assert stages.calibrate(ClipFrame(frame=0)).status is CalibStatus.FEW_POINTS  # no detections, no camera
+
+
+def test_mondrian_regions_are_those_of_the_pipeline_stage():
+    cam = broadcast_camera()
+    cov_theta = laplace_covariance(cam)
+    uv = hg.project(cam.H, PLAYERS)
+    model = mondrian_model()
+    stages = real_stages({}, conformal=model, version="test")
+    # bins by metres per pixel (0, 1, 2, 0) and inliers; empty bins take the pooled 50
+    for n_inliers, expected in ((25, [30.0, 60.0, 120.0, 30.0]), (10, [50.0, 70.0, 50.0, 50.0])):
+        q = mondrian_quantiles(model, cam.H, uv, n_inliers)
+        np.testing.assert_array_equal(q, expected)
+        out = localize_feet(cam.H, cov_theta, uv, q=q)
+        calib = CalibResult(CalibStatus.OK, H=cam.H, cov_theta=cov_theta, n_inliers=n_inliers)
+        locs = stages.localize(calib, [FootObs(track_id=i, uv=p) for i, p in enumerate(uv)])
+        for i, loc in enumerate(locs):
+            np.testing.assert_allclose(out.xy[i], loc.xy, rtol=1e-12)
+            np.testing.assert_allclose(out.cov[i], loc.cov_xy, rtol=1e-12)
+            assert out.radius[i] == pytest.approx(loc.p90_radius_m, rel=1e-12)
+
+
+def test_mondrian_bins_on_inliers_need_them():
+    cam = broadcast_camera()
+    uv = hg.project(cam.H, PLAYERS)
+    with pytest.raises(ValueError, match="n_inliers"):
+        mondrian_quantiles(mondrian_model(), cam.H, uv, None)
+    by_distance = MondrianConformal(edges={"mpp": [0.05]}, quantiles={"0": 10.0, "1": 20.0}, pooled=15.0)
+    np.testing.assert_array_equal(mondrian_quantiles(by_distance, cam.H, uv, None), [10.0, 20.0, 20.0, 10.0])
+    assert mondrian_quantiles(by_distance, cam.H, np.zeros((0, 2)), None).shape == (0,)
+
+
+def test_served_conformal_models_give_90_percent_regions_from_known_features(tmp_path):
+    check_conformal(mondrian_model())
+    with pytest.raises(ValueError, match="80%"):
+        check_conformal(dataclasses.replace(mondrian_model(), alpha=0.2))
+    with pytest.raises(ValueError, match="zoom"):
+        check_conformal(dataclasses.replace(mondrian_model(), edges={"zoom": [1.5]}))
+    path = tmp_path / "conformal.json"
+    path.write_text(mondrian_model().to_json())
+    assert load_conformal(path) == mondrian_model()
+    path.write_text("{}")
+    with pytest.raises(ValueError, match="not a conformal model"):
+        load_conformal(path)
 
 
 def test_pixels_above_the_horizon_have_no_position():

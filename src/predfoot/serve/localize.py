@@ -4,21 +4,32 @@ The definitions are those of the real pipeline stages (:mod:`predfoot.pipeline.r
 Σp = Jθ Σθ Jθᵀ (+ Ju Σu Juᵀ) from :func:`predfoot.uncertainty.delta.position_covariance`; for a region
 threshold q, the calibrated covariance is (q / χ²₂(0.90)) · Σp, so that its χ²₂(0.90) ellipse is the region
 {e : eᵀ Σp⁻¹ e ≤ q}, and ``p90_radius_m`` = √(q · λmax(Σp)) is the radius of the circle that contains it.
+
+With a Mondrian conformal model, as ``real_stages(conformal=...)`` uses, each foot gets the q̂ of its bin
+(metres per pixel at the feet × RANSAC inliers): :func:`mondrian_quantiles`.
 """
 
 from __future__ import annotations
 
+import json
+import math
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
+from predfoot.geometry import homography as hg
+from predfoot.uncertainty.conformal import MondrianConformal
 from predfoot.uncertainty.delta import CHI2_2_90, position_covariance, region_quantile
 
 FloatArray = NDArray[np.float64]
 BoolArray = NDArray[np.bool_]
-QuantileSource = Literal["conformal", "laplace_f", "laplace_chi2"]
+QuantileSource = Literal["conformal", "mondrian", "laplace_f", "laplace_chi2"]
+#: Mondrian bin features that /v1/localize computes as pipeline.real and scripts/eval_dev.py do: metres per
+#: pixel at the feet (from H and the foot pixel), RANSAC inliers of the calibration (from the request).
+MONDRIAN_FEATURES = ("mpp", "n_inliers")
 
 
 @dataclass(frozen=True)
@@ -48,6 +59,56 @@ def region_threshold(
     if dof is not None:
         return region_quantile(2, 0.9, dof), "laplace_f"
     return CHI2_2_90, "laplace_chi2"
+
+
+def check_conformal(model: MondrianConformal) -> None:
+    """Raises ValueError unless ``model`` gives 90 % regions from features that /v1/localize can compute."""
+    if not math.isclose(model.alpha, 0.1):
+        level = f"{1 - model.alpha:.0%}"
+        raise ValueError(f"the conformal model is fitted for {level} regions, the API serves 90 % regions")
+    unknown = sorted(set(model.edges) - set(MONDRIAN_FEATURES))
+    if unknown:
+        known = list(MONDRIAN_FEATURES)
+        raise ValueError(f"the conformal model bins on {unknown}; /v1/localize only computes {known}")
+
+
+def load_conformal(path: Path) -> MondrianConformal:
+    """A Mondrian conformal model saved with :meth:`MondrianConformal.to_json`, checked by
+    :func:`check_conformal`; ValueError when the file is not one."""
+    try:
+        model = MondrianConformal.from_json(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, KeyError, TypeError) as err:
+        raise ValueError(f"{path} is not a conformal model written by MondrianConformal.to_json()") from err
+    check_conformal(model)
+    return model
+
+
+def metres_per_pixel(H: ArrayLike, uv: ArrayLike) -> FloatArray:
+    """√|det ∂(x, y)/∂(u, v)| at foot pixels ``uv`` (n, 2): the "mpp" feature of the Mondrian bins."""
+    uv = np.asarray(uv, dtype=np.float64).reshape(-1, 2)
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):  # NaN above the horizon
+        return np.sqrt(np.abs(np.linalg.det(hg.jacobian_backproject_uv(H, uv))))
+
+
+def mondrian_quantiles(
+    model: MondrianConformal, H: ArrayLike, uv: ArrayLike, n_inliers: int | None
+) -> FloatArray:
+    """q̂ of each foot pixel ``uv`` (n, 2) from its Mondrian bin, or the pooled q̂, as pipeline.real does.
+
+    Raises ValueError when the model bins on the RANSAC inliers and ``n_inliers`` is None.
+    """
+    uv = np.asarray(uv, dtype=np.float64).reshape(-1, 2)
+    if len(uv) == 0:
+        return np.zeros(0)
+    features: dict[str, ArrayLike] = {"mpp": metres_per_pixel(H, uv)}
+    if "n_inliers" in model.edges:
+        if n_inliers is None:
+            raise ValueError(
+                "n_inliers is required: the conformal model of this server bins on the RANSAC inliers "
+                "(pass the n_inliers of /v1/calibrate)"
+            )
+        features["n_inliers"] = np.full(len(uv), float(n_inliers))
+    return np.asarray(model.quantile_for(features), dtype=np.float64)
 
 
 def localize_feet(

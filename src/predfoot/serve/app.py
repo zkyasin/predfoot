@@ -16,6 +16,7 @@ calibrations hold no thread, so /healthz, /metrics and /v1/localize keep answeri
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import math
 import threading
@@ -45,7 +46,13 @@ from predfoot.serve.calibrate import (
     load_pnlcalib,
 )
 from predfoot.serve.images import MAX_UPLOAD_BYTES, ImageRejected, decode_rgb, inspect_image
-from predfoot.serve.localize import localize_feet, region_threshold
+from predfoot.serve.localize import (
+    QuantileSource,
+    check_conformal,
+    localize_feet,
+    mondrian_quantiles,
+    region_threshold,
+)
 from predfoot.serve.middleware import (
     PROMETHEUS_CONTENT_TYPE,
     BodySizeLimitMiddleware,
@@ -61,6 +68,7 @@ from predfoot.serve.schemas import (
     LocalizeResponse,
     Position,
 )
+from predfoot.uncertainty.conformal import MondrianConformal
 
 log = logging.getLogger(__name__)
 
@@ -93,16 +101,22 @@ def create_app(
     max_upload_bytes: int = MAX_UPLOAD_BYTES,
     preload: bool = False,
     max_pending_calibrations: int = MAX_PENDING_CALIBRATIONS,
+    conformal: MondrianConformal | None = None,
 ) -> FastAPI:
     """Build the API.
 
     ``detector`` replaces the PnLCalib networks (tests); otherwise they are loaded from ``weights_dir``
     (default ``PREDFOOT_DATA_DIR/weights/pnlcalib``) on ``device`` at the first /v1/calibrate request, or at
     start-up with ``preload``. Beyond ``max_pending_calibrations`` calibrations in progress, /v1/calibrate
-    answers 503 with Retry-After.
+    answers 503 with Retry-After. With ``conformal``, a Mondrian model fitted on held-out games (as given to
+    ``real_stages``), /v1/localize gives each foot the calibrated region of its bin.
     """
     if max_pending_calibrations < 1:
         raise ValueError("max_pending_calibrations must be at least 1")
+    conformal_version = None
+    if conformal is not None:
+        check_conformal(conformal)
+        conformal_version = f"mondrian@{hashlib.sha256(conformal.to_json().encode()).hexdigest()[:12]}"
     networks = LazyDetector(
         (lambda: detector) if detector is not None else (lambda: load_pnlcalib(weights_dir, device))
     )
@@ -136,15 +150,26 @@ def create_app(
     async def healthz() -> Health:  # async: answers on the event loop, never waits for a worker thread
         version = networks.version
         models = {} if version is None else {"pnlcalib": version}
+        if conformal_version is not None:
+            models["conformal"] = conformal_version
         return Health(status="ok", version=__version__, models=models)
 
     @app.post("/v1/localize")
     def localize(request: LocalizeRequest) -> LocalizeResponse:
         """Pitch positions of foot pixels with their calibrated covariances and 90 % radii (null above the
         horizon)."""
-        q, source = region_threshold(request.conformal_quantile, request.dof)
         feet = request.feet
         uv = np.array([[f.u, f.v] for f in feet], dtype=np.float64).reshape(-1, 2)
+        q: float | np.ndarray
+        source: QuantileSource
+        if request.conformal_quantile is None and conformal is not None:
+            try:
+                q = mondrian_quantiles(conformal, request.homography, uv, request.n_inliers)
+            except ValueError as err:
+                raise HTTPException(422, str(err)) from err
+            source = "mondrian"
+        else:
+            q, source = region_threshold(request.conformal_quantile, request.dof)
         cov_uv = None
         if any(f.cov_uv is not None for f in feet):
             cov_uv = np.array([np.zeros((2, 2)) if f.cov_uv is None else f.cov_uv for f in feet])
@@ -156,12 +181,15 @@ def create_app(
                 y=float(out.xy[i, 1]),
                 pos_cov_m2=out.cov[i].tolist(),
                 p90_radius_m=float(out.radius[i]),
+                quantile=float(out.q[i]),
             )
             if out.valid[i]
-            else Position(track_id=f.track_id, x=None, y=None, pos_cov_m2=None, p90_radius_m=None)
+            else Position(
+                track_id=f.track_id, x=None, y=None, pos_cov_m2=None, p90_radius_m=None, quantile=None
+            )
             for i, f in enumerate(feet)
         ]
-        return LocalizeResponse(quantile=q, quantile_source=source, positions=positions)
+        return LocalizeResponse(quantile_source=source, positions=positions)
 
     def calibrate_upload(image: UploadFile, admitted: float) -> CalibrateResponse:
         """The work of /v1/calibrate, on a calibration worker: read, check and decode the upload, detect,

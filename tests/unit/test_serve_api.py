@@ -12,9 +12,10 @@ pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient
 
 from predfoot import __version__
-from predfoot.contracts import KeypointObs
+from predfoot.contracts import CalibResult, CalibStatus, FootObs, KeypointObs
 from predfoot.geometry import homography as hg
 from predfoot.io.skillcorner import CORNER_KEYS, image_corners_projection
+from predfoot.pipeline.real import real_stages
 from predfoot.serve.app import MAX_JSON_BYTES, create_app
 from predfoot.serve.schemas import MAX_FEET
 from predfoot.uncertainty.delta import CHI2_2_90, region_quantile
@@ -23,6 +24,7 @@ from tests.unit.serve_fakes import (
     broadcast_camera,
     jpeg_with_orientation,
     laplace_covariance,
+    mondrian_model,
 )
 
 PLAYERS = np.array([[5.0, -10.0], [20.0, 5.0], [30.0, 15.0], [45.0, -30.0]])
@@ -60,8 +62,8 @@ def test_localize_places_feet_on_the_pitch(client):
     r = client.post("/v1/localize", json=localize_body())
     assert r.status_code == 200
     body = r.json()
-    assert body["quantile"] == pytest.approx(CHI2_2_90)
     assert body["quantile_source"] == "laplace_chi2"
+    assert [p["quantile"] for p in body["positions"]] == pytest.approx([CHI2_2_90] * len(PLAYERS))
     got = np.array([[p["x"], p["y"]] for p in body["positions"]])
     assert np.abs(got - PLAYERS).max() < 0.01  # within 1 cm of the geometry
     for i, p in enumerate(body["positions"]):
@@ -83,7 +85,7 @@ def test_localize_scales_regions_with_the_quantile(client):
         np.testing.assert_allclose(np.array(w["pos_cov_m2"]), 4 * np.array(b["pos_cov_m2"]))
     with_dof = client.post("/v1/localize", json=localize_body(dof=12.0)).json()
     assert with_dof["quantile_source"] == "laplace_f"
-    assert with_dof["quantile"] == pytest.approx(region_quantile(2, 0.9, 12.0))
+    assert with_dof["positions"][0]["quantile"] == pytest.approx(region_quantile(2, 0.9, 12.0))
 
 
 def test_localize_adds_foot_pixel_noise(client):
@@ -95,13 +97,46 @@ def test_localize_adds_foot_pixel_noise(client):
     assert got[1]["p90_radius_m"] == pytest.approx(base[1]["p90_radius_m"])  # others stay exact
 
 
+def test_a_server_conformal_model_gives_each_foot_the_region_of_its_bin():
+    model = mondrian_model()
+    client = TestClient(create_app(detector=SyntheticDetector(CAM), conformal=model))
+    assert client.get("/healthz").json()["models"]["conformal"].startswith("mondrian@")
+    r = client.post("/v1/localize", json=localize_body(n_inliers=25))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["quantile_source"] == "mondrian"
+    assert [p["quantile"] for p in body["positions"]] == [30.0, 60.0, 120.0, 30.0]
+    # the regions of the real pipeline stages with the same model, camera and feet
+    calib = CalibResult(CalibStatus.OK, H=CAM.H, cov_theta=laplace_covariance(CAM), n_inliers=25)
+    feet = [FootObs(track_id=i, uv=p) for i, p in enumerate(hg.project(CAM.H, PLAYERS))]
+    locs = real_stages({}, conformal=model, version="test").localize(calib, feet)
+    for p, loc in zip(body["positions"], locs, strict=True):
+        np.testing.assert_allclose(p["pos_cov_m2"], loc.cov_xy, rtol=1e-12)
+        assert p["p90_radius_m"] == pytest.approx(loc.p90_radius_m, rel=1e-12)
+    # the bins need the inliers of the calibration
+    missing = client.post("/v1/localize", json=localize_body())
+    assert missing.status_code == 422
+    assert "n_inliers" in missing.json()["detail"]
+    # one explicit quantile overrides the model
+    explicit = client.post("/v1/localize", json=localize_body(conformal_quantile=11.0)).json()
+    assert explicit["quantile_source"] == "conformal"
+    assert {p["quantile"] for p in explicit["positions"]} == {11.0}
+
+
 def test_feet_above_the_horizon_get_null_positions(client):
     g = np.linalg.inv(CAM.H)[2]
     v_horizon = -(g[0] * 960.0 + g[2]) / g[1]
     body = localize_body()
     body["feet"].append({"track_id": 99, "u": 960.0, "v": float(v_horizon - 40.0)})
     positions = client.post("/v1/localize", json=body).json()["positions"]
-    assert positions[-1] == {"track_id": 99, "x": None, "y": None, "pos_cov_m2": None, "p90_radius_m": None}
+    assert positions[-1] == {
+        "track_id": 99,
+        "x": None,
+        "y": None,
+        "pos_cov_m2": None,
+        "p90_radius_m": None,
+        "quantile": None,
+    }
     assert all(p["x"] is not None for p in positions[:-1])
 
 
@@ -111,7 +146,14 @@ def test_regions_that_overflow_give_null_rows(client):
     r = client.post("/v1/localize", json=body)
     assert r.status_code == 200, r.text
     positions = r.json()["positions"]
-    assert positions[0] == {"track_id": 0, "x": None, "y": None, "pos_cov_m2": None, "p90_radius_m": None}
+    assert positions[0] == {
+        "track_id": 0,
+        "x": None,
+        "y": None,
+        "pos_cov_m2": None,
+        "p90_radius_m": None,
+        "quantile": None,
+    }
     for p in positions[1:]:  # the exact feet keep finite regions, however wide
         assert np.isfinite(p["pos_cov_m2"]).all()
         assert np.isfinite(p["p90_radius_m"])
@@ -145,6 +187,7 @@ def _bad_bodies():
         "unknown field": localize_body(conformal_q=5.0),
         "zero quantile": localize_body(conformal_quantile=0.0),
         "negative dof": localize_body(dof=-3.0),
+        "negative inliers": localize_body(n_inliers=-1),
         "dof below 1": localize_body(dof=0.5),  # 2·F⁻¹(0.90; 2, 0.001) is inf
         "too many feet": localize_body(feet=feet[:1] * (MAX_FEET + 1)),
         "no homography": {k: v for k, v in localize_body().items() if k != "homography"},

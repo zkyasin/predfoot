@@ -125,11 +125,27 @@ def serve(
         bool,
         typer.Option(help="Load the keypoint networks at start-up rather than on the first calibration."),
     ] = False,
+    conformal: Annotated[
+        Path | None,
+        typer.Option(
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="Mondrian conformal model (JSON, from scripts/fit_conformal.py): /v1/localize then gives "
+            "each foot the calibrated 90 % region of its bin.",
+        ),
+    ] = None,
 ) -> None:
     """Serve the HTTP API: /healthz, /v1/localize, /v1/calibrate and /metrics (OpenAPI docs at /docs).
 
     Needs the 'serve' extra; /v1/calibrate also needs the 'vision' extra and the PnLCalib weights.
     """
+    from predfoot.serve.localize import load_conformal
+
+    try:
+        model = None if conformal is None else load_conformal(conformal)
+    except ValueError as err:
+        raise typer.BadParameter(str(err), param_hint="--conformal") from err
     try:
         import uvicorn
 
@@ -137,4 +153,4 @@ def serve(
     except ImportError as err:
         typer.echo(f"predfoot serve needs the 'serve' extra (uv sync --extra serve): {err}", err=True)
         raise typer.Exit(code=2) from err
-    uvicorn.run(create_app(device=device, preload=preload), host=host, port=port)
+    uvicorn.run(create_app(device=device, preload=preload, conformal=model), host=host, port=port)
