@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.hypothesis/
+.coverage
+htmlcov/
+dist/
+build/
+
+# Data and artefacts never go to git (SoccerNet frames and labels cannot be redistributed)
+data/
+runs/
+models/weights/
+mlruns/
+reports/cache/
+
+# Local scratch, mirroring SkillCorner's conventions
+archive/
+notebooks/exploratory/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
