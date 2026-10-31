@@ -59,6 +59,7 @@ class KpiConfig(_Frozen):
     min_effort_s: float = Field(default=1.0, ge=0)
     explosive_acceleration: ExplosiveAccelerationConfig = ExplosiveAccelerationConfig()
     psv99: Psv99Config = Psv99Config()
+    glitch_speed_kmh: float = Field(default=43.2, gt=0)
 
     @model_validator(mode="after")
     def _check_thresholds(self) -> KpiConfig:

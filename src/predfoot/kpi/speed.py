@@ -77,6 +77,40 @@ def resample(values: ArrayLike, hz_in: int, hz_out: int) -> FloatArray:
     return out
 
 
+def drop_glitches(xy: ArrayLike, hz: float, max_speed_ms: float) -> tuple[FloatArray, int]:
+    """Cut tracking glitches out of positions (n, 2): return a copy with NaN in their place, and their count.
+
+    A step faster than ``max_speed_ms`` between consecutive samples is a glitch, not a movement. Raw tracking
+    feeds typically hold the last position while a player is not observed and then jump to the re-acquired
+    one: the held samples are dropped, except the first (the last real observation). A jump with no held
+    position before it (an identity swap, a single wild sample) drops the sample after the jump. Either way a
+    gap separates the two sides, so no derivative ever spans the jump. Apply this to source data before any
+    simulated noise, which would otherwise be mistaken for glitches.
+    """
+    p = np.array(xy, dtype=np.float64, copy=True)
+    if p.shape[0] < 2:
+        return p, 0
+    d = np.diff(p, axis=0)
+    step = np.hypot(d[:, 0], d[:, 1]) * hz  # NaN across gaps
+    with np.errstate(invalid="ignore"):
+        jumps = np.flatnonzero(step > max_speed_ms)
+    if jumps.size == 0:
+        return p, 0
+    # Runs of zero steps a..b-1 mean samples a..b repeat the same position; key them by their last sample b.
+    held_start, held_stop = segments(step == 0.0)
+    held_from = dict(zip(held_stop.tolist(), held_start.tolist(), strict=True))
+    drop = np.zeros(p.shape[0], dtype=bool)
+    for k in jumps.tolist():  # the jump is between samples k and k + 1
+        if drop[k]:
+            continue  # it starts at a sample already cut out (the way back from a wild sample)
+        if k in held_from:
+            drop[held_from[k] + 1 : k + 1] = True
+        else:
+            drop[k + 1] = True
+    p[drop] = np.nan
+    return p, int(drop.sum())
+
+
 def window_samples(window_s: float, hz: float) -> int:
     """Odd number of samples closest to ``window_s`` seconds (rounded up to odd)."""
     n = max(1, round(window_s * hz))

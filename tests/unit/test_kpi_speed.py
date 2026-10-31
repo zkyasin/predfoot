@@ -4,6 +4,7 @@ import pytest
 from predfoot.kpi.config import KpiConfig, SmoothingConfig
 from predfoot.kpi.speed import (
     derivative,
+    drop_glitches,
     kinematics,
     kmh_to_ms,
     ms_to_kmh,
@@ -126,3 +127,40 @@ def test_kinematics_of_constant_acceleration():
     np.testing.assert_allclose(kin.speed[1:-1], 1.0 + 2.0 * t[1:-1], atol=1e-9)
     np.testing.assert_allclose(kin.accel[2:-2], 2.0, atol=1e-9)
     assert kin.dt == pytest.approx(0.1)
+
+
+def _walk(n: int, step: float = 0.06) -> np.ndarray:
+    return np.column_stack([np.arange(n) * step, np.zeros(n)])  # 1.5 m/s at 25 Hz
+
+
+def test_held_positions_before_a_jump_are_dropped():
+    xy = _walk(40)
+    xy[10:20] = xy[10]  # the tracker holds the last position while the player is not observed...
+    xy[20:] += 5.0  # ...then jumps to where the player is
+    clean, dropped = drop_glitches(xy, hz=25, max_speed_ms=12.0)
+    assert dropped == 9
+    assert np.isnan(clean[11:20]).all()
+    np.testing.assert_array_equal(clean[:11], xy[:11])  # the last real observation is kept
+    np.testing.assert_array_equal(clean[20:], xy[20:])
+
+
+def test_teleports_and_isolated_outliers_are_cut_out():
+    xy = _walk(30)
+    xy[15:] += np.array([20.0, 10.0])  # teleport while moving: the sample after the jump goes
+    clean, dropped = drop_glitches(xy, hz=25, max_speed_ms=12.0)
+    assert dropped == 1
+    assert np.isnan(clean[15]).all()
+    xy = _walk(30)
+    xy[8] += 3.0  # one wild sample: jumps away and back
+    clean, dropped = drop_glitches(xy, hz=25, max_speed_ms=12.0)
+    assert dropped == 1
+    assert np.isnan(clean[8]).all()
+    assert np.isfinite(np.delete(clean, 8, axis=0)).all()
+
+
+def test_plausible_tracks_and_existing_gaps_are_left_alone():
+    xy = straight_line([(5.0, 2.0), (5.0, 0.0)], hz=25, v0=0.0)  # up to 10 m/s, under the threshold
+    xy[40:45] = np.nan
+    clean, dropped = drop_glitches(xy, hz=25, max_speed_ms=12.0)
+    assert dropped == 0
+    np.testing.assert_array_equal(clean, xy)

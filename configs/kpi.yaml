@@ -55,3 +55,8 @@ psv99:
   # over the speed samples of all activities ("samples"). "run_peaks" takes it over each activity's peak speed.
   min_activity_s: 1.0
   statistic: samples # samples | run_peaks
+
+# Data cleaning, applied to source tracking data before any simulated noise. ASSUMPTION: a step faster than
+# 43.2 km/h (12 m/s, above any sprint recorded in football) between consecutive samples is a tracking glitch:
+# raw feeds hold the last position of an unobserved player, then jump. See predfoot.kpi.speed.drop_glitches.
+glitch_speed_kmh: 43.2
