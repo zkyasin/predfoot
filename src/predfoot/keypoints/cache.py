@@ -65,8 +65,13 @@ def cached_detections(
                 "line_ids": ends.line_ids,
                 "line_uv": ends.uv,
             }
+    save_detections(path, out, seconds, nets.version)
+    return out, seconds, nets.version
+
+
+def save_detections(path: Path, dets: dict[int, dict[str, Any]], seconds: float, version: str) -> None:
+    """Write a clip's detections atomically (also used for detections computed elsewhere, e.g. on Modal)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp.npz")
-    np.savez(tmp, dets=np.array(out, dtype=object), seconds=seconds, version=nets.version)
+    np.savez(tmp, dets=np.array(dets, dtype=object), seconds=seconds, version=version)
     tmp.replace(path)
-    return out, seconds, nets.version
