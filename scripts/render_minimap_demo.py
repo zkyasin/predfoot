@@ -4,10 +4,14 @@ Reads the per-player and per-frame tables of two scripts/eval_dev.py runs on the
 (``--smooth none`` and ``--smooth ptz``). Every predicted position is drawn with its calibrated 90 % region
 {p : (p − x̂)ᵀ Σp⁻¹ (p − x̂) ≤ q̂}, where q̂ is the Mondrian conformal quantile of the player's bin, fitted by
 ``eval_dev.logo`` on the five games other than the clip's (leave one game out), within each covariance
-source. Labelled positions (SN-GSR raw labels, the reference of the headline coverage) are small dark dots;
-frames where a camera publishes no position are greyed. Only pitch coordinates are drawn, never frame pixels
-(ADR-0002). For the smoothed camera the quantiles are fitted on the other games' saved rows (see
-scripts/make_figures.py for why this differs slightly from eval_dev.py).
+source. Labelled positions (SN-GSR raw labels, the reference of the headline coverage) are small dark dots.
+A panel is greyed when its camera publishes no position (calibration failed, nothing filled it), and hatched
+when the camera published positions that cannot be checked: the frame has no usable SN-GSR position label
+(``has_labeled_camera`` false, truncated boxes, labels from a failed annotators' camera), so players.parquet
+holds no row for it. Such a frame is not evaluated, and its line reprojection is printed instead, since the
+camera may well be wrong there. Only pitch coordinates are drawn, never frame pixels (ADR-0002). For the
+smoothed camera the quantiles are fitted on the other games' saved rows (see scripts/make_figures.py for why
+this differs slightly from eval_dev.py).
 
 Clip (``--clip auto``): among the clips whose smoothed camera moves fastest (top third of the median image
 speed of a ground grid, a label-free measure), the one where smoothing cuts the frame-to-frame jitter of the
@@ -73,6 +77,9 @@ PANEL_ASPECT = 1.3  # width / height of the pitch window of each panel
 DEFAULT_GIF = Path("assets/minimap_demo.gif")
 DEFAULT_PNG = Path("assets/minimap_demo.png")
 DEFAULT_REPORT = Path("reports/minimap_demo.md")
+#: Panel states: positions with their regions and labels; no position published; positions published on a
+#: frame without usable labels (not evaluated).
+SHOWN, ABSTAINS, UNLABELLED = "shown", "abstains", "unlabelled"
 
 
 @dataclass
@@ -155,6 +162,36 @@ def crop(runs: dict[str, Run], clip: str, frames: np.ndarray) -> tuple[float, fl
     return x0, x1, y0, y1
 
 
+@dataclass
+class View:
+    """One camera at one frame: its held-out rows, what its panel shows, and its frame-table entries."""
+
+    rows: pl.DataFrame
+    state: str  # SHOWN, ABSTAINS or UNLABELLED
+    filled: bool
+    line_px: float  # line reprojection of the output camera (NaN without one)
+
+
+def frame_view(run: Run, clip: str, frame: int) -> View:
+    """What one camera's panel shows at ``frame``.
+
+    ABSTAINS when the frame table says the camera published nothing (``ok_out`` false); otherwise SHOWN when
+    the run has player rows for the frame, UNLABELLED when it has none: eval_dev.py writes no row for a frame
+    without usable position labels, although the camera published positions there.
+    """
+    rows = run.players.filter((pl.col("clip") == clip) & (pl.col("frame") == frame))
+    f = run.frames.filter((pl.col("clip") == clip) & (pl.col("frame") == frame))
+    published = not f.height or bool(f["ok_out"][0])
+    state = (SHOWN if rows.height else UNLABELLED) if published else ABSTAINS
+    line = f["line_px_out"][0] if f.height else None
+    return View(
+        rows=rows,
+        state=state,
+        filled=bool(f["filled"][0]) if f.height else False,
+        line_px=float("nan") if line is None else float(line),
+    )
+
+
 def frame_stats(rows: pl.DataFrame) -> tuple[int, int, float]:
     """Labelled positions inside their region, players, and median region area (m²) of one camera's frame."""
     det = rows["c00"].to_numpy() * rows["c11"].to_numpy() - rows["c01"].to_numpy() ** 2
@@ -168,14 +205,14 @@ def git_sha() -> str:
     ).stdout.strip()
 
 
-def draw_panel(
-    ax: Axes, cam: str, rows: pl.DataFrame, abstains: bool, filled: bool, window: tuple[float, ...]
-) -> None:
-    """One camera at one frame: pitch, calibrated 90 % regions, predictions, labels; a veil if it abstains."""
+def draw_panel(ax: Axes, cam: str, view: View, window: tuple[float, ...]) -> None:
+    """One camera at one frame: pitch, calibrated 90 % regions, predictions, labels; a grey veil if it
+    abstains, a hatched one if its positions cannot be checked."""
     ax.set_facecolor(SURFACE)
     draw_pitch(ax)
     colour = COLOURS[cam]
-    if not abstains:
+    rows = view.rows
+    if view.state == SHOWN:
         for r in rows.iter_rows(named=True):
             cov = np.array([[r["c00"], r["c01"]], [r["c01"], r["c11"]]])
             width, height, angle = ellipse_axes(cov, quantile=r["q_mond"])
@@ -211,29 +248,34 @@ def draw_panel(
     ax.set_yticks([])
     for spine in ax.spines.values():
         spine.set_edgecolor(VEIL)
-    if abstains:
-        status = "abstains: no calibrated camera"
-        ax.add_patch(
-            Rectangle(
-                (0, 0), 1, 1, transform=ax.transAxes, facecolor=VEIL, alpha=0.85, edgecolor="none", zorder=5
-            )
-        )
+    if view.state == SHOWN:
+        inside, n, area = frame_stats(rows)
+        status = f"{inside} / {n} labels inside their region · median area {area:.1f} m²"
+        if view.filled:
+            status += " · camera filled"
+    else:
+        if view.state == ABSTAINS:
+            status, word = "abstains: no calibrated camera", "abstains"
+            veil = Rectangle((0, 0), 1, 1, facecolor=VEIL, alpha=0.85, edgecolor="none")
+        else:
+            status, word = "published, no labels to check", "not evaluated"
+            if np.isfinite(view.line_px):
+                status += f" · line reprojection {view.line_px:.0f} px"
+            veil = Rectangle((0, 0), 1, 1, facecolor=SURFACE, alpha=0.8, hatch="////", edgecolor=PITCH_LINE)
+        veil.set(transform=ax.transAxes, zorder=5)
+        ax.add_patch(veil)
         ax.text(
             0.5,
             0.5,
-            "abstains",
+            word,
             transform=ax.transAxes,
             ha="center",
             va="center",
             fontsize=11,
             color=TEXT_SECONDARY,
             zorder=6,
+            bbox={"facecolor": SURFACE, "edgecolor": "none", "pad": 2.0} if view.state != ABSTAINS else None,
         )
-    else:
-        inside, n, area = frame_stats(rows)
-        status = f"{inside} / {n} labels inside their region · median area {area:.1f} m²"
-        if filled:
-            status += " · camera filled"
     ax.set_title(f"{CAMERAS[cam]}\n{status}", loc="left", fontsize=8.5, color=TEXT, linespacing=1.4)
 
 
@@ -248,11 +290,7 @@ def render_frame(
     fig.clear()
     axes = fig.subplots(1, 2)
     for ax, (cam, run) in zip(axes, runs.items(), strict=True):
-        rows = run.players.filter((pl.col("clip") == clip) & (pl.col("frame") == frame))
-        f = run.frames.filter((pl.col("clip") == clip) & (pl.col("frame") == frame))
-        abstains = f.height == 0 or not bool(f["ok_out"][0]) or rows.height == 0
-        filled = bool(f["filled"][0]) if f.height else False
-        draw_panel(ax, cam, rows, abstains, filled, window)
+        draw_panel(ax, cam, frame_view(run, clip, frame), window)
     t = (frame - 1) / NATIVE_FPS
     fig.suptitle(
         f"SN-GSR dev clip {clip} (game {game}, quantiles fitted on the five other games) · t = {t:4.1f} s",
@@ -264,8 +302,9 @@ def render_frame(
         Patch(facecolor=TEXT_SECONDARY, alpha=0.16, edgecolor=TEXT_SECONDARY, label="calibrated 90 % region"),
         Line2D([], [], marker="o", ls="none", ms=3, color=TEXT, label="labelled position (SN-GSR)"),
         Patch(facecolor=VEIL, edgecolor=PITCH_LINE, label="no position published"),
+        Patch(facecolor=SURFACE, edgecolor=PITCH_LINE, hatch="////", label="not evaluated (no labels)"),
     ]
-    fig.legend(handles=handles, loc="outside lower center", ncols=4, frameon=False, fontsize=8)
+    fig.legend(handles=handles, loc="outside lower center", ncols=5, frameon=False, fontsize=7.5)
     canvas = fig.canvas
     assert isinstance(canvas, FigureCanvasAgg)
     canvas.draw()
@@ -372,23 +411,41 @@ def main(
         "|---|---|---|",
     ]
     md += [f"| {label} | {fmt.format(row[key])} | {fmt.format(med[key])} |" for key, label, fmt in SELECTION]
+    views = {cam: [frame_view(run, chosen, int(fr)) for fr in window_frames] for cam, run in runs.items()}
     md += [
         "",
         f"**Window {t0:.1f}-{t1:.1f} s**: the {seconds:g} s where the per-frame camera's common-mode error"
         " jitters most.",
         "",
         "| Camera | Common-mode step RMS (m) | Labelled positions inside their 90 % region |"
-        " Frames without positions |",
-        "|---|---|---|---|",
+        " Frames without positions (grey) | Frames not evaluated (hatched) |",
+        "|---|---|---|---|---|",
     ]
     for cam, run in runs.items():
         sel = run.players.filter((pl.col("clip") == chosen) & pl.col("frame").is_in(window_frames.tolist()))
-        f = run.frames.filter((pl.col("clip") == chosen) & pl.col("frame").is_in(window_frames.tolist()))
         step = eval_dev.step_stats(sel.filter(~pl.col("filled")))[1]
+        states = [v.state for v in views[cam]]
         md.append(
             f"| {NAMES[cam]} | {step:.2f} | {sel['hit_mond'].mean():.1%} of {sel.height} |"
-            f" {int((~f['ok_out']).sum())} of {f.height} |"
+            f" {states.count(ABSTAINS)} of {len(states)} | {states.count(UNLABELLED)} of {len(states)} |"
         )
+    unchecked = []
+    for cam in runs:
+        items = [
+            f"t = {(int(fr) - 1) / NATIVE_FPS:.1f} s, "
+            + (f"{v.line_px:.1f} px" if np.isfinite(v.line_px) else "no line annotations")
+            for fr, v in zip(window_frames, views[cam], strict=True)
+            if v.state == UNLABELLED
+        ]
+        if items:
+            unchecked.append(f"{NAMES[cam]} {'; '.join(items)}")
+    if unchecked:
+        md += [
+            "",
+            "Not evaluated: the camera published positions, but SN-GSR has no usable position label on the"
+            " frame, so eval_dev.py wrote no player row and nothing checks them. Line reprojection of those"
+            f" frames (annotated lines to the projected pitch): {'. '.join(unchecked)}.",
+        ]
     stills = []
     for cam, run in runs.items():
         rows = run.players.filter((pl.col("clip") == chosen) & (pl.col("frame") == still))

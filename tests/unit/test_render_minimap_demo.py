@@ -27,13 +27,15 @@ def _load(name):
 demo = _load("render_minimap_demo")
 FAST = ("g1-c0", "g2-c1", "g3-c2", "g1-c3")  # the top third of the 12 clips by camera speed
 STEADY = "g2-c1"  # the fast clip whose smoothed camera jitters least
+UNLABELLED_K = 3  # cached frame index without usable labels in every clip
 
 
 def write_run(path, rng, smoothed, games=(1, 2, 3), clips_per_game=4, n_frames=20, n_players=6):
     """Tables of a fake eval_dev.py run: a common-mode error per frame (the camera) plus player noise.
 
     The smoothed camera's common-mode steps are five times smaller (fifty for STEADY); the per-frame run
-    abstains on the 8th frame of every clip."""
+    abstains on the 8th frame of every clip; the 4th frame of every clip has no usable label (both cameras
+    publish positions there, but the run has no player row for it)."""
     players, frames = [], []
     for g in games:
         for c in range(clips_per_game):
@@ -54,7 +56,7 @@ def write_run(path, rng, smoothed, games=(1, 2, 3), clips_per_game=4, n_frames=2
                         "filled": False,
                     }
                 )
-                if abstains:
+                if abstains or k == UNLABELLED_K:
                     continue
                 truth = rng.uniform([-40, -30], [40, 30], (n_players, 2))
                 e = common[k] + 0.05 * rng.standard_normal((n_players, 2))
@@ -122,18 +124,38 @@ def test_the_window_starts_where_the_per_frame_camera_jitters_most():
     assert demo.choose_start(rows, frames, 20) == 0
 
 
+def test_a_panel_abstains_only_without_a_camera_and_is_not_evaluated_without_labels(tmp_path, rng):
+    run = demo.load_run(write_run(tmp_path / "none", rng, smoothed=False))
+    frame = 1 + 5 * np.arange(20)
+    shown = demo.frame_view(run, "g1-c0", int(frame[0]))
+    assert (shown.state, shown.rows.height, shown.filled) == (demo.SHOWN, 6, False)
+    abstains = demo.frame_view(run, "g1-c0", int(frame[7]))
+    assert (abstains.state, abstains.rows.height) == (demo.ABSTAINS, 0)
+    assert np.isnan(abstains.line_px)
+    # A camera that published positions on a frame without usable labels is not an abstention.
+    unlabelled = demo.frame_view(run, "g1-c0", int(frame[UNLABELLED_K]))
+    assert (unlabelled.state, unlabelled.rows.height) == (demo.UNLABELLED, 0)
+    expected = run.frames.filter((pl.col("clip") == "g1-c0") & (pl.col("frame") == int(frame[UNLABELLED_K])))
+    assert unlabelled.line_px == expected["line_px_out"][0]
+
+
 def test_main_writes_a_small_animation_and_a_still(tmp_path, rng):
     none = write_run(tmp_path / "none", rng, smoothed=False)
     ptz = write_run(tmp_path / "ptz", rng, smoothed=True)
     gif, png = tmp_path / "demo.gif", tmp_path / "demo.png"
-    args = ["--none-run", str(none), "--ptz-run", str(ptz), "--seconds", "2"]
+    args = ["--none-run", str(none), "--ptz-run", str(ptz), "--seconds", "2", "--start", "0"]
     args += ["--gif", str(gif), "--png", str(png), "--report", str(tmp_path / "demo.md"), "--width", "6"]
     result = CliRunner().invoke(demo.app, args)
     assert result.exit_code == 0, result.output
     text = (tmp_path / "demo.md").read_text()
     assert f"**Clip {STEADY} (game 2).**" in text
+    # The window holds frames 0-9: the per-frame camera abstains on the 8th, both are unlabelled on the 4th.
     assert "| per-frame camera | " in text
+    assert " | 1 of 10 | 1 of 10 |" in text
     assert "| PTZ-smoothed camera | " in text
+    assert " | 0 of 10 | 1 of 10 |" in text
+    assert "Not evaluated: the camera published positions" in text
+    assert f"t = {5 * UNLABELLED_K / 25:.1f} s, " in text
     assert str(tmp_path) not in text
     with Image.open(gif) as im:
         assert im.n_frames == 10  # 2 s at 5 fps
