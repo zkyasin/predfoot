@@ -25,10 +25,13 @@ from matplotlib.patches import Arc, Circle, Ellipse, Patch, Polygon, Rectangle
 from numpy.typing import ArrayLike
 
 from predfoot.io.files import atomic_write_bytes
-from predfoot.io.skillcorner import DEFAULT_PITCH_LENGTH_M, DEFAULT_PITCH_WIDTH_M, Team, TrackingFrame
-
-#: χ²₂ quantile at 0.90, -2 ln(0.1) ≈ 4.605: the squared Mahalanobis radius of a 2-D 90 % ellipse.
-CHI2_2_090 = -2.0 * math.log(0.10)
+from predfoot.io.skillcorner import (
+    CHI2_2_090,
+    DEFAULT_PITCH_LENGTH_M,
+    DEFAULT_PITCH_WIDTH_M,
+    Team,
+    TrackingFrame,
+)
 
 SURFACE = "#fcfcfb"
 PITCH_LINE = "#c3c2b7"
@@ -63,14 +66,15 @@ def ellipse_axes(cov: ArrayLike, quantile: float = CHI2_2_090) -> tuple[float, f
     return 2.0 * math.sqrt(quantile * vals[1]), 2.0 * math.sqrt(quantile * vals[0]), angle
 
 
-def select_panels(frames: Sequence[TrackingFrame], n_panels: int) -> list[int]:
-    """Indices of up to ``n_panels`` evenly spaced frames, always including an abstained one if any."""
-    m = len(frames)
+def select_panels(abstain: Sequence[bool], n_panels: int) -> list[int]:
+    """Indices of up to ``n_panels`` evenly spaced frames (given their abstain flags), including an abstained
+    one if there is any."""
+    m = len(abstain)
     if m <= n_panels:
         return list(range(m))
     picks = sorted({round(v) for v in np.linspace(0, m - 1, n_panels)})
-    abstained = [i for i, f in enumerate(frames) if f.abstain]
-    if abstained and not any(frames[i].abstain for i in picks):
+    abstained = [i for i, a in enumerate(abstain) if a]
+    if abstained and not any(abstain[i] for i in picks):
         interior = range(1, len(picks) - 1) if len(picks) > 2 else range(len(picks))
         nearest = min(interior, key=lambda k: abs(picks[k] - abstained[0]))
         picks[nearest] = abstained[0]
@@ -220,7 +224,7 @@ def render_minimap(
     """Draw evenly spaced frames of a clip in a grid and write a PNG (atomically, byte-stable)."""
     if not frames:
         raise ValueError("no frames to draw")
-    picks = select_panels(frames, n_panels)
+    picks = select_panels([f.abstain for f in frames], n_panels)
     ncols = min(3, len(picks))
     nrows = math.ceil(len(picks) / ncols)
     fig = Figure(figsize=(4.6 * ncols, 3.5 * nrows + 0.9), dpi=dpi, facecolor=SURFACE, layout="constrained")

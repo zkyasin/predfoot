@@ -28,6 +28,42 @@ def version() -> None:
 
 
 @app.command()
+def run(
+    clip: Annotated[
+        Path,
+        typer.Argument(
+            metavar="INPUT", exists=True, dir_okay=False, readable=True, help="Clip JSON (predfoot-clip/1)."
+        ),
+    ],
+    out: Annotated[Path, typer.Option(file_okay=False, help="Output folder (created if needed).")],
+    fps: Annotated[float, typer.Option(help="Export frame rate.")] = 10.0,
+    block_size: Annotated[int, typer.Option(help="Export frames per block: the resume granularity.")] = 100,
+) -> None:
+    """Run the pipeline on a clip: tracking.jsonl, match.json, meta.json, metrics.json, minimap.png.
+
+    Re-running after a crash reuses the finished blocks and gives byte-identical outputs.
+    """
+    from pydantic import ValidationError
+
+    from predfoot.pipeline.run import RunConfig, run_clip
+
+    if fps <= 0:
+        raise typer.BadParameter("must be positive", param_hint="--fps")
+    if block_size < 1:
+        raise typer.BadParameter("must be at least 1", param_hint="--block-size")
+    try:
+        result = run_clip(clip, out, RunConfig(export_fps=fps, block_size=block_size))
+    except ValidationError as err:
+        typer.echo(f"invalid clip file {clip}:\n{err}", err=True)
+        raise typer.Exit(code=2) from err
+    typer.echo(
+        f"{result.n_export} frames at {fps:g} fps from {result.n_native} native frames, "
+        f"{result.n_abstained} abstained; blocks computed {result.blocks_computed}, "
+        f"reused {result.blocks_reused} → {out}"
+    )
+
+
+@app.command()
 def validate(
     tracking: Annotated[
         Path, typer.Argument(exists=True, dir_okay=False, readable=True, help="JSONL tracking file to check.")

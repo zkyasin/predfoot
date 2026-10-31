@@ -73,14 +73,14 @@ def _frame(k, abstain=False, n=4):
 
 
 def test_select_panels_spreads_frames_and_shows_an_abstention():
-    frames = [_frame(k, abstain=k in (3, 4)) for k in range(30)]
-    picked = select_panels(frames, 6)
+    flags = [k in (3, 4) for k in range(30)]
+    picked = select_panels(flags, 6)
     assert len(picked) == 6
     assert picked == sorted(picked)
     assert picked[0] == 0
     assert picked[-1] == 29
-    assert any(frames[i].abstain for i in picked)
-    assert select_panels(frames[:3], 6) == [0, 1, 2]
+    assert any(flags[i] for i in picked)
+    assert select_panels(flags[:3], 6) == [0, 1, 2]
 
 
 def test_live_frame_draws_one_ellipse_per_player():
