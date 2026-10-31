@@ -122,7 +122,9 @@ recalibrate on.
 | Median calibrated 90 % radius | 4.69 m (near half 6.08 m, far half 4.33 m) | — |
 
 The reference camera is scored on its own fit points: the provider fitted that pose on these 65 keypoints, so
-its keypoint errors are training residuals, while predfoot never saw the annotations.
+its keypoint errors are training residuals, while predfoot never saw the annotations. With `--no-smooth` (the
+per-frame camera and the quantiles of the per-frame dev run; run at commit `5697c64`) the same positions get
+regions with a median 90 % radius of 4.09 m that cover 43.4 % (near half 89.1 %, far half 22.0 %).
 
 Read these numbers as a smoke check, not a benchmark. There are ten correlated frames, all in the first 2 s of
 one clip, and the field-of-view range and aim offset were chosen by looking at these same frames. Of the 16
