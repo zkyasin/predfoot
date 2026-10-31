@@ -8,18 +8,26 @@
 
 Uploaded images are only held in memory for the request (Starlette spools parts above 1 MiB to an anonymous
 temporary file that has no name on disk); predfoot never writes them anywhere.
+
+Calibrations run on worker threads of their own (:data:`CALIBRATION_WORKERS`), and at most
+``max_pending_calibrations`` are admitted at once, running or queued; more get 503 with Retry-After. Queued
+calibrations hold no thread, so /healthz, /metrics and /v1/localize keep answering during a burst.
 """
 
 from __future__ import annotations
 
 import logging
 import math
+import threading
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from functools import partial
 from pathlib import Path
 from typing import Annotated, Any
 
+import anyio
+import anyio.to_thread
 import numpy as np
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.encoders import jsonable_encoder
@@ -60,11 +68,20 @@ log = logging.getLogger(__name__)
 MAX_JSON_BYTES = 1024 * 1024
 #: Room for the multipart boundaries and part headers around the image of /v1/calibrate.
 MULTIPART_SLACK_BYTES = 64 * 1024
+#: Worker threads of /v1/calibrate: one frame in the networks (they run one frame at a time) while the next
+#: one is decoded or solved. At most this many decoded frames are held in memory.
+CALIBRATION_WORKERS = 2
+#: Calibrations admitted at once, running or queued, by default. Each waits about one network pass per frame
+#: ahead of it (0.5-2 s, reports/latency_m4.md), so a longer queue would only turn into client timeouts.
+MAX_PENDING_CALIBRATIONS = 8
 
 _ERRORS: dict[int | str, dict[str, Any]] = {
     413: {"description": "Upload or image too large."},
     415: {"description": "Not a JPEG or PNG image, or a media type that does not match its content."},
-    503: {"description": "Keypoint networks unavailable on this server (torch or weights missing)."},
+    503: {
+        "description": "Keypoint networks unavailable on this server (torch or weights missing), or too many "
+        "calibrations in progress (then with a Retry-After header)."
+    },
 }
 
 
@@ -75,17 +92,23 @@ def create_app(
     device: str = "auto",
     max_upload_bytes: int = MAX_UPLOAD_BYTES,
     preload: bool = False,
+    max_pending_calibrations: int = MAX_PENDING_CALIBRATIONS,
 ) -> FastAPI:
     """Build the API.
 
     ``detector`` replaces the PnLCalib networks (tests); otherwise they are loaded from ``weights_dir``
     (default ``PREDFOOT_DATA_DIR/weights/pnlcalib``) on ``device`` at the first /v1/calibrate request, or at
-    start-up with ``preload``.
+    start-up with ``preload``. Beyond ``max_pending_calibrations`` calibrations in progress, /v1/calibrate
+    answers 503 with Retry-After.
     """
+    if max_pending_calibrations < 1:
+        raise ValueError("max_pending_calibrations must be at least 1")
     networks = LazyDetector(
         (lambda: detector) if detector is not None else (lambda: load_pnlcalib(weights_dir, device))
     )
     metrics = RequestMetrics()
+    workers = anyio.CapacityLimiter(CALIBRATION_WORKERS)
+    admission = threading.BoundedSemaphore(max_pending_calibrations)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -110,7 +133,7 @@ def create_app(
         return JSONResponse(status_code=422, content={"detail": _json_safe(jsonable_encoder(exc.errors()))})
 
     @app.get("/healthz")
-    def healthz() -> Health:
+    async def healthz() -> Health:  # async: answers on the event loop, never waits for a worker thread
         version = networks.version
         models = {} if version is None else {"pnlcalib": version}
         return Health(status="ok", version=__version__, models=models)
@@ -140,12 +163,9 @@ def create_app(
         ]
         return LocalizeResponse(quantile=q, quantile_source=source, positions=positions)
 
-    @app.post("/v1/calibrate", responses=_ERRORS)
-    def calibrate(
-        image: Annotated[UploadFile, File(description="Broadcast frame, JPEG or PNG, at most 20 MiB.")],
-    ) -> CalibrateResponse:
-        """Calibrate one broadcast frame: PnLCalib keypoints and lines, then the robust solver of the offline
-        pipeline. The result feeds /v1/localize."""
+    def calibrate_upload(image: UploadFile, admitted: float) -> CalibrateResponse:
+        """The work of /v1/calibrate, on a calibration worker: read, check and decode the upload, detect,
+        solve. The image is decoded only once a worker holds it."""
         start = time.perf_counter()
         if image.size is not None and image.size > max_upload_bytes:
             raise HTTPException(413, f"upload larger than {max_upload_bytes} bytes")
@@ -188,6 +208,7 @@ def create_app(
             ],
             model_version=networks.version or "",
             timings_ms={
+                "queue": 1e3 * (start - admitted),
                 "decode": 1e3 * (decoded - start),
                 "load": 1e3 * (loaded - decoded),
                 "networks": 1e3 * (detected - loaded),
@@ -195,8 +216,25 @@ def create_app(
             },
         )
 
+    @app.post("/v1/calibrate", responses=_ERRORS)
+    async def calibrate(
+        image: Annotated[UploadFile, File(description="Broadcast frame, JPEG or PNG, at most 20 MiB.")],
+    ) -> CalibrateResponse:
+        """Calibrate one broadcast frame: PnLCalib keypoints and lines, then the robust solver of the offline
+        pipeline. The result feeds /v1/localize."""
+        if not admission.acquire(blocking=False):
+            raise HTTPException(
+                503, "too many calibrations in progress: retry shortly", headers={"Retry-After": "1"}
+            )
+        try:
+            # Waiting for a worker suspends this request without holding a thread of the shared pool.
+            work = partial(calibrate_upload, image, time.perf_counter())
+            return await anyio.to_thread.run_sync(work, limiter=workers)
+        finally:
+            admission.release()
+
     @app.get("/metrics", include_in_schema=False)
-    def prometheus_metrics() -> Response:
+    async def prometheus_metrics() -> Response:
         return Response(metrics.render(), media_type=PROMETHEUS_CONTENT_TYPE)
 
     routes = frozenset(path for route in app.routes if isinstance(path := getattr(route, "path", None), str))

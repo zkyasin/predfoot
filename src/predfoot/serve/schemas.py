@@ -158,7 +158,8 @@ class CalibrateResponse(BaseModel):
     lines: list[LineDetection]
     model_version: str
     timings_ms: dict[str, float] = Field(
-        description="decode, load (the networks, on the first request only), networks, calibration."
+        description="queue (waiting for a calibration worker), decode, load (the networks, on the first "
+        "request only), networks, calibration."
     )
 
 

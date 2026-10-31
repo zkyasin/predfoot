@@ -1,6 +1,8 @@
 """HTTP API through FastAPI's test client, with a synthetic camera and a stand-in detector (no torch)."""
 
 import json
+import threading
+import time
 
 import cv2
 import numpy as np
@@ -203,7 +205,7 @@ def test_calibrate_returns_a_camera_that_localize_accepts():
     assert body["n_inliers"] == len(body["keypoints"]) == 25
     assert body["lines"] == []
     assert body["model_version"] == "synthetic@test"
-    assert set(body["timings_ms"]) == {"decode", "load", "networks", "calibration"}
+    assert set(body["timings_ms"]) == {"queue", "decode", "load", "networks", "calibration"}
     cov = np.array(body["cov_theta"])
     assert cov.shape == (8, 8)
     np.testing.assert_allclose(cov, cov.T)
@@ -230,6 +232,58 @@ class ThreeKeypoints(SyntheticDetector):
             (KeypointObs(ids=k.ids[:3], uv=k.uv[:3], conf=k.conf[:3]), ends)
             for k, ends in super().detect(frames_rgb)
         ]
+
+
+class BlockingDetector(SyntheticDetector):
+    """Holds every frame in the networks until ``release`` is set."""
+
+    def __init__(self, camera):
+        super().__init__(camera)
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def detect(self, frames_rgb):
+        self.entered.set()
+        self.release.wait(timeout=30)
+        return super().detect(frames_rgb)
+
+
+def test_queued_calibrations_leave_the_other_endpoints_responsive():
+    detector = BlockingDetector(CAM)
+    files = {"image": ("f.png", frame_png(64, 36), "image/png")}
+    responses = []
+    # One event loop serves every thread below, as under uvicorn. 45 calibrations are more than the 40 threads
+    # of the shared pool, which they used to hold while waiting, so that /healthz and /v1/localize starved.
+    with TestClient(create_app(detector=detector, max_pending_calibrations=3)) as client:
+        posts = [
+            threading.Thread(target=lambda: responses.append(client.post("/v1/calibrate", files=files)))
+            for _ in range(45)
+        ]
+        for t in posts:
+            t.start()
+        assert detector.entered.wait(10)
+        deadline = time.monotonic() + 10
+        while sum(r.status_code == 503 for r in responses) < 42 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        safety = threading.Timer(5.0, detector.release.set)  # a regression shows as a slow answer, not a hang
+        safety.start()
+        start = time.perf_counter()
+        health = client.get("/healthz")
+        located = client.post("/v1/localize", json=localize_body())
+        elapsed = time.perf_counter() - start
+        detector.release.set()
+        safety.cancel()
+        for t in posts:
+            t.join(30)
+    assert health.status_code == 200
+    assert located.status_code == 200
+    assert elapsed < 2.0
+    statuses = sorted(r.status_code for r in responses)
+    assert statuses == [200] * 3 + [503] * 42  # three admitted (two workers + one queued), the rest refused
+    busy = next(r for r in responses if r.status_code == 503)
+    assert busy.headers["retry-after"] == "1"
+    assert "too many calibrations" in busy.json()["detail"]
+    assert detector.calls == 3
 
 
 def test_calibrate_without_enough_keypoints_returns_nulls():
