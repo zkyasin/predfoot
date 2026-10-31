@@ -38,11 +38,16 @@ What was checked on 2026-10-30:
 Shared dataclasses live in `predfoot/contracts.py`: `KeypointObs`, `LinePointObs`, `CalibResult` (H with
 H[2,2] = 1, θ = first 8 entries row-major, `cov_theta` 8×8), `FootObs`, `Localization`.
 
-Parquet tables under `PREDFOOT_DATA_DIR/index/`:
-- `clips`: clip_id, split, game_id, action_class, n_frames, width, height;
-- `persons`: clip_id, frame, track_id, role, team, jersey, bbox (px), foot u/v (px), ground-truth x/y smoothed
-  and raw (internal frame), `truncated`;
-- `lines`: clip_id, frame, line_class, is_planar, point index, u/v (px).
+Parquet tables under `PREDFOOT_DATA_DIR/index/` (built by `scripts/build_index.py`):
+- `clips`: every clip, test included (clip_id, split, game_id, action_class, n_frames, width, height);
+- `frames`: per-frame label flags (`has_labeled_person`, `has_labeled_pitch`, `has_labeled_camera`);
+- `persons`: clip_id, frame, track_id, role, team, jersey, bbox_x, bbox_y, bbox_w, bbox_h, foot_u, foot_v (px),
+  x, y (smoothed ground truth) and x_raw, y_raw (raw ground truth) in the internal frame, `truncated`;
+- `lines`: clip_id, frame, line_class, is_planar, point_idx, u, v (px).
+
+The default `frames`, `persons` and `lines` tables hold dev clips only; the test split's go to `index/test/`,
+so nothing reads the locked games by accident. Frames with `has_labeled_camera = false` have no ground-truth
+positions and are dropped from evaluations.
 
 ## Consequences
 

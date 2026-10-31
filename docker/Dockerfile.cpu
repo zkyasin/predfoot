@@ -1,0 +1,58 @@
+# syntax=docker/dockerfile:1.7
+# predfoot CPU image: core dependencies only (no torch). Build from the repository root:
+#
+#   docker build -f docker/Dockerfile.cpu --build-arg GIT_SHA="$(git rev-parse HEAD)" -t predfoot:cpu .
+#   mkdir -p out && chmod 0777 out    # the container runs as an unprivileged user
+#   docker run --rm -v "$PWD/tests/fixtures:/in:ro" -v "$PWD/out:/out" \
+#       predfoot:cpu run /in/synthetic_clip.json --out /out
+#   docker run --rm -v "$PWD/out:/out:ro" predfoot:cpu validate /out/tracking.jsonl --match /out/match.json
+
+ARG PYTHON_VERSION=3.12
+
+# --- build stage: resolve the locked environment with uv ----------------------------------------
+FROM python:${PYTHON_VERSION}-slim-bookworm AS builder
+ARG PYTHON_VERSION
+COPY --from=ghcr.io/astral-sh/uv:0.11.19 /uv /uvx /bin/
+# Use the base image's interpreter (the runtime stage has the same one at the same path).
+ENV UV_PYTHON=python${PYTHON_VERSION} \
+    UV_PYTHON_DOWNLOADS=never \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PROJECT_ENVIRONMENT=/opt/venv
+WORKDIR /src
+# Dependencies first, so this layer stays cached until uv.lock changes.
+COPY pyproject.toml uv.lock ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --locked --no-dev --no-install-project
+# Then the package itself, installed as a regular (non-editable) wheel.
+COPY README.md LICENSE ./
+COPY src ./src
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --locked --no-dev --no-editable
+
+# --- runtime stage: the virtualenv on a clean base, as a non-root user ---------------------------
+FROM python:${PYTHON_VERSION}-slim-bookworm AS runtime
+ARG GIT_SHA=""
+LABEL org.opencontainers.image.title="predfoot" \
+      org.opencontainers.image.description="Calibrated position uncertainty for broadcast football tracking" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.revision="${GIT_SHA}"
+RUN groupadd --system --gid 10001 predfoot \
+    && useradd --system --uid 10001 --gid predfoot --create-home --home-dir /home/predfoot predfoot \
+    && mkdir -p /data /work \
+    && chown predfoot:predfoot /data /work
+COPY --from=builder /opt/venv /opt/venv
+COPY LICENSE ATTRIBUTION.md /usr/share/doc/predfoot/
+ENV PATH="/opt/venv/bin:${PATH}" \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    MPLBACKEND=Agg \
+    MPLCONFIGDIR=/tmp/matplotlib \
+    PREDFOOT_DATA_DIR=/data \
+    PREDFOOT_GIT_SHA=${GIT_SHA}
+USER predfoot
+WORKDIR /work
+# A CLI image has no server to probe; this checks that the installed package imports and runs.
+HEALTHCHECK --interval=60s --timeout=20s --retries=1 CMD ["predfoot", "version"]
+ENTRYPOINT ["predfoot"]
+CMD ["--help"]

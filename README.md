@@ -29,6 +29,25 @@ Outputs follow the SkillCorner open-data JSONL schema, with the uncertainty as e
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the pipeline and [CLAUDE.md](CLAUDE.md) for the working rules.
 
+## Tracer bullet
+
+The pipeline already runs end to end with stub stages (homographies and foot points read from a small clip
+JSON, placeholder uncertainty); each real module will replace one stub.
+
+```bash
+uv run predfoot run tests/fixtures/synthetic_clip.json --out out/
+uv run predfoot validate out/tracking.jsonl --match out/match.json
+```
+
+`out/` then holds `tracking.jsonl` (SkillCorner open-data schema at 10 fps, plus `p90_radius_m`, `pos_cov_m2`,
+`calib_health` and `abstain`), `match.json` (loadable with kloppy), `meta.json`, `metrics.json` and
+`minimap.png`. A killed run resumes from its finished blocks and produces the same bytes. The synthetic clip
+comes from `scripts/make_synthetic_clip.py`; the frame schema is `src/predfoot/io/schema/frame-1.0.json`.
+
+```bash
+docker build -f docker/Dockerfile.cpu -t predfoot:cpu .   # CPU image, no torch
+```
+
 ## Development
 
 ```bash
