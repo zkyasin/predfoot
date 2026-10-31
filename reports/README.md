@@ -9,9 +9,11 @@ Calibration and position uncertainty (SN-GSR dev):
 - `spike_s0.md`: first calibration on real broadcast frames, and why two position references are needed.
 - `m2_logo_dev.md`: per-frame camera: position errors, leave-one-game-out coverage of the 90 % regions.
 - `m2_temporal_dev.md`: the same with the PTZ-smoothed camera, the smoother's diagnostics and the ablations.
-- `dev_figures.md`: coverage at the 50, 80, 90 and 95 % levels, region size against a constant circle,
-  coverage by distance tercile and the KPI proxy, with the figures in `figures/`.
-- `minimap_demo.md`: how the clip and window of `assets/minimap_demo.gif` were chosen.
+- `dev_figures.md`: coverage at the 50, 80, 90 and 95 % levels, pooled over player-frames and with every
+  clip weighted equally, region size against a constant circle, coverage by distance and by clip size, and
+  the KPI proxy, with the figures in `figures/`.
+- `minimap_demo.md`: how the clip and window of `assets/minimap_demo.gif` were chosen, and which frames it
+  leaves unevaluated (no labels).
 - `m3_health_dev.md`: failure detection from calibration-health features.
 
 Error process and KPI budget:
