@@ -27,6 +27,7 @@ from numpy.typing import ArrayLike
 
 from predfoot.contracts import FloatArray, Localization
 from predfoot.io.files import atomic_write_chunks
+from predfoot.io.timebase import parse_timestamp
 
 #: Frame rate of SkillCorner open data and of predfoot exports.
 EXPORT_FPS = 10
@@ -122,8 +123,9 @@ def image_corners_projection(
     ``y_max = pitch_width / 2 + margin_m`` (39 m by default) or above the horizon is replaced by the point
     where the image's side border crosses y = y_max on the ground. That is our reading of SkillCorner's
     clipping: their top corners sit at y = 39.0 exactly, with x left free (we saw x = -137 m). Bottom corners
-    are not clipped (we saw y = -48 m). Returns None when a side border never reaches the ground below the
-    clipping line (camera looking at the sky, or the far side of the pitch mapped to -y).
+    are not clipped (we saw y = -48 m). Returns None when a bottom corner is above the horizon or beyond the
+    clipping line, or when a top corner above the horizon sits on a border that never crosses the clipping
+    line (a border heading along the touchline); we do not know how SkillCorner handles that last case.
     """
     h = np.asarray(H, dtype=np.float64)
     if h.shape != (3, 3) or not np.all(np.isfinite(h)):
@@ -201,9 +203,9 @@ def _player_record(loc: Localization, abstain: bool) -> dict[str, Any]:
     record["y"] = _number(xy[1], XY_DECIMALS, f"track {tid} y")
     radius = None
     if loc.p90_radius_m is not None:
-        radius = _number(loc.p90_radius_m, RADIUS_DECIMALS, f"track {tid} radius")
-        if radius < 0:
+        if not loc.p90_radius_m >= 0:  # also refuses NaN
             raise ValueError(f"track {tid}: p90 radius must be ≥ 0, got {loc.p90_radius_m}")
+        radius = _number(loc.p90_radius_m, RADIUS_DECIMALS, f"track {tid} radius")
     record["p90_radius_m"] = radius
     record["pos_cov_m2"] = None if loc.cov_xy is None else _cov_record(loc.cov_xy, tid)
     return record
@@ -236,6 +238,10 @@ def frame_to_record(frame: TrackingFrame) -> dict[str, Any]:
     """JSON-ready record of one frame. Raises ``ValueError`` when the frame breaks the export contract."""
     if frame.frame < 0:
         raise ValueError(f"frame index must be non-negative, got {frame.frame}")
+    if frame.period is not None and frame.period < 1:
+        raise ValueError(f"period must be ≥ 1 or None, got {frame.period}")
+    if frame.timestamp is not None:
+        parse_timestamp(frame.timestamp)  # raises on anything but HH:MM:SS.ss
     if frame.calib_health is not None and not 0.0 <= frame.calib_health <= 1.0:
         raise ValueError(f"calib_health must be in [0, 1], got {frame.calib_health}")
     if frame.possession.group not in (None, *POSSESSION_GROUPS):

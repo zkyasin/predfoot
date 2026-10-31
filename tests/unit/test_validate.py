@@ -8,6 +8,7 @@ from typer.testing import CliRunner
 from predfoot.cli import app
 from predfoot.io import skillcorner as sc
 from predfoot.io.validate import load_schema, validate_record, validate_tracking
+from predfoot.pipeline.synthetic import look_at_homography
 from tests.fixtures import FIXTURES
 
 EXCERPT = FIXTURES / "skillcorner_opendata_excerpt.jsonl"
@@ -137,7 +138,28 @@ def test_mirrored_footprint_is_caught():
     for side in ("left", "right"):
         c[f"y_top_{side}"], c[f"y_bottom_{side}"] = -c[f"y_top_{side}"], -c[f"y_bottom_{side}"]
     issues = validate_record(r)
-    assert any("far side" in msg for msg in issues), issues
+    assert any("mirrored" in msg for msg in issues), issues
+
+
+@pytest.mark.parametrize("aim", [(-52.5, -34.0), (52.5, -34.0), (-36.0, -20.0), (40.0, 30.0)])
+def test_views_along_the_touchline_are_not_mistaken_for_a_mirror(aim):
+    # Aimed at a near corner flag, the far image corners have smaller y than the near ones.
+    H = look_at_homography((0.0, -45.0, 18.0), (*aim, 0.0), focal_px=1800.0, image_size=(1920, 1080))
+    corners = sc.image_corners_projection(H, (1920, 1080))
+    if corners is None:
+        pytest.skip("no footprint for this view")
+    record = _record(
+        image_corners_projection=sc.frame_to_record(sc.TrackingFrame(0, corners=corners))[
+            "image_corners_projection"
+        ]
+    )
+    assert validate_record(record) == []
+
+
+def test_real_skillcorner_footprints_turn_counter_clockwise():
+    for line in EXCERPT.read_text().splitlines():
+        record = json.loads(line)
+        assert not [m for m in validate_record(record, extensions=False) if "mirrored" in m]
 
 
 def test_clipping_limit_follows_the_pitch_width():

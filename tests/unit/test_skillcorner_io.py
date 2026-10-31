@@ -172,6 +172,16 @@ def test_writer_rejects_contract_violations(loc, message):
         sc.frame_to_record(_frame(players=(loc,)))
 
 
+def test_writer_rejects_bad_frame_fields():
+    with pytest.raises(ValueError, match="period"):
+        sc.frame_to_record(_frame(period=0))
+    with pytest.raises(ValueError, match="HH:MM:SS"):
+        sc.frame_to_record(_frame(timestamp="0:00:01"))
+    tiny_negative = Localization(track_id=1, xy=np.zeros(2), p90_radius_m=-0.0001)
+    with pytest.raises(ValueError, match="radius"):
+        sc.frame_to_record(_frame(players=(tiny_negative,)))  # not rounded to 0 first
+
+
 def test_writer_rejects_duplicate_tracks_and_bad_health():
     with pytest.raises(ValueError, match="duplicate"):
         sc.frame_to_record(_frame(players=(_loc(1), _loc(1))))

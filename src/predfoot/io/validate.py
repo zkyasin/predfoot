@@ -3,8 +3,8 @@
 Checked in code (EXECUTION.md §3.2):
 
 - every ``pos_cov_m2`` is symmetric and positive semi-definite (up to the writer's 1e-4 m² rounding);
-- top image corners are clipped at y = pitch_width / 2 + 5 m and lie beyond the bottom ones (a mirrored
-  pitch puts them on the near side);
+- top image corners are clipped at y = pitch_width / 2 + 5 m, and the footprint top-left → bottom-left →
+  bottom-right → top-right turns counter-clockwise (a y-mirrored pitch turns it clockwise);
 - ``player_id`` is unique within a frame, and listed in ``match.json`` when one is given (kloppy raises
   ``KeyError`` otherwise);
 - frames increase, timestamps advance at the export rate, and a frame inside a period has a timestamp;
@@ -32,6 +32,7 @@ from jsonschema.exceptions import ValidationError
 
 from predfoot.io.skillcorner import (
     CORNER_MARGIN_M,
+    CORNER_NAMES,
     DEFAULT_PITCH_WIDTH_M,
     EXPORT_FPS,
     EXTENSION_KEYS,
@@ -140,20 +141,33 @@ def _corner_issues(corners: Mapping[str, float | None], pitch_width: float) -> l
     y_max = pitch_width / 2 + CORNER_MARGIN_M
     issues = []
     for side in ("left", "right"):
-        top, bottom = corners[f"y_top_{side}"], corners[f"y_bottom_{side}"]
+        top = corners[f"y_top_{side}"]
         assert top is not None  # all-or-nothing is enforced by the schema
-        assert bottom is not None
         if top > y_max + CORNER_TOL_M:
             issues.append(
                 f"image corner y_top_{side} = {top} m is not clipped at y = {y_max:g} m "
                 "(pitch_width / 2 + 5 m)"
             )
-        if top <= bottom:
-            issues.append(
-                f"top image corners must lie on the far side of the bottom ones (y_top_{side} = {top} ≤ "
-                f"y_bottom_{side} = {bottom}); is the pitch mirrored?"
-            )
+    if _footprint_area(corners) <= 0.0:
+        issues.append(
+            "the image footprint (top-left, bottom-left, bottom-right, top-right) must turn "
+            "counter-clockwise; a clockwise one means a mirrored pitch (y flipped)"
+        )
     return issues
+
+
+def _footprint_area(corners: Mapping[str, float | None]) -> float:
+    """Signed (shoelace) area of the footprint in corner order, m².
+
+    The image rectangle, traversed top-left → bottom-left → bottom-right → top-right, maps to the ground with
+    image right ≈ +x and image down ≈ -y: a reflection, so the footprint turns counter-clockwise (area > 0).
+    The homography is a diffeomorphism on the ground in front of the camera, so this holds for any pan, tilt
+    or zoom of an upright camera, including views along the touchline where far corners have smaller y than
+    near ones. Mirroring y reverses it.
+    """
+    xs = [float(corners[f"x_{name}"] or 0.0) for name in CORNER_NAMES]  # all numbers (checked by the schema)
+    ys = [float(corners[f"y_{name}"] or 0.0) for name in CORNER_NAMES]
+    return 0.5 * sum(xs[i] * ys[(i + 1) % 4] - xs[(i + 1) % 4] * ys[i] for i in range(4))
 
 
 def _reject_constant(name: str) -> Any:
