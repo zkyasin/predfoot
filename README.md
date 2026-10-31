@@ -116,8 +116,7 @@ keypoint networks need torch (extra `vision`), which the CPU images leave out. T
 both targets on every pull request that touches the package and smoke-tests them: in the `cli` image,
 `predfoot run`, `validate` and `qa`, then the real stages on the golden fixture, whose outputs must match
 `tests/fixtures/golden/expected/`; in the `serve` image, a healthy `HEALTHCHECK`, `POST /v1/localize` (200,
-finite values), `POST /v1/calibrate` (503) and `/metrics`. Nothing is pushed there. No image has been built
-outside CI: the workflow run is the build's first test.
+finite values), `POST /v1/calibrate` (503) and `/metrics`. Nothing is pushed there.
 
 ### Release
 
