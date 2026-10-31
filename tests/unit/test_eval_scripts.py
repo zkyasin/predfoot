@@ -9,6 +9,7 @@ import pytest
 
 from predfoot.calib import temporal as tm
 from predfoot.contracts import CalibResult, CalibStatus
+from predfoot.kpi.noise import fit_axis
 from predfoot.paths import REPO_ROOT
 
 
@@ -193,3 +194,65 @@ def test_json_payload_is_plain_json():
     out = error_process.to_jsonable(payload)
     assert out == {"acf": {"1": 0.5, "2": None}, "rho25": [0.9, 0.95], "n": 3}
     json.dumps(out, allow_nan=False)
+
+
+def heterogeneous_series(rng, n_series=300, n=150):
+    """AR(1) error series at 5 fps whose variance grows with their smoothness (as on SN-GSR dev), with
+    5 % missing frames."""
+    out = []
+    for _ in range(n_series):
+        rho = rng.uniform(0.2, 0.95)
+        sigma = 0.1 + 0.8 * (rho - 0.2)
+        innovations = rng.standard_normal(n) * sigma * np.sqrt(1.0 - rho**2)
+        x = np.empty(n)
+        x[0] = rng.standard_normal() * sigma
+        for t in range(1, n):
+            x[t] = rho * x[t - 1] + innovations[t]
+        x[rng.random(n) < 0.05] = np.nan
+        out.append(x)
+    return out
+
+
+def test_pooled_acf_reproduces_the_pooled_step_variances_exactly(rng):
+    series = heterogeneous_series(rng)
+    pool = error_process._Pool()
+    for x in series:
+        pool.add(x)
+    s = pool.summary()
+    centred = np.concatenate([x - np.nanmean(x) for x in series])
+    assert s["sigma"] == pytest.approx(np.sqrt(np.nanmean(centred**2)), rel=1e-12)
+    for lag in error_process.LAGS:
+        d = np.concatenate([x[lag:] - x[:-lag] for x in series])
+        d = d[np.isfinite(d)]
+        assert s["n_pairs"][lag] == d.size
+        assert 2.0 * s["sigma"] ** 2 * (1.0 - s["acf"][lag]) == pytest.approx(np.mean(d**2), rel=1e-9)
+    steps = np.concatenate([np.diff(x) for x in series])
+    steps = steps[np.isfinite(steps)]
+    assert s["step_rms"] == pytest.approx(np.sqrt(np.mean(steps**2)), rel=1e-12)
+    assert s["step_abs_median"] == pytest.approx(np.median(np.abs(steps)), rel=1e-12)
+
+
+def test_process_fitted_to_heterogeneous_series_reproduces_their_step_variance(rng):
+    """Round trip: series with different σ_i and ρ_i, the larger ones smoother. The process fitted to the
+    pooled σ and ACF has the measured lag-1 step variance; one fitted to the mean of per-series
+    correlations (the previous estimator) has about 1.5 times too much 0.2 s jitter."""
+    series = heterogeneous_series(rng)
+    pool = error_process._Pool()
+    for x in series:
+        pool.add(x)
+    s = pool.summary()
+    lags = np.array(error_process.LAGS) * error_process.DT_S
+    acf = np.array([s["acf"][k] for k in error_process.LAGS])
+    pairs = np.array([s["n_pairs"][k] for k in error_process.LAGS])
+    measured = s["step_rms"] ** 2
+    for kernel in ("exp", "matern32"):
+        fit = fit_axis(s["sigma"], lags, acf, pairs, kernel=kernel, slow=True)
+        model = 2.0 * s["sigma"] ** 2 * (1.0 - float(fit.process.acf(lags[0])))
+        assert model == pytest.approx(measured, rel=0.02)
+    r1 = []
+    for x in series:
+        a, b = x[:-1], x[1:]
+        ok = np.isfinite(a) & np.isfinite(b)
+        r1.append((np.corrcoef(a[ok], b[ok])[0, 1], ok.sum()))
+    mean_r1 = np.average([r for r, _ in r1], weights=[n for _, n in r1])
+    assert 2.0 * s["sigma"] ** 2 * (1.0 - mean_r1) > 1.3 * measured

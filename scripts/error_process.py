@@ -4,9 +4,10 @@ compare two cameras (per-frame calibration against temporal smoothing).
 Reads ``players.parquet`` written by scripts/eval_dev.py (frames one in five, so 5 fps). For each clip the
 errors are split into a common part (per-frame median over players: mostly the camera) and an individual
 part. For each reference (labels, trusted line oracle, smoothed labels when present) and part: the marginal
-standard deviation per axis, the autocorrelation at lags 1-5 (0.2-1.0 s, pooled over series and weighted by
-their number of pairs), the RMS of the lag-1 steps, and a bracket of the 25 Hz lag-one correlation under an
-exponential decay, ρ₂₅ ∈ [ρ(0.2 s)^(1/5), ρ(1 s)^(1/25)].
+standard deviation per axis, the autocorrelation at lags 1-5 (0.2-1.0 s) of the pooled process, 1 − γ(k)/σ²
+with γ the semi-variogram pooled over every pair of every series (so 2σ²(1 − ρ(0.2 s)) is the squared RMS
+of the lag-1 steps), the RMS and median absolute value of the lag-1 steps, and a bracket of the 25 Hz
+lag-one correlation under an exponential decay, ρ₂₅ ∈ [ρ(0.2 s)^(1/5), ρ(1 s)^(1/25)].
 
 KPI proxy (model-free, the primary evidence for the KPI cost): per track, runs of at least 8 consecutive
 cached frames with every error against the labels below 10 m; Savitzky-Golay positions (window 5, order 2)
@@ -20,7 +21,8 @@ Usage:
         --out runs/error_process_smoothed.md
 With ``--compare``, both tables are restricted to the player-frames where both have finite errors.
 ``--json`` also writes the numbers (per camera, reference, part and axis: σ, ACF with pair counts, lag-1 step
-RMS, series lengths, and the KPI proxy with its run lengths) for scripts/kpi_spectral.py.
+RMS and median, series lengths, marginal quantiles and kurtosis, the normal-score ACF, and the KPI proxy with
+its run lengths) for scripts/kpi_spectral.py.
 """
 
 from __future__ import annotations
@@ -72,12 +74,23 @@ def clip_tensor(d: pl.DataFrame, ref: str) -> np.ndarray:
 
 
 class _Pool:
-    """Accumulates pooled statistics over many 1-D series."""
+    """Pooled statistics of one error component over many 1-D series (sums over series, not averages).
+
+    σ² is the pooled variance around each series' mean. The lag-k semi-variogram γ(k) = ½·E[(x_{t+k} − x_t)²]
+    is pooled over every finite pair (it needs no centring), and the ACF is ρ(k) = 1 − γ(k)/σ². One
+    homogeneous process with this σ and ρ therefore reproduces the pooled step variances exactly,
+    2σ²(1 − ρ(k)) = E[(x_{t+k} − x_t)²], which is what speed and distance errors depend on. A mean of
+    per-series correlations does not: on SN-GSR dev the series with larger variance are also smoother, so
+    that mean understates the pooled autocorrelation, and a process fitted to it has too much 0.2 s jitter.
+    (The per-series centring biases σ², hence ρ, slightly low; the pair (σ, ρ) still matches the measured
+    steps at the five lags.)
+    """
 
     def __init__(self) -> None:
-        self.sd: list[tuple[float, int]] = []
-        self.acf: dict[int, list[tuple[float, int]]] = {lag: [] for lag in LAGS}
-        self.step_sq, self.step_n = 0.0, 0
+        self.sq_sum, self.n_values = 0.0, 0
+        self.diff_sq = dict.fromkeys(LAGS, 0.0)
+        self.pairs = dict.fromkeys(LAGS, 0)
+        self.steps: list[np.ndarray] = []  # lag-1 steps, for their median
         self.lengths: Counter[int] = Counter()
 
     def add(self, x: np.ndarray) -> None:
@@ -85,31 +98,34 @@ class _Pool:
         if n < MIN_SERIES:
             return
         self.lengths[n] += 1
-        self.sd.append((float(np.nanstd(x)), n))
+        self.sq_sum += float(np.nansum((x - np.nanmean(x)) ** 2))
+        self.n_values += n
         for lag in LAGS:
-            a, b = x[:-lag], x[lag:]
-            ok = np.isfinite(a) & np.isfinite(b)
-            if ok.sum() > 2 and np.std(a[ok]) > 0 and np.std(b[ok]) > 0:
-                self.acf[lag].append((float(np.corrcoef(a[ok], b[ok])[0, 1]), int(ok.sum())))
-        d1 = np.diff(x)
-        d1 = d1[np.isfinite(d1)]
-        self.step_sq += float(np.sum(d1**2))
-        self.step_n += d1.size
+            d = x[lag:] - x[:-lag]
+            d = d[np.isfinite(d)]
+            self.diff_sq[lag] += float(np.sum(d**2))
+            self.pairs[lag] += d.size
+            if lag == 1:
+                self.steps.append(d)
 
     def summary(self) -> dict[str, Any]:
-        sd = np.array(self.sd) if self.sd else np.full((1, 2), np.nan)
-        acf = {}
-        for lag, rows in self.acf.items():
-            arr = np.array(rows) if rows else np.full((1, 2), np.nan)
-            acf[lag] = float(np.average(arr[:, 0], weights=arr[:, 1])) if rows else float("nan")
+        var = self.sq_sum / self.n_values if self.n_values else float("nan")
+        acf = {
+            lag: 1.0 - self.diff_sq[lag] / (2.0 * self.pairs[lag] * var)
+            if self.pairs[lag] and var > 0
+            else float("nan")
+            for lag in LAGS
+        }
+        steps = np.concatenate(self.steps) if self.steps else np.empty(0)
         r1, r5 = (max(acf[lag], 0.0) for lag in (1, 5))
         return {
-            "sigma": float(np.sqrt(np.average(sd[:, 0] ** 2, weights=sd[:, 1]))) if self.sd else float("nan"),
+            "sigma": float(np.sqrt(var)),
             "acf": acf,
-            "n_pairs": {lag: int(sum(n for _, n in rows)) for lag, rows in self.acf.items()},
-            "step_rms": float(np.sqrt(self.step_sq / self.step_n)) if self.step_n else float("nan"),
+            "n_pairs": dict(self.pairs),
+            "step_rms": float(np.sqrt(self.diff_sq[1] / self.pairs[1])) if self.pairs[1] else float("nan"),
+            "step_abs_median": float(np.median(np.abs(steps))) if steps.size else float("nan"),
             "rho25": (r1 ** (1 / 5), r5 ** (1 / 25)),
-            "n_series": len(self.sd),
+            "n_series": sum(self.lengths.values()),
             "series_lengths": dict(sorted(self.lengths.items())),
         }
 
@@ -145,6 +161,7 @@ def measure(players: pl.DataFrame, ref: str) -> dict[str, Any]:
                 scores.add(normal_scores(x, values))
             per_axis[name] = pool.summary()
             per_axis[name]["quantiles"] = np.quantile(values, MARGINAL_PROBS).tolist()
+            per_axis[name]["kurtosis"] = float(np.mean(values**4) / np.mean(values**2) ** 2)
             ns = scores.summary()
             per_axis[name]["acf_nscore"], per_axis[name]["n_pairs_nscore"] = ns["acf"], ns["n_pairs"]
         out[part] = pooled.summary()  # both axes pooled, as in the tables
@@ -282,9 +299,10 @@ def main(
         "",
         "Errors of predfoot's positions (ground-truth boxes, our calibration), split into a common part",
         "shared by the players of a frame (mostly the camera) and an individual part. σ is the marginal",
-        "standard deviation per axis; ACF the autocorrelation at 0.2-1.0 s (frames are one in five);",
-        "ρ₂₅ the 25 Hz lag-one correlation implied by the 0.2 s and by the 1 s lag under an exponential",
-        "decay.",
+        "standard deviation per axis; ACF the autocorrelation at 0.2-1.0 s (frames are one in five) of",
+        "the pooled process, 1 − γ(k)/σ² with γ the semi-variogram pooled over all series, so that",
+        "σ·√(2(1 − ACF(0.2 s))) is the lag-1 step RMS; ρ₂₅ the 25 Hz lag-one correlation implied by the",
+        "0.2 s and by the 1 s lag under an exponential decay.",
         f"Errors above {MAX_ERROR_M:.0f} m are calibration failures, left to abstention, and excluded here."
         + (
             " Frames filled by the smoother (raw calibration failed) are excluded."
