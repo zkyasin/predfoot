@@ -48,16 +48,25 @@ def loo_homography(xy: np.ndarray, rect: np.ndarray) -> np.ndarray:
     return out
 
 
-def metres_per_pixel(pano: vc.PanoramaCamera, uv: np.ndarray) -> np.ndarray:
-    """√|det J| of the video pixel → pitch map at each pixel (central differences, 1 px)."""
-    out = []
-    for p in uv:
-        cols = [
-            (backproject_model(pano, (p + d)[None]) - backproject_model(pano, (p - d)[None]))[0] / 2
-            for d in (np.array([1.0, 0.0]), np.array([0.0, 1.0]))
-        ]
-        out.append(np.sqrt(abs(np.linalg.det(np.column_stack(cols)))))
-    return np.array(out)
+def jacobian(pano: vc.PanoramaCamera, p: np.ndarray) -> np.ndarray:
+    """Jacobian ∂(x, y)/∂(u, v) (2 × 2) of the video pixel → pitch map at one pixel, central differences."""
+    cols = [
+        (backproject_model(pano, (p + d)[None]) - backproject_model(pano, (p - d)[None]))[0] / 2
+        for d in (np.array([1.0, 0.0]), np.array([0.0, 1.0]))
+    ]
+    return np.column_stack(cols)
+
+
+def metres_per_pixel(pano: vc.PanoramaCamera, p: np.ndarray) -> dict[str, float]:
+    """Pitch metres per video pixel at one pixel: √|det J| (areal scale, the geometric mean of the two axes),
+    the largest singular value of J (the worst direction: depth, for a camera behind a touchline) and the
+    length of ∂(x, y)/∂v (one vertical video pixel)."""
+    J = jacobian(pano, p)
+    return {
+        "areal": round(float(np.sqrt(abs(np.linalg.det(J)))), 3),
+        "largest_axis": round(float(np.linalg.svd(J, compute_uv=False)[0]), 3),
+        "vertical_pixel": round(float(np.linalg.norm(J[:, 1])), 3),
+    }
 
 
 @app.command()
@@ -101,10 +110,10 @@ def main(
 
     names, xy, uv = st.load_keypoints(match)
     corner = st.internal_to_corner_xy(xy)
-    on_touchline = np.isin(corner[:, 1], [0.0, 68.0])
-    interpolated = on_touchline & ~np.isin(corner[:, 0], [0.0, 52.5, 105.0])
-    far = corner[:, 1] == 0.0
-    near = corner[:, 1] == 68.0
+    groups, marked = st.keypoint_groups(xy)
+    interpolated = ~marked  # touchline points placed by eye
+    far = groups == "far_touchline"
+    near = groups == "near_touchline"
     proj = pano.project_video(xy)
     e_px = np.linalg.norm(proj - uv, axis=1)
     e_m = np.linalg.norm(backproject_model(pano, uv) - xy, axis=1)
@@ -122,10 +131,10 @@ def main(
         "centre_spot_video_px_offset": np.round(
             proj[names.index("(52.5,34)")] - uv[names.index("(52.5,34)")], 1
         ).tolist(),
+        "centre_spot_metres": round(float(e_m[names.index("(52.5,34)")]), 2),
     }
-    mpp = metres_per_pixel(pano, uv)
     res["video_metres_per_pixel"] = {
-        n: round(float(mpp[names.index(n)]), 3) for n in ("(52.5,68)", "(52.5,34)", "(52.5,0)", "(0,0)")
+        n: metres_per_pixel(pano, uv[names.index(n)]) for n in ("(52.5,68)", "(52.5,34)", "(52.5,0)", "(0,0)")
     }
 
     # homographies in the rectified image
