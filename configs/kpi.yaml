@@ -1,0 +1,57 @@
+# Physical KPI definitions used by predfoot.kpi (validated by predfoot.kpi.config.KpiConfig).
+#
+# Two kinds of values live here:
+# - values PUBLISHED by SkillCorner, quoted with their source;
+# - ASSUMPTIONS of this project, for what SkillCorner does not publish (minimum effort duration, smoothing, how
+#   "activities" and efforts are segmented). They are NOT SkillCorner's definitions. reports/kpi_sensitivity.md
+#   shows how much each one moves the KPIs.
+#
+# Sources (checked on 2026-10-31):
+# [EA]  SkillCorner, "New feature: explosive accelerations", 6 Feb 2025,
+#       https://skillcorner.com/articles/new-feature-explosive-accelerations
+# [PSV] SkillCorner, "SkillCorner releases new peak velocity metric", 11 Jun 2026,
+#       https://www.skillcorner.com/articles/skillcorner-releases-new-peak-velocity-metric
+
+# Sampling rates, Hz. IDSSE (DFL) tracking is 25 Hz; SkillCorner tracking data is published at 10 fps (ADR-0001).
+native_hz: 25
+output_hz: 10
+
+# Smoothing of positions before differentiation. ASSUMPTION: SkillCorner does not publish its filter. Savitzky-Golay
+# over about 1 s (rounded to an odd number of samples: 11 at 10 Hz, 25 at 25 Hz), applied to each gap-free segment.
+smoothing:
+  method: savgol # savgol | none
+  window_s: 1.0
+  polyorder: 2
+
+# Speed thresholds, km/h. PUBLISHED [EA]: "High Speed Run speed (20 km/h | 5.5 m/s)", "Sprint speed (25 km/h | 6.9 m/s)".
+hsr_kmh: 20.0
+sprint_kmh: 25.0
+
+# Distance bands: < 15, 15-20, 20-25, > 25 km/h. 20 and 25 are the published thresholds above; 15 km/h is the
+# PSV-99 activity threshold [PSV]. HI (high-intensity) distance is the distance above hsr_kmh.
+band_edges_kmh: [15.0, 20.0, 25.0]
+
+# HSR and sprint efforts: maximal runs at or above hsr_kmh (resp. sprint_kmh) lasting at least min_effort_s.
+# ASSUMPTION: SkillCorner does not publish a minimum duration. An HSR effort is any run above 20 km/h, so most
+# sprints are also HSR efforts.
+min_effort_s: 1.0
+
+explosive_acceleration:
+  # PUBLISHED [EA]: "the player spends over 0.7 seconds at an acceleration of 3 m/s²", "From a standing or walking
+  # pace (speed below 9 km/h | 2.5 m/s) to a HSR or a Sprint".
+  accel_ms2: 3.0
+  min_duration_s: 0.7
+  start_below_kmh: 9.0
+  # ASSUMPTION: how an effort is cut out of the signal. We use the acceleration phase (consecutive samples where the
+  # speed increases); it qualifies when it starts below start_below_kmh, ends at or above hsr_kmh (sprint_kmh for
+  # the "to sprint" count) and contains more than min_duration_s at or above accel_ms2. Acceleration is the rate of
+  # change of speed.
+
+psv99:
+  # PUBLISHED [PSV]: PSV-99 is "the 99th percentile of all physical activities over 15 km/h".
+  activity_kmh: 15.0
+  percentile: 99.0
+  # ASSUMPTION: an activity is a run above activity_kmh lasting at least min_activity_s, and the percentile is taken
+  # over the speed samples of all activities ("samples"). "run_peaks" takes it over each activity's peak speed.
+  min_activity_s: 1.0
+  statistic: samples # samples | run_peaks
