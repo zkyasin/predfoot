@@ -256,3 +256,15 @@ def test_process_fitted_to_heterogeneous_series_reproduces_their_step_variance(r
         r1.append((np.corrcoef(a[ok], b[ok])[0, 1], ok.sum()))
     mean_r1 = np.average([r for r, _ in r1], weights=[n for _, n in r1])
     assert 2.0 * s["sigma"] ** 2 * (1.0 - mean_r1) > 1.3 * measured
+
+
+def test_proxy_verdict_needs_both_biases_within_the_tolerance():
+    kpi_spectral = _load("kpi_spectral")
+    measured = {"distance_bias": 0.04, "hsr_bias": 0.10}
+    assert kpi_spectral.proxy_verdict(measured, {"distance_bias": 0.07, "hsr_bias": 0.15})["passes"]
+    v = kpi_spectral.proxy_verdict(measured, {"distance_bias": 0.16, "hsr_bias": 0.15})
+    assert not v["passes"]
+    assert v["distance_bias"] == pytest.approx(4.0)
+    assert not kpi_spectral.proxy_verdict(measured, {"distance_bias": 0.04, "hsr_bias": 0.04})["passes"]
+    no_bias = {"distance_bias": 0.0, "hsr_bias": 0.10}
+    assert not kpi_spectral.proxy_verdict(no_bias, {"distance_bias": 0.0, "hsr_bias": 0.10})["passes"]

@@ -8,13 +8,16 @@
    (nugget + two scales of one kernel) are fitted to the 5 fps ACF measured against the smoothed labels:
    Gaussian processes with the measured σ, and Gaussian copulas with the measured marginal (heavy-tailed)
    fitted to the ACF of the normal scores. The previous model (one Gaussian Ornstein-Uhlenbeck process through
-   the 0.2 s lag) is kept for comparison.
+   the 0.2 s lag) is kept for comparison. Round trip: the RMS and median of the 0.2 s steps of simulated
+   errors against the measured ones.
 2. **Simulation-to-measurement check.** The SN-GSR KPI proxy protocol on IDSSE: clean 25 Hz positions
    subsampled at 5 fps and cut into runs drawn from the measured run-length distribution; simulated errors
    (sampled at 25 Hz, then subsampled) added; Savitzky-Golay window 5, order 2; distance and HSR distance
    (5.56 m/s) of the noisy runs against the same protocol on the clean runs (``predfoot.kpi.proxy``, the code
    that produced the SN-GSR numbers). Every model sees the same runs. Done on all frames and on ball-in-play
-   frames only (SN-GSR clips are live play).
+   frames only (SN-GSR clips are live play). Verdict: the check passes when the chosen model's ball-in-play
+   distance and HSR-distance biases are both within a factor of ``PROXY_TOLERANCE`` of the measured ones; when
+   it fails, the report says so above the budget.
 3. **Budget at the export rate.** Errors at 25 Hz, then the 10 fps pipeline of ``predfoot.kpi.speed`` and the
    KPIs of ``predfoot.kpi.metrics``; MAPE, bias and Spearman per KPI against the clean 25 Hz reference, with
    intervals from a bootstrap over matches (``predfoot.kpi.report``), for every kernel and both nugget shapes.
@@ -44,7 +47,7 @@ import polars as pl
 from predfoot.io import idsse
 from predfoot.kpi.config import KpiConfig, load_kpi_config
 from predfoot.kpi.metrics import kpi_names
-from predfoot.kpi.noise import AxisProcess, SpectralErrorModel, fit_error_model, sample_errors
+from predfoot.kpi.noise import AxisProcess, SpectralErrorModel, fit_error_model, sample_axis, sample_errors
 from predfoot.kpi.proxy import PROXY_MIN_RUN, ProxyTotals
 from predfoot.kpi.report import compare_to_reference
 from predfoot.kpi.simulate import PeriodTracks, period_tracks, player_kpis, seeded_rng
@@ -74,6 +77,8 @@ KERNEL_LABELS = {
 PARTS = ("common", "individual")
 AXES = ("x", "y")
 STEP = 5  # native frames per 5 fps sample
+#: The proxy check passes when simulated / measured bias is within this factor (distance and HSR distance).
+PROXY_TOLERANCE = 2.0
 GOALKEEPER = "TW"
 BUDGET_KPIS = ("distance_m", "hi_distance_m", "dist_gt25_m", "hsr_efforts", "sprint_efforts", "psv99_kmh")
 KPI_LABELS = {
@@ -174,6 +179,74 @@ def ghost_per_min(model: SpectralErrorModel, cfg: KpiConfig, seed: int, minutes:
         kin = pipeline(e[:, i], cfg, resample_to=cfg.output_hz)
         total += float(np.nansum(np.hypot(*np.diff(kin.xy, axis=0).T)))
     return total / (e.shape[1] * minutes)
+
+
+def step_round_trip(
+    stats: dict[str, Any],
+    reference: str,
+    models: dict[str, dict[str, SpectralErrorModel]],
+    seed: int,
+    minutes: int = 10,
+    n_paths: int = 16,
+) -> list[dict[str, Any]]:
+    """Measured RMS and median |step| of the 0.2 s error steps per camera, part and axis, next to the same
+    statistics of ``minutes`` of samples (25 Hz, taken one in five) of each labelled model."""
+    rows = []
+    for camera, labelled in models.items():
+        for part in PARTS:
+            for axis in AXES:
+                s = stats["cameras"][camera]["references"][reference][part][axis]
+                row: dict[str, Any] = {
+                    "camera": camera,
+                    "part": part,
+                    "axis": axis,
+                    "measured_rms": s["step_rms"],
+                    "measured_median": s.get("step_abs_median", math.nan),
+                }
+                for label, model in labelled.items():
+                    proc = getattr(model, part).axis(axis)
+                    rng = seeded_rng(seed, "steps", model.name, part, axis)
+                    d = np.diff(sample_axis([proc], minutes * 60 * 25, n_paths, rng)[::STEP], axis=0)
+                    row[f"{label}_rms"] = float(np.sqrt(np.mean(d**2)))
+                    row[f"{label}_median"] = float(np.median(np.abs(d)))
+                rows.append(row)
+    return rows
+
+
+def tail_ranges(stats: dict[str, Any], cameras: Sequence[str], reference: str) -> dict[str, float]:
+    """Range over cameras, parts and axes of the robust σ (IQR / 1.349) as a fraction of the SD, and of the
+    kurtosis, from the measured marginals."""
+    robust, kurt = [], []
+    for camera in cameras:
+        r = stats["cameras"][camera]["references"][reference]
+        probs = np.asarray(r["marginal_probs"], dtype=float)
+        for part in PARTS:
+            for axis in AXES:
+                s = r[part][axis]
+                q25, q75 = np.interp([0.25, 0.75], probs, np.asarray(s["quantiles"], dtype=float))
+                robust.append(float(q75 - q25) / 1.349 / s["sigma"])
+                if s.get("kurtosis") is not None:
+                    kurt.append(float(s["kurtosis"]))
+    return {
+        "robust_lo": min(robust),
+        "robust_hi": max(robust),
+        "kurt_lo": min(kurt) if kurt else math.nan,
+        "kurt_hi": max(kurt) if kurt else math.nan,
+    }
+
+
+def proxy_verdict(measured: dict[str, Any], simulated: dict[str, Any]) -> dict[str, Any]:
+    """Simulated / measured ratios of the distance and HSR-distance biases and whether both are within
+    ``PROXY_TOLERANCE``. A ratio is undefined when the measured bias is not positive; the check then fails."""
+    out: dict[str, Any] = {}
+    for key in ("distance_bias", "hsr_bias"):
+        m, s = measured[key], simulated[key]
+        out[key] = s / m if m is not None and s is not None and m > 0 else math.nan
+    out["passes"] = all(
+        math.isfinite(out[k]) and 1.0 / PROXY_TOLERANCE <= out[k] <= PROXY_TOLERANCE
+        for k in ("distance_bias", "hsr_bias")
+    )
+    return out
 
 
 # --- report helpers --------------------------------------------------------------------------------------
@@ -386,7 +459,15 @@ def main() -> None:
     }
     (run_dir / "meta.json").write_text(json.dumps(meta, indent=2))
     chosen = {c: models[c, args.family, args.marginal] for c in cameras}
-    report = render(meta, stats, cameras, chosen, residuals, proxy, comp, ghosts, args.family, args.marginal)
+    steps = step_round_trip(
+        stats,
+        args.reference,
+        {c: {"gauss": models[c, args.family, "gauss"], "chosen": chosen[c]} for c in cameras},
+        args.seed,
+    )
+    report = render(
+        meta, stats, cameras, chosen, residuals, proxy, comp, ghosts, args.family, args.marginal, steps
+    )
     args.report.write_text(report, encoding="utf-8")
     print(f"report: {args.report}\nrun: {run_dir}\n{meta['runtime_s']} s")
 
@@ -402,9 +483,16 @@ def render(
     ghosts: dict[str, float],
     family: str,
     marginal: str,
+    steps: list[dict[str, Any]],
 ) -> str:
     dirty = " (with uncommitted changes)" if meta["git_dirty"] else ""
     measured = {c: stats["cameras"][c]["kpi_proxy"] for c in cameras}
+    tails = tail_ranges(stats, cameras, meta["reference"])
+    kurtosis = (
+        f" and kurtosis {tails['kurt_lo']:.0f} to {tails['kurt_hi']:.0f}"
+        if math.isfinite(tails["kurt_lo"])
+        else ""
+    )
 
     def cell(cond: str, kpi: str, metric: str) -> float:
         sub = comp.filter((pl.col("condition") == cond) & (pl.col("kpi") == kpi))
@@ -441,9 +529,10 @@ def render(
         " 0.2 s sampling interval: anything faster is not resolved by the measurement and is carried by the"
         " nugget, whose shape at 25 Hz is an assumption (section 3). Two marginals: **Gaussian** with the"
         " measured σ, or the **measured marginal** through a Gaussian copula, ρ being then fitted to the ACF"
-        " of the normal scores. The measured errors are heavy-tailed: a Gaussian with the measured σ makes"
-        " the typical error about twice too large (robust σ = 0.36 to 0.68 of the SD, kurtosis 11 to 35 on"
-        " these tables).",
+        " of the normal scores. The measured errors are heavy-tailed: robust σ (IQR / 1.349) ="
+        f" {tails['robust_lo']:.2f} to {tails['robust_hi']:.2f} of the SD{kurtosis} on these series, so a"
+        f" Gaussian with the measured σ makes the typical error {1 / tails['robust_hi']:.1f} to"
+        f" {1 / tails['robust_lo']:.1f} times too large.",
         "",
         "Largest |ACF residual| over the five lags (model minus measurement; normal-score ACF for the"
         " copula fits):",
@@ -459,15 +548,66 @@ def render(
                 )
     header = [f"{KERNEL_LABELS[f]}" + ("" if f == "ou" else f" ({m})") for f, m in cols]
     lines += [md_table(["Camera", "Part", "Axis", *header], res_rows), ""]
+    reason = (
+        " The kernel is a prior choice, not a fit result: the smooth kernels fit the five lags about as well"
+        " as each other (table above), and Matérn-3/2 is the roughest of them with differentiable paths, as"
+        " expected of the error of a smoothed camera with inertia."
+        if family == "matern32"
+        else " The kernel was chosen on the command line (`--family`)."
+    )
     lines += [
-        f"Chosen model: **{KERNEL_LABELS[family]}, {MARGINAL_LABELS[marginal]}, white nugget**. Parameters"
-        " (σ in m, scales in s; the last column is the RMS of the time derivative of a Gaussian process with"
-        " the same σ and ρ, in m/s, infinite when the nugget is white or the kernel exponential):",
+        f"Chosen model: **{KERNEL_LABELS[family]}, {MARGINAL_LABELS[marginal]}, white nugget**.{reason}"
+        " Parameters (σ in m, scales in s; the last column is the RMS of the time derivative of a Gaussian"
+        " process with the same σ and ρ, in m/s, infinite when the nugget is white or the kernel"
+        " exponential):",
         "",
         md_table(
             ["Camera", "Part", "Axis", "σ", "w_n", "ℓ", "w_s", "T", "RMS d/dt"],
             model_table(chosen),
         ),
+        "",
+    ]
+    rms_ratio = [r["measured_rms"] / r["chosen_rms"] for r in steps]
+    median_ratio = [r["measured_median"] / r["chosen_median"] for r in steps]
+    lines += [
+        "Round trip at 5 fps: RMS and median |step| of the 0.2 s error steps (m), measured on SN-GSR dev and"
+        f" in 10 min of samples of the fitted processes (25 Hz, one sample in five): the Gaussian"
+        f" {KERNEL_LABELS[family]} and the chosen model. The ACF is pooled over series (`error_process.py`),"
+        " so the Gaussian fit reproduces the measured step RMS up to its ACF residual; the copula fit"
+        " matches the normal scores instead, so its step RMS can differ.",
+        "",
+        md_table(
+            [
+                "Camera",
+                "Part",
+                "Axis",
+                "Step RMS: measured",
+                "Gaussian",
+                "chosen",
+                "Median |step|: measured",
+                "Gaussian",
+                "chosen",
+            ],
+            [
+                [
+                    r["camera"],
+                    r["part"],
+                    r["axis"],
+                    fmt(r["measured_rms"], 3),
+                    fmt(r["gauss_rms"], 3),
+                    fmt(r["chosen_rms"], 3),
+                    fmt(r["measured_median"], 3),
+                    fmt(r["gauss_median"], 3),
+                    fmt(r["chosen_median"], 3),
+                ]
+                for r in steps
+            ],
+        ),
+        "",
+        "Measured / chosen model: step RMS"
+        f" {fmt(min(rms_ratio))} to {fmt(max(rms_ratio))}, median |step| {fmt(min(median_ratio))} to"
+        f" {fmt(max(median_ratio))}. A median ratio below the RMS ratio means real steps are intermittent:"
+        " mostly smaller than the model's, with rarer large jumps.",
         "",
         "## 2. Simulation against measurement: the KPI proxy at 5 fps",
         "",
@@ -533,6 +673,31 @@ def render(
         "",
         md_table(["Camera and model", "Distance bias", "HSR-distance bias", "Speed error (m/s)"], prox_rows),
         "",
+    ]
+    verdicts = {c: proxy_verdict(measured[c], prow(chosen_name[c], True)) for c in cameras}
+    failed = [c for c in cameras if not verdicts[c]["passes"]]
+    lines += [
+        f"**Verdict.** The check passes when the chosen model's ball-in-play distance and HSR-distance biases"
+        f" are both within a factor of {PROXY_TOLERANCE:g} of the measured ones.",
+        "",
+        md_table(
+            [
+                "Camera",
+                "Distance bias: simulated / measured",
+                "HSR-distance bias: simulated / measured",
+                "Check",
+            ],
+            [
+                [
+                    c,
+                    f"×{fmt(verdicts[c]['distance_bias'], 1)}",
+                    f"×{fmt(verdicts[c]['hsr_bias'], 1)}",
+                    "passes" if verdicts[c]["passes"] else "**fails**",
+                ]
+                for c in cameras
+            ],
+        ),
+        "",
         "What the simulation does not reproduce: the SN-GSR reference is the smoothed labels, which carry"
         " their own smoothing error, while IDSSE's is the clean tracking; real errors are heteroscedastic"
         " (larger far from the camera, along the viewing direction) and can correlate with motion (fast pans"
@@ -542,6 +707,22 @@ def render(
         "",
         "## 3. Budget at the export rate (10 fps pipeline)",
         "",
+    ]
+    if failed:
+        ratios = "; ".join(
+            f"{c}: distance ×{fmt(verdicts[c]['distance_bias'], 1)},"
+            f" HSR distance ×{fmt(verdicts[c]['hsr_bias'], 1)}"
+            for c in failed
+        )
+        lines += [
+            f"> **Not predfoot's KPI error.** The check of section 2 fails for the {', '.join(failed)} camera"
+            f"{'s' if len(failed) > 1 else ''}: the chosen model's simulated 5 fps proxy biases are several"
+            f" times the measured ones ({ratios}, ball in play). The numbers below are the budget of the"
+            " fitted stationary error model; they overstate the KPI error of predfoot's tracking and must"
+            " not be quoted as such.",
+            "",
+        ]
+    lines += [
         "Errors are sampled at 25 Hz and the 10 fps pipeline runs as for exported tracking. The nugget"
         f" ({nugget_range(chosen)} of the variance) is invisible at 5 fps; two shapes bound what it can do at"
         " 25 Hz: **white** (independent frames, power spread to 12.5 Hz, mostly removed by the 10 fps"
