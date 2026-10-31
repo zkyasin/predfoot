@@ -182,7 +182,8 @@ def test_game_centre_and_fallback_order():
 def dense_gls(dt, has, z, r, params, cfg, accepted=None):
     """Posterior of the whole trajectory by one dense least-squares solve (independent of the filter).
 
-    λ applies next to frames without an accepted measurement (``accepted`` defaults to ``has``).
+    λ = ``params.gap`` applies next to frames without an accepted measurement (``accepted`` defaults to
+    ``has``).
     """
     acc = has if accepted is None else accepted
     n, dim = len(dt), 8
@@ -201,7 +202,7 @@ def dense_gls(dt, has, z, r, params, cfg, accepted=None):
     p0[:4, :4], p0[4:, 4:] = r[0], np.diag(np.square(cfg.v0))
     add(rows, np.concatenate([z[0], np.zeros(4)]), p0)
     for k in range(1, n):
-        lam = 1.0 if (acc[k] and acc[k - 1]) else cfg.gap_noise_factor
+        lam = 1.0 if (acc[k] and acc[k - 1]) else params.gap
         f = np.block([[np.eye(4), dt[k] * np.eye(4)], [np.zeros((4, 4)), np.eye(4)]])
         q = lam * np.diag(qc)
         qq = np.block([[dt[k] ** 3 / 3 * q, dt[k] ** 2 / 2 * q], [dt[k] ** 2 / 2 * q, dt[k] * q]])
@@ -220,17 +221,28 @@ def dense_gls(dt, has, z, r, params, cfg, accepted=None):
 
 def test_filter_and_smoother_equal_the_dense_gls_solution(rng):
     meas = toy_clip(rng, 30, missing=(9, 17))
-    params = tm.NoiseParams(kappa2=1.0, q_pan=0.7, q_tilt=0.3, q_logf=1.2)
+    params = tm.NoiseParams(kappa2=1.0, q_pan=0.7, q_tilt=0.3, q_logf=1.2, gap=7.0)
     cfg = tm.SmootherConfig(q_roll=0.5, v0=(1.0, 0.8, 0.6, 1.2))
     mask = meas.accepted.copy()
     batch = tm.stack_clips([meas], [mask], [np.zeros(30, np.int64)], cfg)
-    np.testing.assert_array_equal(np.flatnonzero(batch.lam[0] == cfg.gap_noise_factor), [9, 10, 17, 18])
+    np.testing.assert_array_equal(np.flatnonzero(batch.gap[0]), [9, 10, 17, 18])
+    assert not batch.loose.any()
     fwd = tm.forward(batch, params, cfg, store=True)
     ms, ps = tm.rts(fwd, batch)
     r = tm.measurement_cov(meas, params, cfg)
     mean, cov = dense_gls(batch.dt[0], mask, np.nan_to_num(meas.z), r, params, cfg)
     np.testing.assert_allclose(ms[0], mean, rtol=1e-8, atol=1e-8 * np.abs(mean).max())
     np.testing.assert_allclose(ps[0], cov, rtol=1e-8, atol=1e-8 * np.abs(cov).max())
+
+
+def test_step_factors_separate_gaps_from_manoeuvres():
+    """Gap steps take the fitted λ, manoeuvre steps the fixed manoeuvre factor, the larger when both."""
+    params = tm.NoiseParams(gap=1.7)
+    gap = np.array([False, True, False, True])
+    loose = np.array([False, False, True, True])
+    np.testing.assert_array_equal(tm.step_factors(gap, loose, params, CFG), [1.0, 1.7, 20.0, 20.0])
+    big = tm.NoiseParams(gap=40.0)
+    np.testing.assert_array_equal(tm.step_factors(gap, loose, big, CFG), [1.0, 40.0, 20.0, 40.0])
 
 
 def test_batched_nll_is_the_sum_of_the_clips(rng):
@@ -261,7 +273,7 @@ def test_a_deleted_measurement_keeps_the_process_noise(rng):
     deleted = used.copy()
     deleted[20] = False
     batch = tm.stack_clips([meas], [deleted], [seg], cfg)
-    np.testing.assert_array_equal(np.flatnonzero(batch.lam[0] == cfg.gap_noise_factor), [9, 10])
+    np.testing.assert_array_equal(np.flatnonzero(batch.gap[0]), [9, 10])
     fwd = tm.forward(batch, params, cfg, store=True)
     ms, ps = tm.rts(fwd, batch)
     r = tm.measurement_cov(meas, params, cfg)
@@ -754,16 +766,26 @@ def test_projection_only_ablation(rng):
 # --- statistics of the noise fit ----------------------------------------------------------------------
 
 
-def cv_clips(rng, n_clips, n, params, cfg):
-    """Clips whose φ is a constant-velocity process with the given noise, measured with R = κ² Σ."""
+def cv_clips(rng, n_clips, n, params, cfg, n_failed=0):
+    """Clips whose φ is a constant-velocity process with the given noise, measured with R = κ² Σ.
+
+    With ``n_failed``, that many single frames per clip (never adjacent) have no measurement, and the process
+    noise of the steps into and out of them is multiplied by ``params.gap``.
+    """
     sigma = np.diag(np.square([1.5e-3, 6e-4, 3e-4, 1.5e-3]))
     q = (params.q_pan, params.q_tilt, cfg.q_roll, params.q_logf)
     clips, truths = [], []
     root = np.linalg.cholesky(params.kappa2 * sigma)
     for c in range(n_clips):
-        phi = cv_process(rng, n, 0.2, q)
-        z = phi + rng.standard_normal((n, 4)) @ root.T
         ok = np.ones(n, bool)
+        factors = None
+        if n_failed:
+            failed = rng.choice(np.arange(5, n - 5, 3), size=n_failed, replace=False)
+            ok[failed] = False
+            factors = np.where(ok & np.roll(ok, 1), 1.0, params.gap)
+        phi = cv_process(rng, n, 0.2, q, factors=factors)
+        z = phi + rng.standard_normal((n, 4)) @ root.T
+        z[~ok] = np.nan
         no = np.zeros(n, bool)
         clips.append(
             tm.ClipMeasurements(
@@ -776,11 +798,29 @@ def cv_clips(rng, n_clips, n, params, cfg):
 
 
 def test_noise_fit_recovers_the_true_parameters(rng):
+    """Without failed frames no innovation follows a gap: λ is not identifiable and keeps its value."""
     true = tm.NoiseParams(kappa2=1.8, q_pan=2e-3, q_tilt=2e-4, q_logf=4e-3)
     clips, _ = cv_clips(rng, 20, 150, true, CFG)
     fitted, diag = tm.fit_noise(clips, CFG)
     assert diag["converged"]
+    assert diag["gap_terms"] == 0
+    assert not diag["gap_fitted"]
+    assert fitted.gap == true.gap
     np.testing.assert_allclose(fitted.log_vector(), true.log_vector(), atol=np.log(1.25))
+
+
+def test_noise_fit_recovers_the_gap_factor(rng):
+    """Eight single failed frames per clip with the process noise × 6 on the steps next to them: the
+    innovations after the gaps recover λ (the first version fixed it at 20), and the other parameters stay
+    close to the truth."""
+    true = tm.NoiseParams(kappa2=1.8, q_pan=2e-3, q_tilt=2e-4, q_logf=4e-3, gap=6.0)
+    clips, _ = cv_clips(rng, 20, 150, true, CFG, n_failed=8)
+    assert not clips[0].accepted.all()
+    fitted, diag = tm.fit_noise(clips, CFG)
+    assert diag["converged"]
+    assert diag["gap_fitted"]
+    assert diag["gap_terms"] >= 140
+    np.testing.assert_allclose(fitted.log_vector(), true.log_vector(), atol=np.log(1.3))
 
 
 def test_truncated_likelihood_is_unbounded_below(rng):

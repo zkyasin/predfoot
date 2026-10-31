@@ -121,8 +121,12 @@ def cv_process(
     dt: float,
     q: Sequence[float],
     phi0: Sequence[float] = (0.0, np.radians(17.0), np.radians(0.4), np.log(2500.0)),
+    factors: np.ndarray | None = None,
 ) -> np.ndarray:
-    """φ (n, 4) of a constant-velocity process with spectral densities ``q``, starting at rest at ``phi0``."""
+    """φ (n, 4) of a constant-velocity process with spectral densities ``q``, starting at rest at ``phi0``.
+
+    ``factors`` (n,) multiplies the process noise of the step into each frame (same random draws).
+    """
     qc = np.diag(np.asarray(q, dtype=np.float64))
     f = np.block([[np.eye(4), dt * np.eye(4)], [np.zeros((4, 4)), np.eye(4)]])
     qq = np.block([[dt**3 / 3 * qc, dt**2 / 2 * qc], [dt**2 / 2 * qc, dt * qc]])
@@ -131,7 +135,8 @@ def cv_process(
     out = np.empty((n, 4))
     for k in range(n):
         out[k] = x[:4]
-        x = f @ x + root @ rng.standard_normal(8)
+        scale = 1.0 if factors is None or k + 1 >= n else float(np.sqrt(factors[k + 1]))
+        x = f @ x + scale * root @ rng.standard_normal(8)
     return out
 
 

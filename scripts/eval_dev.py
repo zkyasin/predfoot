@@ -748,29 +748,32 @@ def temporal_section(
             "Noise parameters (fitted without labels; fold g excludes game g):",
             "",
             "| Fold | Training clips | κ² | √q pan (°/s^1.5) | √q tilt (°/s^1.5) | √q log f (1/s^1.5) |"
-            " NLL per term | NIS mean (truncated) / median | Evaluations |",
-            "|---|---|---|---|---|---|---|---|---|",
+            " Gap factor λ (innovations after a gap, their median NIS) | NLL per term |"
+            " NIS mean (truncated) / median | Evaluations |",
+            "|---|---|---|---|---|---|---|---|---|---|",
         ]
         for fold, f in info.fits.items():
             p = f["params"]
             sq_pan, sq_tilt = np.degrees(np.sqrt(p["q_pan"])), np.degrees(np.sqrt(p["q_tilt"]))
             nis = f"{f.get('mean_nis_truncated', np.nan):.2f} / {f.get('median_nis', np.nan):.2f}"
             evals = f"{f['nfev']}" + ("" if f["converged"] else " (not converged)")
+            held = "" if f.get("gap_fitted") else ", held"
+            gap = (
+                f"{p['gap']:.2f} ({f.get('gap_terms', 0)}, {f.get('median_nis_after_gap', np.nan):.2f}{held})"
+            )
             md.append(
                 f"| {fold} | {f['training_clips']} | {p['kappa2']:.2f} | {sq_pan:.2f} | {sq_tilt:.3f} |"
-                f" {np.sqrt(p['q_logf']):.3f} | {f['nll'] / max(f['n_terms'], 1):.2f} | {nis} | {evals} |"
+                f" {np.sqrt(p['q_logf']):.3f} | {gap} | {f['nll'] / max(f['n_terms'], 1):.2f} | {nis} |"
+                f" {evals} |"
             )
         if len(info.fits) > 1:
-            logs = np.log(
-                [
-                    [f["params"][k] for k in ("kappa2", "q_pan", "q_tilt", "q_logf")]
-                    for f in info.fits.values()
-                ]
-            )
+            names = ("kappa2", "q_pan", "q_tilt", "q_logf", "gap")
+            logs = np.log([[f["params"][k] for k in names] for f in info.fits.values()])
             spread = np.exp(np.abs(logs - np.median(logs, axis=0)).max(axis=0))
             md += [
                 "",
-                "Largest ratio of a fold's parameter to the median over folds (κ², q pan, q tilt, q log f): "
+                "Largest ratio of a fold's parameter to the median over folds"
+                " (κ², q pan, q tilt, q log f, λ): "
                 + ", ".join(f"×{v:.2f}" for v in spread)
                 + " (target: within ×1.5).",
             ]
