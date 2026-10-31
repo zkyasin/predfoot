@@ -44,6 +44,7 @@ from predfoot.uncertainty.delta import (
 app = typer.Typer(add_completion=False)
 KP = pnlcalib_keypoints()
 ORACLE_MAX_PX = 3.0
+RAW_GAP_MAX_M = 5.0
 ALPHA = 0.1
 
 
@@ -66,7 +67,15 @@ def predict_clip(
         p = p_by_frame.get((frame,))
         if p is None:
             continue
-        p = p.filter(~pl.col("truncated") & pl.col("x_raw").is_not_null())
+        # Ground truth from a failed raw camera (raw and smoothed labels more than 5 m apart) is dropped.
+        p = p.filter(
+            ~pl.col("truncated")
+            & pl.col("x_raw").is_not_null()
+            & (
+                ((pl.col("x") - pl.col("x_raw")) ** 2 + (pl.col("y") - pl.col("y_raw")) ** 2)
+                <= RAW_GAP_MAX_M**2
+            )
+        )
         frame_lines = {}
         lf = l_by_frame.get((frame,))
         if lf is not None:
