@@ -93,6 +93,14 @@ the project uses [semantic versioning](https://semver.org/).
   PSV-99 at their nominal 90 % (90 to 91 %, against 57 to 69 % with the spread of one dose); distance KPIs
   stay below (32 to 51 %) because of the remaining extrapolation bias, and only leave-one-match-out
   calibrated intervals reach about 90 % for every KPI.
+- Portfolio README with the development results of both cameras, coverage with player-frames pooled and with
+  each clip weighted equally, and what the evidence does not show. `scripts/render_minimap_demo.py` animates
+  one dev clip, per-frame against PTZ-smoothed camera (`assets/minimap_demo.gif`, abstentions greyed, frames
+  without position labels hatched); `scripts/make_figures.py` draws the dev reliability (coverage minus the
+  nominal level), region area, coverage by distance and by clip size, and the KPI proxy
+  (`reports/dev_figures.md`, `reports/minimap_demo.md`). An index of the reports, serving and Docker details
+  in `docs/serving.md` and `docs/docker.md`, and ARCHITECTURE.md brought up to date. `eval_dev.logo` takes the
+  level α and returns each held-out row's Mondrian quantile.
 
 ### Fixed
 - Temporal smoothing tails: a run of misfit frames lasting at most 0.5 s strictly inside a segment gets the
@@ -125,3 +133,5 @@ the project uses [semantic versioning](https://semver.org/).
   did not run when `README.md`, `LICENSE` or `ATTRIBUTION.md`, which the images copy, changed.
 - `predfoot qa` never returned on an absurd `export_fps` in `meta.json` (it now falls back to 10 fps outside
   1e-3 to 1e3) and crashed on a line nested thousands deep, which the validator now reports as invalid JSON.
+- ATTRIBUTION.md credited SoccerNet Calibration 2023 for a health critic that does not exist; nothing uses
+  that dataset.
