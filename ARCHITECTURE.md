@@ -25,7 +25,7 @@ weights and of the decoding config. Every later stage reads the cache, so experi
 | Module | Input → output |
 |---|---|
 | `geometry` | Pitch template (FIFA dimensions), homography helpers, projections, Jacobians |
-| `keypoints` | Frame → `KeypointObs`, `LinePointObs` (pixels) |
+| `keypoints` | Frame → `KeypointObs`, `LinePointObs` (pixels); ONNX export and ONNX Runtime inference |
 | `calib` | Observations → `CalibResult` (H, Σθ, residuals, status) |
 | `uncertainty` | `CalibResult` + `FootObs` → `Localization` (position, Σp); conformal calibration |
 | `health` | Calibration features (+ frame) → failure probability, abstention |
@@ -34,7 +34,7 @@ weights and of the decoding config. Every later stage reads the cache, so experi
 | `kpi` | Tracking → physical KPIs; error injection; KPI error budget |
 | `eval` | Metrics, coverage, risk–coverage, cluster bootstrap |
 | `viz` | Minimaps, overlays, per-run QA report |
-| `serve` | HTTP API |
+| `serve` | HTTP API (FastAPI): `/v1/calibrate`, `/v1/localize`, `/healthz`, `/metrics` |
 | `pipeline` | Orchestration of the stages per frame, export blocks with resume; stub stages until the real modules land |
 
 Shared contracts live in `predfoot/contracts.py`; conventions in [ADR-0001](docs/adr/0001-conventions.md).
