@@ -349,7 +349,7 @@ def render(
         "  reference; see `reports/kpi_budget_spectral.md`).",
         "",
     ]
-    return "\n".join(lines) + "\n"
+    return "\n".join(lines).rstrip("\n") + "\n"
 
 
 def pick_examples(table: pl.DataFrame, camera: str) -> list[str]:

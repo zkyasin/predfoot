@@ -636,7 +636,7 @@ def render(
             ]
         )
     lines += [md_table(["Model", *[KPI_LABELS[k] for k in kpis_all]], all_rows), ""]
-    return "\n".join(lines) + "\n"
+    return "\n".join(lines).rstrip("\n") + "\n"
 
 
 def nugget_range(chosen: dict[str, SpectralErrorModel]) -> str:
