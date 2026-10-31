@@ -676,6 +676,18 @@ def render(
     ]
     verdicts = {c: proxy_verdict(measured[c], prow(chosen_name[c], True)) for c in cameras}
     failed = [c for c in cameras if not verdicts[c]["passes"]]
+    keys = ("distance_bias", "hsr_bias")
+    high = [
+        c
+        for c in cameras
+        if c not in failed and all(math.isfinite(verdicts[c][k]) and verdicts[c][k] > 1.0 for k in keys)
+    ]
+
+    def ratio_text(c: str) -> str:
+        v = verdicts[c]
+        return f"{c}: distance ×{fmt(v['distance_bias'], 1)}, HSR distance ×{fmt(v['hsr_bias'], 1)}"
+
+    every = [verdicts[c][k] for c in cameras for k in keys]
     lines += [
         f"**Verdict.** The check passes when the chosen model's ball-in-play distance and HSR-distance biases"
         f" are both within a factor of {PROXY_TOLERANCE:g} of the measured ones.",
@@ -698,6 +710,14 @@ def render(
             ],
         ),
         "",
+    ]
+    if all(math.isfinite(r) and r > 1.0 for r in every):
+        lines += [
+            f"Every simulated bias exceeds the measured one (×{fmt(min(every), 1)} to ×{fmt(max(every), 1)}):"
+            " the model overstates the 5 fps KPI cost even where the check passes.",
+            "",
+        ]
+    lines += [
         "What the simulation does not reproduce: the SN-GSR reference is the smoothed labels, which carry"
         " their own smoothing error, while IDSSE's is the clean tracking; real errors are heteroscedastic"
         " (larger far from the camera, along the viewing direction) and can correlate with motion (fast pans"
@@ -708,20 +728,26 @@ def render(
         "## 3. Budget at the export rate (10 fps pipeline)",
         "",
     ]
-    if failed:
-        ratios = "; ".join(
-            f"{c}: distance ×{fmt(verdicts[c]['distance_bias'], 1)},"
-            f" HSR distance ×{fmt(verdicts[c]['hsr_bias'], 1)}"
-            for c in failed
+    if failed or high:
+        caveat = "> **Not predfoot's KPI error.**"
+        if failed:
+            caveat += (
+                f" The check of section 2 fails for the {', '.join(failed)} camera"
+                f"{'s' if len(failed) > 1 else ''}: the chosen model's simulated 5 fps proxy biases are"
+                f" several times the measured ones ({'; '.join(ratio_text(c) for c in failed)}, ball in"
+                " play)."
+            )
+        if high:
+            caveat += (
+                f" For the {', '.join(high)} camera{'s' if len(high) > 1 else ''} the check passes, but the"
+                " simulated biases are still above the measured ones"
+                f" ({'; '.join(ratio_text(c) for c in high)})."
+            )
+        caveat += (
+            " The numbers below are the budget of the fitted stationary error model; they overstate the KPI"
+            " error of predfoot's tracking and must not be quoted as such."
         )
-        lines += [
-            f"> **Not predfoot's KPI error.** The check of section 2 fails for the {', '.join(failed)} camera"
-            f"{'s' if len(failed) > 1 else ''}: the chosen model's simulated 5 fps proxy biases are several"
-            f" times the measured ones ({ratios}, ball in play). The numbers below are the budget of the"
-            " fitted stationary error model; they overstate the KPI error of predfoot's tracking and must"
-            " not be quoted as such.",
-            "",
-        ]
+        lines += [caveat, ""]
     lines += [
         "Errors are sampled at 25 Hz and the 10 fps pipeline runs as for exported tracking. The nugget"
         f" ({nugget_range(chosen)} of the variance) is invisible at 5 fps; two shapes bound what it can do at"
