@@ -148,6 +148,13 @@ def test_lines_are_in_pixels_with_a_planar_flag(parsed):
     assert set(lines["frame"].to_list()) == {1}
 
 
+def test_frames_table_keeps_the_label_flags(parsed):
+    frames = parsed.frames
+    assert frames.schema == pl.Schema(sngsr.FRAMES_SCHEMA)
+    assert frames["frame"].to_list() == [1, 2, 3]
+    assert frames["has_labeled_camera"].to_list() == [True, False, True]
+
+
 def test_frame_comes_from_the_file_name():
     data = labels()
     data["images"][0]["image_id"] = "anything"
@@ -229,7 +236,12 @@ def test_build_index_keeps_the_locked_split_apart(tmp_path):
     assert set(pl.read_parquet(index / "persons.parquet")["clip_id"]) == {"SNGS-001", "SNGS-056"}
     assert set(pl.read_parquet(index / "lines.parquet")["clip_id"]) == {"SNGS-001", "SNGS-056"}
     assert set(pl.read_parquet(index / "test" / "persons.parquet")["clip_id"]) == {"SNGS-120"}
-    assert set(written) == {"clips", "persons", "lines", "test/persons", "test/lines"}
+    assert set(pl.read_parquet(index / "frames.parquet")["clip_id"]) == {"SNGS-001", "SNGS-056"}
+    assert set(written) == {"clips", "persons", "lines", "frames"} | {
+        "test/persons",
+        "test/lines",
+        "test/frames",
+    }
 
 
 def test_label_noise_floor():

@@ -17,7 +17,9 @@ Tables produced here (ADR-0001), with pixels in the original frame and metres in
 - ``persons`` (players, goalkeepers, referees, others; never the ball): clip_id, frame, track_id, role, team,
   jersey, bbox_x, bbox_y, bbox_w, bbox_h, foot_u, foot_v, x, y (smoothed ground truth), x_raw, y_raw (raw
   ground truth), truncated;
-- ``lines``: clip_id, frame, line_class, is_planar, point_idx, u, v.
+- ``lines``: clip_id, frame, line_class, is_planar, point_idx, u, v;
+- ``frames``: clip_id, frame, has_labeled_person, has_labeled_pitch, has_labeled_camera. Frames without a
+  labelled camera have no ground-truth pitch positions (checked on SNGS-035), so evaluations drop them.
 """
 
 from __future__ import annotations
@@ -28,10 +30,12 @@ from collections.abc import Iterable, Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import polars as pl
+import yaml
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from predfoot.io.conventions import sn_normalised_to_pixels, sn_to_internal_xy
 from predfoot.paths import data_dir
@@ -218,15 +222,23 @@ LINES_SCHEMA: dict[str, Any] = {
     "u": pl.Float64,
     "v": pl.Float64,
 }
+FRAMES_SCHEMA: dict[str, Any] = {
+    "clip_id": pl.String,
+    "frame": pl.Int32,
+    "has_labeled_person": pl.Boolean,
+    "has_labeled_pitch": pl.Boolean,
+    "has_labeled_camera": pl.Boolean,
+}
 
 
 @dataclass(frozen=True)
 class ClipLabels:
-    """The three tables of one clip."""
+    """The tables of one clip."""
 
     clip: pl.DataFrame
     persons: pl.DataFrame
     lines: pl.DataFrame
+    frames: pl.DataFrame
 
 
 class LabelsError(ValueError):
@@ -381,10 +393,21 @@ def parse_labels(
         },
         schema=LINES_SCHEMA,
     )
+    frames = pl.DataFrame(
+        {
+            "clip_id": [clip_id] * len(images),
+            "frame": [frame_of[str(im["image_id"])] for im in images],
+            "has_labeled_person": [bool(im.get("has_labeled_person")) for im in images],
+            "has_labeled_pitch": [bool(im.get("has_labeled_pitch")) for im in images],
+            "has_labeled_camera": [bool(im.get("has_labeled_camera")) for im in images],
+        },
+        schema=FRAMES_SCHEMA,
+    )
     return ClipLabels(
         clip=clip,
         persons=persons.sort("frame", "track_id"),
         lines=lines.sort("frame", "line_class", "point_idx"),
+        frames=frames.sort("frame"),
     )
 
 
@@ -397,7 +420,7 @@ def load_labels(path: Path, *, split: str) -> ClipLabels:
 
 # ----------------------------------------------------------------------------------------------------- index
 
-INDEX_TABLES = ("clips", "persons", "lines")
+INDEX_TABLES = ("clips", "persons", "lines", "frames")
 
 
 def _load_for_index(args: tuple[str, str]) -> ClipLabels:
@@ -414,7 +437,7 @@ def build_index(
 ) -> dict[str, Path]:
     """Parse every downloaded labels file into Parquet tables under ``index/``.
 
-    ``clips.parquet`` lists the clips of every split. ``persons.parquet`` and ``lines.parquet`` hold the dev
+    ``clips.parquet`` lists the clips of every split. ``persons``, ``lines`` and ``frames`` hold the dev
     splits only; the locked split's tables go to ``index/test/``, so that reading the default tables can never
     touch test labels by accident. Returns the paths written.
     """
@@ -441,13 +464,15 @@ def build_index(
             continue
         target = out_dir / subdir if subdir else out_dir
         target.mkdir(parents=True, exist_ok=True)
-        persons = pl.concat([p.persons for p in items]).sort("clip_id", "frame", "track_id")
-        lines = pl.concat([p.lines for p in items]).sort("clip_id", "frame", "line_class", "point_idx")
         key = f"{subdir}/" if subdir else ""
-        written[f"{key}persons"] = target / "persons.parquet"
-        written[f"{key}lines"] = target / "lines.parquet"
-        persons.write_parquet(written[f"{key}persons"])
-        lines.write_parquet(written[f"{key}lines"])
+        tables = {
+            "persons": pl.concat([p.persons for p in items]).sort("clip_id", "frame", "track_id"),
+            "lines": pl.concat([p.lines for p in items]).sort("clip_id", "frame", "line_class", "point_idx"),
+            "frames": pl.concat([p.frames for p in items]).sort("clip_id", "frame"),
+        }
+        for name, table in tables.items():
+            written[f"{key}{name}"] = target / f"{name}.parquet"
+            table.write_parquet(written[f"{key}{name}"])
     return written
 
 
@@ -471,3 +496,45 @@ def label_noise_floor(persons: pl.DataFrame, by: Sequence[str] = ("clip_id",)) -
         )
         .sort(list(by))
     )
+
+
+# ------------------------------------------------------------------------------------------- clip selections
+
+
+class SelectedClip(BaseModel):
+    """One dev clip picked for an experiment, with the reason it was picked."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    clip_id: str = Field(pattern=r"^SNGS-\d{3,4}$")
+    split: Literal["train", "valid"]  # never the locked test split
+    game_id: int
+    action_class: str
+    reason: str = Field(min_length=10)
+
+
+class ClipSelection(BaseModel):
+    """A list of dev clips and the frame stride to use (for example ``configs/spike_clips.yaml``)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    purpose: str
+    every: int = Field(ge=1)
+    clips: list[SelectedClip] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _unique_clips(self) -> ClipSelection:
+        ids = [c.clip_id for c in self.clips]
+        if len(set(ids)) != len(ids):
+            raise ValueError("a clip is listed twice")
+        return self
+
+    @property
+    def clip_ids(self) -> list[str]:
+        return [c.clip_id for c in self.clips]
+
+
+def load_clip_selection(path: Path) -> ClipSelection:
+    """Read and validate a clip selection YAML file."""
+    with path.open() as f:
+        return ClipSelection.model_validate(yaml.safe_load(f))

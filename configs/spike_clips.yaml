@@ -1,0 +1,33 @@
+# Dev clips for the calibration spike S0 (ticket T0.5), chosen from reports/data_audit.md (2026-10-31).
+# Five games (2, 3, 4, 5, 9), five action classes, train and valid, both halves, penalty-box and midfield views,
+# tight and wide zoom; every clip has ground-truth positions in at least 97 % of its frames (camera_pct).
+# Download the frames 1, 6, 11, ... with:
+#   uv run python scripts/download_data.py sn-gsr-frames --clips SNGS-056 SNGS-168 SNGS-036 SNGS-067 SNGS-093 --every 5
+purpose: calibration spike S0
+every: 5
+clips:
+  - clip_id: SNGS-056
+    split: valid
+    game_id: 3
+    action_class: Goal
+    reason: right penalty box at the tightest zoom of all dev clips (median box 141 px) with the cleanest ground truth (floor p90 0.14 m)
+  - clip_id: SNGS-168
+    split: train
+    game_id: 9
+    action_class: Yellow card
+    reason: midfield view (halfway line in every frame) with few lines (4.4 planar classes per frame), the hard case where the uncertainty should grow
+  - clip_id: SNGS-036
+    split: valid
+    game_id: 2
+    action_class: Substitution
+    reason: wide left-half view showing the box and the halfway line together (9.4 planar classes per frame) and clean ground truth (floor p99 1.1 m)
+  - clip_id: SNGS-067
+    split: train
+    game_id: 4
+    action_class: Corner
+    reason: right corner with a crowded box (18.7 persons per frame) occluding many lines (8.7 planar classes per frame)
+  - clip_id: SNGS-093
+    split: valid
+    game_id: 5
+    action_class: Direct free-kick
+    reason: left penalty box with frequent pans to midfield (box 89 % / halfway line 57 % of frames), clean ground truth (floor p99 1.2 m)
