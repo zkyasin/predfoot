@@ -97,6 +97,11 @@ def main(players_path: Path, out: Path = Path("reports/error_process_dev.md")) -
         "Reading: a ρ close to 1 at 25 Hz means slow errors (a camera that is wrong for seconds at a time),",
         "which the KPI study found to be the least harmful to distances; ρ ≈ 0.9 (about 0.4 s) was the most",
         "harmful. These parameters are the input of the KPI budget with measured errors (T4.3).",
+        "",
+        "Caveats. (1) Errors against the labels include the labels' own error, so σ is an upper bound of",
+        "predfoot's. (2) Each frame is calibrated independently, so part of the error is white jitter at any",
+        "frame rate: the exponential conversion from 5 fps to 25 Hz overstates the 25 Hz correlation of that",
+        "part. A direct measurement on clips decoded at the full 25 fps (planned in T1.6) will settle it.",
     ]
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("\n".join(md) + "\n")
