@@ -82,10 +82,16 @@ DEFAULT_REPORT = Path("reports/m2_logo_dev.md")
 #: Mondrian bins of a covariance source; the sources in POOLED_SOURCES (few rows) get one pooled quantile.
 MONDRIAN_BINS = {"mpp": 3, "n_inliers": 2}
 POOLED_SOURCES = frozenset({"gap"})
-#: Fewest calibration clips G for which the clip-level conformal level (1 − α)(1 + 1/G) is below 1 (10 at
-#: α = 0.1). A source with fewer calibration clips gets the model fitted on all sources: its own quantile
-#: would be its largest score.
-MIN_SOURCE_CLIPS = next(g for g in range(1, 10_000) if (1 - ALPHA) * (1 + 1 / g) < 1)
+
+
+def min_source_clips(alpha: float) -> int:
+    """Fewest calibration clips G for which the clip-level conformal level (1 − α)(1 + 1/G) is below 1."""
+    return next(g for g in range(1, 10_000) if (1 - alpha) * (1 + 1 / g) < 1)
+
+
+#: ``min_source_clips(ALPHA)``, 10 at α = 0.1. A source with fewer calibration clips gets the model fitted on
+#: all sources: its own quantile would be its largest score.
+MIN_SOURCE_CLIPS = min_source_clips(ALPHA)
 
 
 class Smooth(StrEnum):
@@ -532,12 +538,14 @@ def logo(
     n_boot: int = 300,
     fold_col: str | None = None,
     extra: pl.DataFrame | None = None,
+    alpha: float = ALPHA,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], pl.DataFrame, pl.DataFrame | None]:
-    """Leave-one-game-out coverage and size of our ellipses against a constant circle.
+    """Leave-one-game-out coverage and size of our ellipses against a constant circle, at level 1 − ``alpha``.
 
     Returns one row per held-out game, a summary over all held-out predictions (each player-frame is predicted
     with quantiles fitted on the other games), including coverage by distance tercile, the held-out rows with
-    their hits, and ``extra`` rows (e.g. filled frames) scored with the same fold models. With ``fold_col``,
+    their hits and Mondrian quantile (``q_mond``: the region is {e : eᵀ Σp⁻¹ e ≤ q_mond}), and ``extra`` rows
+    (e.g. filled frames) scored with the same fold models. With ``fold_col``,
     fold g calibrates on rows (fold == g) & (game != g) and tests on rows (fold == g) & (game == g).
     Mondrian models are fitted within each covariance source (column ``cov_source``, see :func:`cov_sources`
     and :func:`_mondrian_by_source`); the ``extra`` rows of the other games calibrate their own source and
@@ -548,15 +556,17 @@ def logo(
     score, norm, groups, games, cov = s["score"], s["norm"], s["groups"], s["games"], s["cov"]
     feats = {"mpp": s["mpp"], "n_inliers": s["n_inliers"]}
     source = s["source"]
-    raw_q = np.array([region_quantile(2, 1 - ALPHA, v) for v in s["dof"]])
+    raw_q = np.array([region_quantile(2, 1 - alpha, v) for v in s["dof"]])
     folds = d[fold_col].to_numpy() if fold_col else None
     hit_mond, hit_const = np.zeros(len(d), bool), np.zeros(len(d), bool)
     rad_mond, area_mond, r_const_all = np.zeros(len(d)), np.zeros(len(d)), np.zeros(len(d))
+    q_mond_all = np.full(len(d), np.nan)
     held = np.zeros(len(d), bool)
     x = extra.filter(pl.col(f"ex_{ref}").is_not_nan()) if extra is not None else None
     xs = _scores(x, ref) if x is not None and x.height else None
     x_mond = np.zeros(x.height if x is not None else 0, bool)
     x_const, x_held, x_area = x_mond.copy(), x_mond.copy(), np.zeros(len(x_mond))
+    x_q = np.full(len(x_mond), np.nan)
     x_folds = x[fold_col].to_numpy() if fold_col and x is not None else None
     # Calibration pool of the per-source models: the df rows, then the extra rows (base marks the df rows).
     pool = {"score": score, "groups": groups, "source": source, "games": games, **feats}
@@ -577,9 +587,9 @@ def logo(
             warnings.warn(f"fold {g}: empty calibration or test set, skipped", stacklevel=2)
             continue
         held |= tst
-        q_pool = grouped_quantile(score[cal], groups[cal], ALPHA)
+        q_pool = grouped_quantile(score[cal], groups[cal], alpha)
         models = _mondrian_by_source(
-            pool["score"], pool["groups"], pool_feats, pool["source"], cal_pool, base
+            pool["score"], pool["groups"], pool_feats, pool["source"], cal_pool, base, alpha=alpha
         )
         q_mond = np.full(len(d), np.nan)
         for src in np.unique(source[tst]):
@@ -587,7 +597,8 @@ def logo(
             model = models.get(str(src), models[None])
             q_mond[sel] = model.quantile_for({k: v[sel] for k, v in feats.items()})
         q_mond = q_mond[tst]
-        r_const = grouped_quantile(norm[cal], groups[cal], ALPHA)
+        q_mond_all[tst] = q_mond
+        r_const = grouped_quantile(norm[cal], groups[cal], alpha)
         hit_mond[tst] = score[tst] <= q_mond
         hit_const[tst] = norm[tst] <= r_const
         rad_mond[tst] = np.sqrt(q_mond * np.linalg.eigvalsh(cov[tst])[:, -1])
@@ -603,6 +614,7 @@ def logo(
                     qx[sel] = model.quantile_for({k: xs[k][sel] for k in feats})
                 x_mond[xt], x_const[xt] = xs["score"][xt] <= qx[xt], xs["norm"][xt] <= r_const
                 x_held[xt] = True
+                x_q[xt] = qx[xt]
                 x_area[xt] = np.pi * qx[xt] * np.sqrt(np.clip(np.linalg.det(xs["cov"][xt]), 0, None))
         rows.append(
             {
@@ -641,12 +653,19 @@ def logo(
         "tercile_edges": terciles.tolist(),
     }
     held_df = d.with_columns(
-        pl.Series("hit_mond", hit_mond), pl.Series("hit_const", hit_const), pl.Series("area_mond", area_mond)
+        pl.Series("hit_mond", hit_mond),
+        pl.Series("hit_const", hit_const),
+        pl.Series("area_mond", area_mond),
+        pl.Series("q_mond", q_mond_all),
+        pl.Series("r_const", r_const_all),
     ).filter(pl.Series(held))
     extra_df = None
     if x is not None and xs is not None:
         extra_df = x.with_columns(
-            pl.Series("hit_mond", x_mond), pl.Series("hit_const", x_const), pl.Series("area_mond", x_area)
+            pl.Series("hit_mond", x_mond),
+            pl.Series("hit_const", x_const),
+            pl.Series("area_mond", x_area),
+            pl.Series("q_mond", x_q),
         ).filter(pl.Series(x_held))
     return rows, summary, held_df, extra_df
 
@@ -658,21 +677,24 @@ def _mondrian_by_source(
     source: np.ndarray,
     cal: np.ndarray,
     base: np.ndarray | None = None,
+    alpha: float = ALPHA,
 ) -> dict[str | None, MondrianConformal]:
     """Mondrian models fitted on the calibration rows of each covariance source, plus one on the calibration
     rows of ``base`` (default: all rows; key None) for a source without a model of its own.
 
-    A source gets its own model when its calibration rows come from at least ``MIN_SOURCE_CLIPS`` clips: with
-    fewer, the clip-level level (1 − α)(1 + 1/G) reaches 1 and the quantile would be the source's largest
-    score (the PTZ-projected source of the first full run had 5-9 calibration clips per fold, hence regions
-    of 60,000 m²). Sources in ``POOLED_SOURCES`` get one pooled quantile instead of bins. With a single source
-    and no ``base`` restriction the two models are the same fit.
+    A source gets its own model when its calibration rows come from at least ``min_source_clips(alpha)``
+    clips (``MIN_SOURCE_CLIPS`` at the default level): with fewer, the clip-level level (1 − α)(1 + 1/G)
+    reaches 1 and the quantile would be the source's largest score (the PTZ-projected source of the first full
+    run had 5-9 calibration clips per fold, hence regions of 60,000 m²). Sources in ``POOLED_SOURCES`` get one
+    pooled quantile instead of bins. With a single source and no ``base`` restriction the two models are the
+    same fit.
     """
     keep = np.ones(len(score), dtype=bool) if base is None else np.asarray(base, dtype=bool)
+    min_clips = min_source_clips(alpha)
 
     def fit(sel: np.ndarray, bins: dict[str, int]) -> MondrianConformal:
         return MondrianConformal.fit(
-            score[sel], groups[sel], {k: v[sel] for k, v in feats.items()}, bins, alpha=ALPHA
+            score[sel], groups[sel], {k: v[sel] for k, v in feats.items()}, bins, alpha=alpha
         )
 
     present = np.unique(source[cal])
@@ -682,7 +704,7 @@ def _mondrian_by_source(
     models: dict[str | None, MondrianConformal] = {None: fit(cal & keep, MONDRIAN_BINS)}
     for src in present:
         sel = cal & (source == src)
-        if len(np.unique(groups[sel])) >= MIN_SOURCE_CLIPS:
+        if len(np.unique(groups[sel])) >= min_clips:
             models[str(src)] = fit(sel, {} if src in POOLED_SOURCES else MONDRIAN_BINS)
     return models
 
