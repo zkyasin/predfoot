@@ -44,6 +44,23 @@ def test_cells_map_to_frame_pixels():
     np.testing.assert_allclose(px, [[960.0, 540.0]])
 
 
+def test_detections_are_decoded_from_heatmaps_of_any_runtime():
+    # numpy heatmaps stand in for an ONNX Runtime output: decoding needs neither torch nor the networks
+    from predfoot.keypoints.pnlcalib import N_KEYPOINTS, N_LINES, decode_detections
+
+    hk = np.zeros((1, N_KEYPOINTS, 270, 480))
+    hk[0, 4] = gaussian_map(270, 480, [(240.0, 135.0)])  # keypoint id 5 at the frame centre
+    hk[0, 9] = 0.2 * gaussian_map(270, 480, [(100.0, 50.0)])  # below the detection threshold
+    hl = np.zeros((1, N_LINES, 270, 480))
+    hl[0, 2] = gaussian_map(270, 480, [(50.0, 60.0), (300.0, 200.0)])  # line id 3, both ends visible
+    [(kps, lines)] = decode_detections(hk, hl, (1920, 1080))
+    np.testing.assert_array_equal(kps.ids, [5])
+    np.testing.assert_allclose(kps.uv, [[960.0, 540.0]], atol=1e-6)
+    np.testing.assert_array_equal(lines.line_ids, [3])
+    ends = sorted(map(tuple, np.round(lines.uv[0], 3)))
+    assert ends == [(200.0, 240.0), (1200.0, 800.0)]
+
+
 WEIGHTS = Path(os.environ.get("PREDFOOT_DATA_DIR", "data")) / "weights" / "pnlcalib"
 
 
