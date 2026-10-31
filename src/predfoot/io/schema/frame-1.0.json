@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/zkyasin/predfoot/blob/main/src/predfoot/io/schema/frame-1.0.json",
+  "title": "predfoot tracking frame 1.0",
+  "description": "One line of tracking.jsonl: a SkillCorner open-data record (10 fps) plus predfoot's uncertainty fields. Pitch frame: SkillCorner's (metres, origin at the centre spot, x towards the right-hand goal of the main camera, y towards the far touchline). Rules JSON Schema cannot express (covariances positive semi-definite, corner clipping, unique player ids, frame order) are checked by predfoot.io.validate.",
+  "type": "object",
+  "required": [
+    "frame",
+    "timestamp",
+    "period",
+    "ball_data",
+    "possession",
+    "image_corners_projection",
+    "calib_health",
+    "abstain",
+    "player_data"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "frame": {"type": "integer", "minimum": 0, "description": "Export frame index (10 fps)."},
+    "timestamp": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9]{2}:[0-5][0-9]:[0-5][0-9]\\.[0-9]{2}$",
+      "description": "HH:MM:SS.ss; null outside the periods."
+    },
+    "period": {"type": ["integer", "null"], "minimum": 1},
+    "ball_data": {"$ref": "#/$defs/ball"},
+    "possession": {"$ref": "#/$defs/possession"},
+    "image_corners_projection": {"$ref": "#/$defs/corners"},
+    "calib_health": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "maximum": 1,
+      "description": "predfoot extension: calibration health score; null when no health model ran."
+    },
+    "abstain": {
+      "type": "boolean",
+      "description": "predfoot extension: true when the frame's calibration is not trusted; positions are then null."
+    },
+    "player_data": {"type": "array", "items": {"$ref": "#/$defs/player"}}
+  },
+  "if": {"required": ["abstain"], "properties": {"abstain": {"const": true}}},
+  "then": {
+    "properties": {
+      "player_data": {
+        "items": {
+          "properties": {
+            "x": {"type": "null"},
+            "y": {"type": "null"},
+            "p90_radius_m": {"type": "null"},
+            "pos_cov_m2": {"type": "null"}
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "nullableNumber": {"type": ["number", "null"]},
+    "ball": {
+      "type": "object",
+      "required": ["x", "y", "z", "is_detected"],
+      "additionalProperties": false,
+      "properties": {
+        "x": {"$ref": "#/$defs/nullableNumber"},
+        "y": {"$ref": "#/$defs/nullableNumber"},
+        "z": {"$ref": "#/$defs/nullableNumber"},
+        "is_detected": {"type": ["boolean", "null"]}
+      }
+    },
+    "possession": {
+      "type": "object",
+      "required": ["player_id", "group"],
+      "additionalProperties": false,
+      "properties": {
+        "player_id": {"type": ["integer", "null"]},
+        "group": {"enum": ["home team", "away team", null]}
+      }
+    },
+    "corners": {
+      "description": "Ground footprint of the image; all eight values null when there is no camera.",
+      "type": "object",
+      "required": [
+        "x_top_left",
+        "y_top_left",
+        "x_bottom_left",
+        "y_bottom_left",
+        "x_bottom_right",
+        "y_bottom_right",
+        "x_top_right",
+        "y_top_right"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "x_top_left": {"$ref": "#/$defs/nullableNumber"},
+        "y_top_left": {"$ref": "#/$defs/nullableNumber"},
+        "x_bottom_left": {"$ref": "#/$defs/nullableNumber"},
+        "y_bottom_left": {"$ref": "#/$defs/nullableNumber"},
+        "x_bottom_right": {"$ref": "#/$defs/nullableNumber"},
+        "y_bottom_right": {"$ref": "#/$defs/nullableNumber"},
+        "x_top_right": {"$ref": "#/$defs/nullableNumber"},
+        "y_top_right": {"$ref": "#/$defs/nullableNumber"}
+      },
+      "anyOf": [
+        {"additionalProperties": {"type": "null"}},
+        {"additionalProperties": {"type": "number"}}
+      ]
+    },
+    "covariance": {
+      "description": "2×2 position covariance in m², [[xx, xy], [xy, yy]].",
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "number"}}
+    },
+    "player": {
+      "type": "object",
+      "required": ["x", "y", "player_id", "is_detected", "p90_radius_m", "pos_cov_m2"],
+      "additionalProperties": false,
+      "properties": {
+        "x": {"$ref": "#/$defs/nullableNumber"},
+        "y": {"$ref": "#/$defs/nullableNumber"},
+        "player_id": {"type": "integer", "minimum": 0, "description": "predfoot: the anonymous track id."},
+        "is_detected": {"type": "boolean"},
+        "p90_radius_m": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "description": "predfoot extension: radius of the circle around the calibrated 90 % ellipse."
+        },
+        "pos_cov_m2": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/covariance"}],
+          "description": "predfoot extension: calibrated covariance; its 90 % ellipse (χ²₂ = 4.605) is the prediction region."
+        }
+      },
+      "if": {"required": ["x"], "properties": {"x": {"type": "null"}}},
+      "then": {
+        "properties": {
+          "y": {"type": "null"},
+          "p90_radius_m": {"type": "null"},
+          "pos_cov_m2": {"type": "null"}
+        }
+      },
+      "else": {"properties": {"y": {"type": "number"}}}
+    }
+  }
+}

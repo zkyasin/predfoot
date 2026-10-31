@@ -1,0 +1,26 @@
+# Only pyproject.toml, uv.lock, README.md, LICENSE, ATTRIBUTION.md and src/ are needed to build the image.
+.git
+.github
+.venv
+**/__pycache__
+**/*.py[cod]
+.mypy_cache
+.ruff_cache
+.pytest_cache
+.hypothesis
+*.egg-info
+dist
+build
+data
+runs
+models
+mlruns
+out
+assets
+configs
+docs
+notebooks
+reports
+scripts
+tests
+docker
