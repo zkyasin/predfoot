@@ -279,11 +279,24 @@ def main() -> None:
     parser.add_argument("--n-boot", type=int, default=2000)
     parser.add_argument("--seed", type=int, default=20261031)
     parser.add_argument("--report", type=Path, default=reports_dir() / "kpi_sensitivity.md")
+    parser.add_argument(
+        "--measured",
+        nargs=4,
+        type=float,
+        metavar=("SIGMA", "RHO", "SIGMA_COMMON", "RHO_COMMON"),
+        help="add a condition with the error process measured on SN-GSR (scripts/error_process.py); "
+        "σ in metres per axis, ρ per 25 Hz frame",
+    )
     args = parser.parse_args()
 
     t_start = time.perf_counter()
     cfg = load_kpi_config(args.config)
     conditions = build_conditions(cfg)
+    if args.measured:
+        sigma, rho, sigma_c, rho_c = args.measured
+        measured = ErrorModel("measured", sigma=sigma, rho=rho, sigma_common=sigma_c, rho_common=rho_c)
+        label = f"measured on SN-GSR (σ {sigma:g}/{sigma_c:g} m, ρ {rho:g}/{rho_c:g})"
+        conditions.append(Condition("measured", label, "noise", cfg, cfg.output_hz, measured))
     kpis = [k for k in kpi_names(cfg) if k != "minutes"]
     per90 = [k for k in kpis if k != "psv99_kmh"]
     sha, dirty = git_info()
@@ -478,6 +491,19 @@ def render_report(
         "> on the predicted uncertainty) is measured on SN-GSR later (ticket T4.2) and injected in T4.3. KPI",
         "> definitions marked *assumption* below are ours, not SkillCorner's.",
         "",
+        *(
+            [
+                "> **Measured condition.** The row *measured on SN-GSR* injects the error process",
+                "> measured by `scripts/error_process.py` (per-frame calibration, no temporal smoothing",
+                "> of the camera). Its σ is measured against the SN-GSR labels, which carry their own",
+                "> error, so it is an upper bound; its 25 Hz correlations come from 5 fps measurements",
+                "> under an exponential-decay assumption, which overstates the correlation of per-frame",
+                "> jitter. Read it as the KPI cost of calibrating each frame independently.",
+                "",
+            ]
+            if any(c.name == "measured" for c in conditions)
+            else []
+        ),
         f"- **Command**: `{meta['command']}`",
         f"- **Git commit**: `{meta['git_sha']}`{dirty}; date {meta['date']}; runtime {meta['runtime_s']} s",
         "- **Data**: IDSSE (Bassek, Rein, Weber & Memmert 2025, CC BY 4.0, "

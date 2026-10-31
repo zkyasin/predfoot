@@ -15,3 +15,18 @@ the project uses [semantic versioning](https://semver.org/).
 - Minimap with 90 % ellipses and greyed-out abstentions.
 - `predfoot run`: stub tracer bullet processed in resumable blocks (byte-identical after a kill).
 - CPU Docker image and a workflow that runs the tracer bullet in it.
+- Data access: SN-GSR labels and frames over HTTP range requests, SHA-256 manifest, Parquet index (clips,
+  frames, persons, lines) in the internal frame, data audit; the test split is kept apart.
+- Geometry: pitch template with PnLCalib keypoint/line ids and SoccerNet line classes, normalised DLT,
+  horizon-aware back-projection, analytic Jacobians, pinhole broadcast cameras for simulation.
+- Calibration: MSAC RANSAC, soft-L1 Levenberg-Marquardt on keypoints and points on lines, Laplace covariance
+  with Huber's scale correction and a shrunk per-frame noise estimate.
+- PnLCalib keypoint and line networks behind our own preprocessing and decoding; per-clip detection cache.
+- Uncertainty: delta-method position covariances, F/χ² region quantiles, grouped split conformal with
+  Mondrian bins and a simultaneous per-frame variant.
+- Health: per-frame calibration features, selective-prediction metrics, failure-detection evaluation.
+- Physical KPIs on IDSSE (distance, speed bands, HSR/sprint efforts, PSV-99, explosive accelerations),
+  error injection and a sensitivity study; measured error-process estimation on SN-GSR.
+- Real pipeline stages for `predfoot run` (cached detections → calibration → calibrated ellipses).
+- Scripts: spike S0, dev evaluation with leave-one-game-out coverage, failure detection, error process.
+- Preregistration draft for the locked test run.

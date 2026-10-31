@@ -16,6 +16,7 @@ import numpy as np
 from numpy.typing import ArrayLike
 
 from predfoot.contracts import FloatArray
+from predfoot.geometry.camera import look_at
 
 
 def look_at_homography(
@@ -23,21 +24,12 @@ def look_at_homography(
 ) -> FloatArray:
     """Pitch → image homography of a level camera (no roll) at ``camera_xyz`` aimed at ``target_xyz``.
 
-    Returns H normalised so that H[2, 2] = 1, as in :class:`predfoot.contracts.CalibResult`.
+    Returns H normalised so that H[2, 2] = 1, as in :class:`predfoot.contracts.CalibResult`. Thin wrapper
+    around :func:`predfoot.geometry.camera.look_at`, so the synthetic clips and the geometry tests share one
+    camera model.
     """
-    c = np.asarray(camera_xyz, dtype=np.float64)
-    fwd = np.asarray(target_xyz, dtype=np.float64) - c
-    fwd /= np.linalg.norm(fwd)
-    right = np.cross(fwd, [0.0, 0.0, 1.0])  # image +u
-    if np.linalg.norm(right) < 1e-9:
-        raise ValueError("a vertical optical axis has no defined image right")
-    right /= np.linalg.norm(right)
-    down = np.cross(fwd, right)  # image +v
-    rot = np.stack([right, down, fwd])  # world → camera
     width, height = image_size
-    k = np.array([[focal_px, 0.0, (width - 1) / 2], [0.0, focal_px, (height - 1) / 2], [0.0, 0.0, 1.0]])
-    h = k @ np.column_stack([rot[:, 0], rot[:, 1], -rot @ c])
-    return h / h[2, 2]
+    return look_at(camera_xyz, target_xyz, focal_px, width=width, height=height).H
 
 
 def project_ground(H: FloatArray, xy: ArrayLike) -> tuple[FloatArray, FloatArray]:
