@@ -44,14 +44,7 @@ import polars as pl
 from predfoot.io import idsse
 from predfoot.kpi.config import KpiConfig, load_kpi_config
 from predfoot.kpi.metrics import kpi_names
-from predfoot.kpi.noise import (
-    AxisProcess,
-    PartProcess,
-    SpectralErrorModel,
-    fit_axis,
-    ou_through_first_lag,
-    sample_errors,
-)
+from predfoot.kpi.noise import AxisProcess, SpectralErrorModel, fit_error_model, sample_errors
 from predfoot.kpi.proxy import PROXY_MIN_RUN, ProxyTotals
 from predfoot.kpi.report import compare_to_reference
 from predfoot.kpi.simulate import PeriodTracks, period_tracks, player_kpis, seeded_rng
@@ -101,47 +94,11 @@ KPI_LABELS = {
 # --- models ----------------------------------------------------------------------------------------------
 
 
-def axis_stats(stats: dict[str, Any], camera: str, ref: str, part: str, axis: str) -> dict[str, Any]:
-    return dict(stats["cameras"][camera]["references"][ref][part][axis])
-
-
 def fit_family(
     stats: dict[str, Any], camera: str, family: str, ref: str, marginal: str
 ) -> tuple[SpectralErrorModel, dict[tuple[str, str], float]]:
     """The model of one family and marginal for one camera, and the max |ACF residual| per (part, axis)."""
-    lags = np.asarray(stats["lags_s"], dtype=float)
-    copula = marginal == "copula"
-    parts: dict[str, PartProcess] = {}
-    residuals: dict[tuple[str, str], float] = {}
-    for part in PARTS:
-        procs: dict[str, AxisProcess] = {}
-        for axis in AXES:
-            s = axis_stats(stats, camera, ref, part, axis)
-            acf_key, pairs_key = ("acf_nscore", "n_pairs_nscore") if copula else ("acf", "n_pairs")
-            acf = np.array([s[acf_key][str(k)] for k in range(1, lags.size + 1)])
-            n_pairs = np.array([s[pairs_key][str(k)] for k in range(1, lags.size + 1)])
-            if family == "ou":
-                if copula:
-                    raise ValueError("the single OU is the previous Gaussian model only")
-                proc = ou_through_first_lag(s["sigma"], float(acf[0]), float(lags[0]))
-                residuals[part, axis] = float(np.max(np.abs(proc.acf(lags) - acf)))
-            else:
-                margin = (stats["cameras"][camera]["references"][ref]["marginal_probs"], s["quantiles"])
-                fit = fit_axis(
-                    s["sigma"],
-                    lags,
-                    acf,
-                    n_pairs,
-                    kernel=family,
-                    slow=True,
-                    marginal=margin if copula else None,
-                )
-                proc = fit.process
-                residuals[part, axis] = fit.max_abs_residual
-            procs[axis] = proc
-        parts[part] = PartProcess(procs["x"], procs["y"])
-    model = SpectralErrorModel(f"{camera}:{family}:{marginal}:white", parts["common"], parts["individual"])
-    return model, residuals
+    return fit_error_model(stats, camera, family=family, marginal=marginal, reference=ref)
 
 
 def model_label(name: str) -> str:

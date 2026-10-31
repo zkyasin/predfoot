@@ -32,9 +32,10 @@ nugget is defined directly by its eigenvalues (a flat spectrum on the frequency 
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from functools import lru_cache
+from typing import Any
 
 import numpy as np
 import scipy.fft
@@ -409,3 +410,41 @@ def fit_axis(
     elif proc.slow_s < proc.length_s:
         proc = replace(proc, length_s=proc.slow_s, slow_s=proc.length_s, w_slow=proc.w_main)
     return AcfFit(proc, lags, r, proc.smooth_acf(lags) - r)
+
+
+def fit_error_model(
+    stats: Mapping[str, Any], camera: str, *, family: str, marginal: str = "copula", reference: str = "sm"
+) -> tuple[SpectralErrorModel, dict[tuple[str, str], float]]:
+    """Fit one family to a camera of the JSON written by ``scripts/error_process.py --json``.
+
+    ``family`` is a kernel of :data:`KERNELS`, or ``"ou"`` for the previous single Ornstein-Uhlenbeck
+    process through the first lag (Gaussian only). ``marginal`` is ``"gauss"`` (measured σ) or ``"copula"``
+    (measured quantiles, ρ fitted to the normal-score ACF). Also returns the largest |ACF residual| per
+    (part, axis).
+    """
+    lags = np.asarray(stats["lags_s"], dtype=float)
+    copula = marginal == "copula"
+    if family == "ou" and copula:
+        raise ValueError("the single OU is the previous Gaussian model only")
+    ref = stats["cameras"][camera]["references"][reference]
+    parts: dict[str, PartProcess] = {}
+    residuals: dict[tuple[str, str], float] = {}
+    for part in ("common", "individual"):
+        procs: dict[str, AxisProcess] = {}
+        for axis in AXES:
+            s = ref[part][axis]
+            acf_key, pairs_key = ("acf_nscore", "n_pairs_nscore") if copula else ("acf", "n_pairs")
+            acf = np.array([s[acf_key][str(k)] for k in range(1, lags.size + 1)])
+            n_pairs = np.array([s[pairs_key][str(k)] for k in range(1, lags.size + 1)])
+            if family == "ou":
+                proc = ou_through_first_lag(s["sigma"], float(acf[0]), float(lags[0]))
+                residuals[part, axis] = float(np.max(np.abs(proc.acf(lags) - acf)))
+            else:
+                margin = (ref["marginal_probs"], s["quantiles"]) if copula else None
+                fit = fit_axis(s["sigma"], lags, acf, n_pairs, kernel=family, slow=True, marginal=margin)
+                proc = fit.process
+                residuals[part, axis] = fit.max_abs_residual
+            procs[axis] = proc
+        parts[part] = PartProcess(procs["x"], procs["y"])
+    model = SpectralErrorModel(f"{camera}:{family}:{marginal}:white", parts["common"], parts["individual"])
+    return model, residuals

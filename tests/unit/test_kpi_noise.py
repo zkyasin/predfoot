@@ -174,3 +174,36 @@ def test_copula_process_has_the_target_marginal_and_normal_score_acf(rng):
     assert total.var() == pytest.approx(proc.sigma**2 + 0.01, rel=0.08)
     with pytest.raises(ValueError, match="probs"):
         AxisProcess(sigma=0.1, probs=(0.5, 0.2), quantiles=(0.0, 1.0))
+
+
+def test_fit_error_model_reads_the_error_process_json():
+    from predfoot.kpi.noise import fit_error_model
+
+    lags = [0.2, 0.4, 0.6, 0.8, 1.0]
+    truth = AxisProcess(sigma=0.4, kernel="matern32", length_s=0.8, w_nugget=0.3)
+    acf = {str(k + 1): float(v) for k, v in enumerate(truth.acf(lags))}
+    pairs = {str(k + 1): 1000 for k in range(5)}
+    axis = {"sigma": 0.4, "acf": acf, "n_pairs": pairs, "acf_nscore": acf, "n_pairs_nscore": pairs}
+    axis["quantiles"] = [-1.0, 0.0, 1.0]
+    part = {"x": axis, "y": axis}
+    stats = {
+        "lags_s": lags,
+        "cameras": {
+            "cam": {
+                "references": {"sm": {"common": part, "individual": part, "marginal_probs": [0.1, 0.5, 0.9]}}
+            }
+        },
+    }
+    model, residuals = fit_error_model(stats, "cam", family="matern32", marginal="gauss")
+    assert model.name == "cam:matern32:gauss:white"
+    assert model.common is not None
+    assert model.common.x.w_nugget == pytest.approx(0.3, abs=0.01)
+    assert max(residuals.values()) < 0.01
+    copula, _ = fit_error_model(stats, "cam", family="matern32", marginal="copula")
+    assert copula.individual is not None
+    assert copula.individual.y.is_copula
+    ou, _ = fit_error_model(stats, "cam", family="ou", marginal="gauss")
+    assert ou.common is not None
+    assert float(ou.common.x.acf(0.2)) == pytest.approx(float(truth.acf(0.2)))
+    with pytest.raises(ValueError, match="OU"):
+        fit_error_model(stats, "cam", family="ou", marginal="copula")
