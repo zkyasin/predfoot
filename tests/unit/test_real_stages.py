@@ -108,3 +108,33 @@ def test_temporal_stages_smooth_a_ptz_clip(rng):
     loc = smoothed.localize(out[5], feet)[0]
     assert loc.xy is not None
     assert np.abs(loc.xy - [10.0, 5.0]).max() < 1.0
+
+
+def test_temporal_stages_take_a_game_centre(rng):
+    """A clip too short for its own centre is smoothed at the match's centre, as in the dev evaluation."""
+    from dataclasses import replace
+
+    from predfoot.calib.temporal import NoiseParams, SmootherConfig, estimate_centre
+    from predfoot.geometry import ptz
+
+    from .synthetic_camera_track import CENTRE, ptz_path
+
+    _, phi = ptz_path(n=60)
+    dets = {k: ptz_detections(ptz.homography(p, CENTRE), rng, sigma=2.0) for k, p in enumerate(phi)}
+    cfg, params = SmootherConfig(fps=5.0), NoiseParams()
+    per_frame = real_stages(dets, conformal=None, version="v")
+    raw = [per_frame.calibrate(ClipFrame(frame=k)) for k in range(60)]
+    own = estimate_centre(raw, np.zeros(60, bool), cfg)
+    assert own is not None
+    assert own.reliable
+    game = replace(own, source="game")
+    short = {k: dets[k] for k in range(8)}  # fewer than centre_min_frames: no centre of its own
+    alone = real_stages(short, conformal=None, version="v", temporal=(cfg, params))
+    with_game = real_stages(short, conformal=None, version="v", temporal=(cfg, params), game_centre=game)
+    assert with_game.version == f"{alone.version}-{game.digest()}"
+    out_alone = [alone.calibrate(ClipFrame(frame=k)) for k in range(8)]
+    out_game = [with_game.calibrate(ClipFrame(frame=k)) for k in range(8)]
+    for r_alone, r_raw in zip(out_alone, raw[:8], strict=True):
+        np.testing.assert_array_equal(r_alone.H, r_raw.H)  # passed through
+    centres = np.array([ptz.decompose(r.H)[1] for r in out_game])
+    np.testing.assert_allclose(centres, np.tile(game.centre, (8, 1)), atol=1e-6)

@@ -9,12 +9,13 @@ Per clip, without labels:
 
 1. :func:`estimate_centre`: median of the closed-form centres, PTZ misfit gate at that median, then a robust
    joint refit of C and every frame's φ on the inliers (in this order: refitting before gating put the centre
-   0.8-2.5 m off in the prototype).
+   0.8-2.5 m off in the prototype). An unreliable estimate gives way to the game centre, which is refused when
+   it does not explain the clip (:func:`measure_at_centre`).
 2. :func:`measure_clip`: each OK homography is projected onto the PTZ manifold at C with the shape of its
    Laplace covariance (:func:`project_to_ptz`). Frames the model cannot explain (another camera, a wrong
    RANSAC basin) are flagged ``misfit`` and pass through unchanged.
 3. :func:`smooth_clip`: constant-velocity Kalman filter and RTS smoother on φ inside shot segments
-   (:func:`segments`), with iterative deletion of outlying measurements.
+   (:func:`segments`), with deletion of outlying measurements to a fixed point.
 4. :func:`to_calib_results`: H and cov_theta rebuilt as :class:`~predfoot.contracts.CalibResult`, so position
    covariances, conformal calibration, health and export are unchanged.
 
@@ -67,15 +68,23 @@ class SmootherConfig:
     gate_level: float = 0.999  # deletion test and NLL truncation, χ²₄ quantile
     max_gap_s: float = 1.0  # a longer gap between used measurements closes the segment
     max_rate: tuple[float, float, float, float] = (0.70, 0.26, 0.035, 1.0)  # rad/s (pan, tilt, roll), 1/s
-    gap_noise_factor: float = 20.0  # λ: process noise × λ on steps next to a frame without a measurement
+    # λ: process noise × λ on steps next to a frame without an accepted measurement (failed, duplicate,
+    # misfit, not projected). A measurement deleted as an outlier keeps λ = 1, so its deletion and prediction
+    # statistics are the same leave-one-out test under one model.
+    gap_noise_factor: float = 20.0
     q_roll: float = 1e-8  # rad²/s³, fixed
     floor_px: float = 0.0  # fixed pixel floor added to the measurement covariance; off in v1
     v0: tuple[float, float, float, float] = (1.0, 0.3, 0.05, 0.5)  # prior sd of the rates at a segment start
     min_segment: int = 3  # fewer used measurements: the segment is "short" (projection only)
-    robust_iters: int = 5
-    split_run: int = 3  # this many consecutive flagged measurements become their own segment
+    split_run: int = 3  # this many consecutive flagged measurements are tried as their own segment
+    # A single-step manoeuvre must lower the innovation NLL of the other measurements by more than this. At 0
+    # it is a likelihood comparison of two fixed models on the same data, the log det of the freed step being
+    # the Occam penalty (on synthetic clips, 0 and χ²₁(0.999)/2 reject 7σ spikes alike; 0 also follows kinks).
+    step_gain: float = 0.0
     centre_min_frames: int = 10
     centre_max_sd_m: float = 1.0
+    centre_max_refit: int = 300  # the joint centre refit uses at most this many evenly spaced inliers
+    max_misfit_ratio: float = 4.0  # a game centre is refused when κ²_clip at it exceeds this × the reference
     beta: float = 0.0  # ablation: add β·R_k to the smoothed covariance of a used frame
 
     @property
@@ -134,7 +143,7 @@ class CentreEstimate:
     cov: FloatArray  # (3, 3) m²
     n_frames: int  # PTZ inliers behind the estimate (for a game centre: summed over its clips)
     kappa2_clip: float  # misfit scale at the median centre: median d² / median of χ²₄
-    median_d2: float  # median misfit of the inliers at the returned centre
+    median_d2: float  # median misfit of the refitted inliers at the returned centre
     reliable: bool
     source: CentreSource  # "clip": joint refit; "median": median of closed-form centres; "game"
 
@@ -144,6 +153,11 @@ class CentreEstimate:
         if not np.all(np.isfinite(self.cov)):
             return float("inf")
         return float(np.sqrt(max(np.linalg.eigvalsh(self.cov)[-1], 0.0)))
+
+    def digest(self) -> str:
+        """First 12 hex characters of the SHA-256 of what the smoother uses: centre and misfit scale."""
+        d = {"centre": np.round(self.centre, 6).tolist(), "kappa2_clip": round(float(self.kappa2_clip), 9)}
+        return hashlib.sha256(json.dumps(d, sort_keys=True).encode()).hexdigest()[:12]
 
 
 @dataclass(frozen=True)
@@ -179,10 +193,16 @@ class SmoothedTrack:
     used: BoolArray  # measurement used by the final pass
     rejected: BoolArray  # accepted but deleted by the robust passes
     short: BoolArray  # inside a segment with fewer than min_segment used measurements
+    manoeuvre: BoolArray  # inside a manoeuvre segment: process noise × λ on all its steps
+    # process noise × λ on the step into this frame beyond the gap rule (manoeuvre segments and single-step
+    # manoeuvres); what fit_noise must reuse to evaluate the same model
+    loose: BoolArray
     nis: FloatArray  # (T,) innovation χ² of the final pass; NaN for the first two used of a segment
-    deletion: FloatArray  # (T,) deletion statistic (used) or prediction statistic (rejected)
+    # (T,) deletion statistic (used) or prediction statistic (rejected; outside segments, from the
+    # extrapolated edge state of the segment it would join)
+    deletion: FloatArray
     nll: float
-    n_iter: int
+    n_iter: int  # smoothing passes run by the robust loop
 
 
 @dataclass(frozen=True)
@@ -195,12 +215,24 @@ class FrameFlags:
     projected: BoolArray  # PTZ projection only (short segment, or the projection ablation)
     passthrough: BoolArray  # raw homography, covariance scaled by κ²
     duplicate: BoolArray  # same detections as the previous frame: output copied
+    rejected: BoolArray  # deleted measurement with no smoothed state to replace it: abstains
     segment: IntArray
 
     @classmethod
     def empty(cls, n: int) -> FrameFlags:
-        z = np.zeros(n, dtype=bool)
-        return cls(z.copy(), z.copy(), z.copy(), z.copy(), z.copy(), z.copy(), np.full(n, -1, dtype=np.int64))
+        def z() -> BoolArray:
+            return np.zeros(n, dtype=bool)
+
+        return cls(
+            smoothed=z(),
+            repaired=z(),
+            filled=z(),
+            projected=z(),
+            passthrough=z(),
+            duplicate=z(),
+            rejected=z(),
+            segment=np.full(n, -1, dtype=np.int64),
+        )
 
     def as_dict(self) -> dict[str, NDArray[Any]]:
         return asdict(self)
@@ -214,10 +246,15 @@ DUPLICATE_KEYS = ("kp_ids", "kp_uv", "line_ids", "line_uv")
 
 
 def duplicate_mask(detections: Sequence[Mapping[str, Any]]) -> BoolArray:
-    """True where a frame's detections equal those of the previous frame (keypoints and line ends)."""
+    """True where a frame's detections equal those of the previous frame (keypoints and line ends).
+
+    Two frames without any detection are not duplicates: that is a detection dropout, not a repeated frame.
+    """
     out = np.zeros(len(detections), dtype=bool)
     for k in range(1, len(detections)):
         a, b = detections[k], detections[k - 1]
+        if len(np.asarray(a["kp_ids"])) + len(np.asarray(a["line_ids"])) == 0:
+            continue
         out[k] = all(np.array_equal(np.asarray(a[key]), np.asarray(b[key])) for key in DUPLICATE_KEYS)
     return out
 
@@ -361,9 +398,11 @@ def estimate_centre(
     1. closed-form centres of the OK, non-duplicate frames (positive height); None with fewer than
        ``centre_min_frames``; 2. C0 = their coordinate-wise median; 3. PTZ projection of every frame at C0,
        κ²_clip = median(d²) / MED_CHI2_4 and inliers d² / κ²_clip ≤ the misfit gate; 4. soft-L1 joint refit of
-       C and every inlier's φ; 5. Σ_C from the Gauss-Newton curvature; the refit is kept only if it lowers the
-       median inlier misfit (else C0, source "median"); 6. reliable when there are enough inliers and the
-       centre's largest standard deviation is at most ``centre_max_sd_m``.
+       C and every inlier's φ (at most ``centre_max_refit`` evenly spaced inliers, so long clips stay linear
+       in memory); 5. Σ_C from the Gauss-Newton curvature; the refit is kept only if it lowers the median
+       misfit of the refitted inliers (else C0, source "median", with an unknown covariance: the curvature of
+       a rejected refit says nothing about C0); 6. reliable when there are enough inliers and the centre's
+       largest standard deviation is at most ``centre_max_sd_m``.
     """
     pp = cfg.principal_point
     usable = _calibrations(results, ~np.asarray(duplicate, dtype=bool))
@@ -380,23 +419,26 @@ def estimate_centre(
         return None
     kappa2 = max(float(np.median([v[2] for v in first.values()])) / MED_CHI2_4, _TINY)
     inliers = [k for k, v in first.items() if v[2] / kappa2 <= cfg.misfit_gate]
-    med_c0 = float(np.median([first[k][2] for k in inliers]))
+    if len(inliers) > cfg.centre_max_refit:
+        pick = np.unique(np.linspace(0, len(inliers) - 1, cfg.centre_max_refit).round().astype(int))
+        sub = [inliers[i] for i in pick]
+    else:
+        sub = inliers
+    med_c0 = float(np.median([first[k][2] for k in sub]))
     centre, med = c0, med_c0
     source: CentreSource = "median"
     cov = np.full((3, 3), np.inf)
-    refit = _refit_centre(
-        [usable[k] for k in inliers], c0, np.stack([first[k][0] for k in inliers]), kappa2, pp
-    )
+    refit = _refit_centre([usable[k] for k in sub], c0, np.stack([first[k][0] for k in sub]), kappa2, pp)
     if refit is not None:
-        c_hat, cov, phis = refit
+        c_hat, cov_hat, phis = refit
         if c_hat[2] > 0:
             second = [
                 project_to_ptz(hg.theta_from_h(usable[k][0]), usable[k][1], c_hat, phis[j], pp)
-                for j, k in enumerate(inliers)
+                for j, k in enumerate(sub)
             ]
             med_hat = float(np.median([v[2] if v is not None else np.inf for v in second]))
             if med_hat < med_c0:
-                centre, source, med = c_hat, "clip", med_hat
+                centre, source, med, cov = c_hat, "clip", med_hat, cov_hat
     est = CentreEstimate(
         centre=np.asarray(centre, dtype=np.float64),
         cov=np.asarray(cov, dtype=np.float64),
@@ -428,12 +470,41 @@ def game_centre(estimates: Sequence[CentreEstimate | None]) -> CentreEstimate | 
 
 
 def choose_centre(own: CentreEstimate | None, game: CentreEstimate | None) -> CentreEstimate | None:
-    """Fallback order: own reliable estimate → game centre → own estimate (unreliable) → none."""
+    """Fallback order: own reliable estimate → game centre → none.
+
+    An unreliable own estimate is never used: nothing confirms it, and a centre a few metres off makes the
+    outputs worse than the raw calibrations, so such a clip passes through instead.
+    """
     if own is not None and own.reliable:
         return own
-    if game is not None:
-        return game
-    return own
+    return game
+
+
+def measure_at_centre(
+    clip_id: str,
+    frames: ArrayLike,
+    results: Sequence[CalibResult],
+    duplicate: ArrayLike,
+    own: CentreEstimate | None,
+    game: CentreEstimate | None,
+    cfg: SmootherConfig,
+) -> tuple[ClipMeasurements, bool]:
+    """Measurements at :func:`choose_centre`'s centre, and True when a game centre was refused.
+
+    The per-frame misfit gate is relative to the clip's own scale κ²_clip, so a centre that is wrong for the
+    whole clip (a clip filmed from elsewhere) inflates every d² alike and passes it. A game centre is kept
+    only if κ²_clip at it is at most ``max_misfit_ratio`` times the scale at the clip's own median centre
+    (without an own estimate: the game's median scale); otherwise the clip passes through. The clip's own
+    reliable estimate needs no such check: it minimises that misfit.
+    """
+    centre = choose_centre(own, game)
+    meas = measure_clip(clip_id, frames, results, duplicate, centre, cfg)
+    if centre is None or centre is own:
+        return meas, False
+    ref = own.kappa2_clip if own is not None else centre.kappa2_clip
+    if np.isfinite(meas.kappa2_clip) and meas.kappa2_clip <= cfg.max_misfit_ratio * ref:
+        return meas, False
+    return measure_clip(clip_id, frames, results, duplicate, None, cfg), True
 
 
 def measure_clip(
@@ -521,7 +592,7 @@ class Batch:
     index: IntArray  # (B, L) frame index in the clip, -1 on padding
     length: IntArray  # (B,)
     dt: FloatArray  # (B, L) seconds since the previous step; 0 at the first step and on padding
-    lam: FloatArray  # (B, L) process-noise factor of the step into k; 0 on padding
+    lam: FloatArray  # (B, L) process-noise factor of the step into k (from the accepted mask); 0 on padding
     has: BoolArray  # (B, L) a used measurement at step k
     z: FloatArray  # (B, L, 4) measurement, 0 where none
     sigma: FloatArray  # (B, L, 4, 4) unscaled Σφ, identity where none
@@ -556,8 +627,14 @@ def stack_clips(
     masks: Sequence[BoolArray],
     segs: Sequence[IntArray],
     cfg: SmootherConfig,
+    loose: Sequence[BoolArray] | None = None,
 ) -> Batch:
-    """Stack every segment of every clip; ``masks`` mark the used measurements, ``segs`` the segment ids."""
+    """Stack every segment of every clip; ``masks`` mark the used measurements, ``segs`` the segment ids.
+
+    λ = ``gap_noise_factor`` on the steps next to a frame that has no accepted measurement and on the steps
+    marked in ``loose`` (index i: the step from frame i − 1 to frame i); a measurement that is accepted but
+    left out of ``masks`` (deleted as an outlier) does not change the process noise.
+    """
     rows: list[tuple[int, int, IntArray]] = []
     for ci, seg in enumerate(segs):
         for s in np.unique(seg[seg >= 0]):
@@ -581,7 +658,11 @@ def stack_clips(
             raise ValueError("a segment must start and end with a used measurement")
         index[b, :n], lengths[b] = idx, n
         dt[b, 1:n] = np.diff(meas.times[idx])
-        lam[b, 1:n] = np.where(h[1:] & h[:-1], 1.0, cfg.gap_noise_factor)
+        acc = np.asarray(meas.accepted, dtype=bool)[idx]
+        wide = ~(acc[1:] & acc[:-1])
+        if loose is not None:
+            wide |= np.asarray(loose[ci], dtype=bool)[idx][1:]
+        lam[b, 1:n] = np.where(wide, cfg.gap_noise_factor, 1.0)
         has[b, :n] = h
         z[b, :n][h] = meas.z[idx][h]
         sigma[b, :n][h] = meas.sigma_phi[idx][h]
@@ -740,12 +821,13 @@ def segments(
 ) -> IntArray:
     """Segment id per frame (-1 outside), from the used measurements ``mask``.
 
-    A new segment starts at a used measurement b (previous used a) when t_b − t_a > max_gap_s, when an
-    external cut (native frame c, frame_a < c ≤ frame_b) falls in between, when b is in ``forced`` (frame
-    indices), or on a persistent jump: b breaks the rate limit relative to the last non-spike measurement in
-    some coordinate (|Δz_i| > max_rate_i Δt + 3 √(R_a,ii + R_b,ii)), the next used measurement c breaks it
-    too and c is consistent with b. A lone spike never cuts (it goes to the deletion test). A segment spans
-    the frames from its first to its last used measurement, so nothing is extrapolated.
+    A new segment starts at a used measurement b (previous used a) when t_b − t_a > max_gap_s (with a 1e-9 s
+    tolerance, so a nominal 1 s gap is bridged wherever it falls), when an external cut (native frame c,
+    frame_a < c ≤ frame_b) or a forced boundary (frame index c, a < c ≤ b) falls in between, or on a
+    persistent jump: b breaks the rate limit relative to the last non-spike measurement in some coordinate
+    (|Δz_i| > max_rate_i Δt + 3 √(R_a,ii + R_b,ii)), the next used measurement c breaks it too and c is
+    consistent with b. A lone spike never cuts (it goes to the deletion test). A segment spans the frames
+    from its first to its last used measurement, so nothing is extrapolated.
     """
     n = len(meas)
     seg = np.full(n, -1, dtype=np.int64)
@@ -755,7 +837,7 @@ def segments(
     rate = np.asarray(cfg.max_rate, dtype=np.float64)
     var = np.clip(np.diagonal(R, axis1=1, axis2=2), 0.0, None)
     cut_frames = np.sort(np.asarray(list(cuts), dtype=np.int64))
-    forced_set = {int(i) for i in forced}
+    forced_idx = np.sort(np.asarray(list(forced), dtype=np.int64))
 
     def breaks(a: int, b: int) -> bool:
         tol = rate * (meas.times[b] - meas.times[a]) + 3.0 * np.sqrt(var[a] + var[b])
@@ -766,8 +848,8 @@ def segments(
     for j in range(1, len(used)):
         a, b = int(used[j - 1]), int(used[j])
         new = (
-            meas.times[b] - meas.times[a] > cfg.max_gap_s
-            or b in forced_set
+            meas.times[b] - meas.times[a] > cfg.max_gap_s + 1e-9
+            or bool(np.any((forced_idx > a) & (forced_idx <= b)))
             or bool(np.any((cut_frames > meas.frames[a]) & (cut_frames <= meas.frames[b])))
         )
         if not new and breaks(ref, b):
@@ -801,9 +883,12 @@ def _smooth_pass(
     seg: IntArray,
     params: NoiseParams,
     cfg: SmootherConfig,
+    loose: BoolArray,
+    forced: Collection[int] = (),
+    cuts: Collection[int] = (),
 ) -> _Pass:
     n = len(meas)
-    batch = stack_clips([meas], [mask], [seg], cfg)
+    batch = stack_clips([meas], [mask], [seg], cfg, [loose])
     fwd = forward(batch, params, cfg, store=True)
     ms, ps = rts(fwd, batch)
     mean, cov, nis = np.full((n, N_STATE), np.nan), np.full((n, N_STATE, N_STATE), np.nan), np.full(n, np.nan)
@@ -811,7 +896,88 @@ def _smooth_pass(
         idx = batch.index[b, : batch.length[b]]
         mean[idx], cov[idx] = ms[b, : len(idx)], ps[b, : len(idx)]
         nis[idx] = np.where(batch.has[b, : len(idx)], fwd.nis[b, : len(idx)], np.nan)
-    return _Pass(mask, seg, mean, cov, nis, fwd.nll, _deletion(meas, R, mean, cov, mask, seg))
+    deletion = _deletion(meas, R, mean, cov, mask, seg)
+    edge = _edge_statistics(meas, R, mean, cov, mask, seg, loose, params, cfg, forced, cuts)
+    return _Pass(mask, seg, mean, cov, nis, fwd.nll, np.where(np.isnan(deletion), edge, deletion))
+
+
+def _edge_statistics(
+    meas: ClipMeasurements,
+    R: FloatArray,
+    mean: FloatArray,
+    cov: FloatArray,
+    mask: BoolArray,
+    seg: IntArray,
+    loose: BoolArray,
+    params: NoiseParams,
+    cfg: SmootherConfig,
+    forced: Collection[int],
+    cuts: Collection[int],
+) -> FloatArray:
+    """Prediction statistic rᵀ (R + P)⁻¹ r of deleted measurements outside every segment; NaN elsewhere.
+
+    The state comes from the edge of each segment the measurement would join if it were used (time gap at
+    most ``max_gap_s``, no forced boundary or cut in between), extrapolated with the motion model: forwards
+    from the last frame of the segment before it, backwards (x_{j−1} = F⁻¹ (x_j − w_j)) from the first frame
+    of the segment after it, the two fused when it would bridge them; NaN when no segment can take it.
+    Without it, a measurement deleted at a segment edge, or stranded when deletions open a gap longer than
+    ``max_gap_s``, could never come back.
+    """
+    out = np.full(len(meas), np.nan)
+    acc = np.asarray(meas.accepted, dtype=bool)
+    todo = np.flatnonzero(acc & ~mask & (seg < 0))
+    used = np.flatnonzero(mask)
+    if not len(todo) or not len(used):
+        return out
+    qc = np.array([params.q_pan, params.q_tilt, cfg.q_roll, params.q_logf])
+    forced_idx = np.asarray(sorted(forced), dtype=np.int64)
+    cut_frames = np.asarray(sorted(cuts), dtype=np.int64)
+    t = meas.times
+
+    def step(i: int, backwards: bool) -> tuple[FloatArray, FloatArray]:
+        """F (or F⁻¹) and Q of the step from frame i − 1 to frame i."""
+        dt = np.asarray(t[i] - t[i - 1])
+        wide = not (acc[i] and acc[i - 1]) or bool(loose[i])
+        lam = np.asarray(cfg.gap_noise_factor if wide else 1.0)
+        return _transition(-dt if backwards else dt), _process_noise(dt, lam, qc)
+
+    def blocked(a: int, b: int) -> bool:
+        return bool(
+            t[b] - t[a] > cfg.max_gap_s + 1e-9
+            or np.any((forced_idx > a) & (forced_idx <= b))
+            or np.any((cut_frames > meas.frames[a]) & (cut_frames <= meas.frames[b]))
+        )
+
+    for k in todo:
+        preds: list[tuple[FloatArray, FloatArray]] = []
+        j = int(np.searchsorted(used, k))
+        if j > 0 and not blocked(int(used[j - 1]), int(k)):
+            e = int(used[j - 1])
+            m, p = mean[e], cov[e]
+            for i in range(e + 1, int(k) + 1):
+                f, q = step(i, backwards=False)
+                m, p = f @ m, f @ p @ f.T + q
+            preds.append((m, p))
+        if j < len(used) and not blocked(int(k), int(used[j])):
+            s = int(used[j])
+            m, p = mean[s], cov[s]
+            for i in range(s, int(k), -1):
+                finv, q = step(i, backwards=True)
+                m, p = finv @ m, finv @ (p + q) @ finv.T
+            preds.append((m, p))
+        if not preds:
+            continue
+        m, p = min(preds, key=lambda mp: float(np.trace(mp[1][:N_PHI, :N_PHI])))
+        try:
+            if len(preds) == 2:
+                w1, w2 = np.linalg.inv(preds[0][1]), np.linalg.inv(preds[1][1])
+                p = np.linalg.inv(w1 + w2)
+                m = p @ (w1 @ preds[0][0] + w2 @ preds[1][0])
+            r = meas.z[k] - m[:N_PHI]
+            out[k] = float(r @ np.linalg.solve(_sym(R[k] + p[:N_PHI, :N_PHI]), r))
+        except np.linalg.LinAlgError:
+            continue  # no statistic: the measurement stays deleted
+    return out
 
 
 def _deletion(
@@ -850,68 +1016,144 @@ def _runs(order: IntArray, member: BoolArray, seg: IntArray | None = None) -> li
     return [np.array(r, dtype=np.int64) for r in runs]
 
 
+def _short(seg: IntArray, mask: BoolArray, cfg: SmootherConfig) -> BoolArray:
+    """Frames inside a segment with fewer than ``min_segment`` used measurements."""
+    counts = np.bincount(seg[mask], minlength=int(seg.max()) + 1) if mask.any() else np.zeros(1, dtype=int)
+    return np.asarray((seg >= 0) & (counts[np.maximum(seg, 0)] < cfg.min_segment), dtype=bool)
+
+
 def smooth_clip(
     meas: ClipMeasurements, params: NoiseParams, cfg: SmootherConfig, cuts: Collection[int] = ()
 ) -> SmoothedTrack:
-    """Segment, filter and smooth one clip, deleting outlying measurements one per run and per pass.
+    """Segment, filter and smooth one clip, deleting outlying measurements.
 
-    Each pass flags the largest deletion statistic above the gate in every run of consecutive unflagged
-    measurements, and lets a flagged measurement back in once its prediction statistic falls below the gate,
-    so a spike cannot flag its neighbours. Runs of ``split_run`` or more flagged measurements are then split
-    into their own segment instead of being rejected, and flagged measurements whose prediction statistic is
-    back below the gate are released (one last pass). Segments with fewer than ``min_segment`` used
-    measurements are marked short.
+    Deletion works in two phases. Shrink: every used measurement whose deletion statistic is above the gate
+    is flagged, and again on the remaining ones, until none is left. Grow: flagged measurements come back one
+    at a time, the most consistent first (smallest prediction statistic, at most the gate), and a release is
+    kept only if no used measurement then goes above the gate. Releasing from a clean core avoids masking (two
+    outliers that support each other pass a one-at-a-time deletion test) and gives back the neighbours an
+    outlier pulled above the gate. A deleted measurement keeps λ = 1 on its steps, so its prediction
+    statistic is the leave-one-out test its deletion statistic was, under the same model. Both phases are
+    monotone, so the loop ends, and at the end no used measurement has a deletion statistic above the gate.
+    A flagged measurement outside every segment (at a clip or segment edge) is tested against the
+    extrapolated edge state of the segment it would join (:func:`_edge_statistics`); with no such segment it
+    stays deleted.
+
+    A measurement can also fail because the camera moved faster than the fitted process noise allows, and
+    deleting it then makes the smoother cut the corner. Two manoeuvre hypotheses are tried, each kept only if
+    it brings the deleted measurements back with no used measurement above the gate:
+
+    - a run of ``split_run`` or more consecutive flagged measurements becomes its own segment with process
+      noise × λ on all its steps (deletion passes again), kept if every member is then used in a segment that
+      is not short: a real camera move fits the looser motion model, a burst of mutually inconsistent
+      calibrations does not and stays deleted;
+    - a single flagged measurement comes back with process noise × λ on one step, into it or out of it, if
+      that looser step first lowers the innovation NLL of the other measurements (the flagged one still
+      deleted) by more than ``step_gain``, and the step on its other side stays tight to a used neighbour.
+      A kink in the camera path strains its neighbours until the step is freed; once a spike is deleted its
+      neighbours fit, so the looser step brings nothing and the spike stays deleted.
+
+    Segments with fewer than ``min_segment`` used measurements are marked short.
     """
     n = len(meas)
     gate = cfg.gate
     R = measurement_cov(meas, params, cfg)
     acc = np.asarray(meas.accepted, dtype=bool)
     order = np.flatnonzero(acc)
-    forced: set[int] = set()
-    flags = np.zeros(n, dtype=bool)
+    passes = 0
 
-    def run(fl: BoolArray) -> _Pass:
+    def run(fl: BoolArray, forced: frozenset[int], man: BoolArray) -> _Pass:
+        nonlocal passes
+        passes += 1
         mask = acc & ~fl
-        return _smooth_pass(meas, R, mask, segments(meas, R, mask, cfg, cuts, forced), params, cfg)
+        seg = segments(meas, R, mask, cfg, cuts, forced)
+        return _smooth_pass(meas, R, mask, seg, params, cfg, man, forced, cuts)
 
-    def still_bad(d: FloatArray) -> BoolArray:
-        return np.asarray(~np.isfinite(d) | (d > gate), dtype=bool)
-
-    state = run(flags)
-    n_iter, current = 1, True
-    for it in range(cfg.robust_iters):
-        if it:
-            state, n_iter, current = run(flags), it + 1, True
+    def above(state: _Pass) -> BoolArray:
         d = state.deletion
-        keep = flags & still_bad(d)
-        member = ~flags[order] & np.isfinite(d[order]) & (d[order] > gate)
-        new = np.zeros(n, dtype=bool)
-        for r in _runs(order, member, state.seg):
-            new[r[np.argmax(d[r])]] = True
-        if not new.any() and np.array_equal(keep, flags):
+        return np.asarray(state.mask & np.isfinite(d) & (d > gate), dtype=bool)
+
+    def settle(fl: BoolArray, forced: frozenset[int], man: BoolArray) -> tuple[BoolArray, _Pass]:
+        fl = fl.copy()
+        state = run(fl, forced, man)
+        while (new := above(state)).any():  # shrink: flags only grow
+            fl |= new
+            state = run(fl, forced, man)
+        frozen = np.zeros(n, dtype=bool)
+        while True:  # grow: flags only shrink, each candidate is tried once
+            d = state.deletion
+            cand = np.flatnonzero(fl & ~frozen & np.isfinite(d) & (d <= gate))
+            if not len(cand):
+                return fl, state
+            k = cand[np.argmin(d[cand])]
+            trial = fl.copy()
+            trial[k] = False
+            s2 = run(trial, forced, man)
+            if above(s2).any():
+                frozen[k] = True
+            else:
+                fl, state = trial, s2
+
+    def anchored(state: _Pass, k: int, i: int, lse: BoolArray) -> bool:
+        """Frame k keeps a tight step to a used neighbour on the side opposite the loosened step i."""
+        j = k + 1 if i == k else k - 1
+        t = max(j, k)
+        return bool(
+            0 <= j < n
+            and state.mask[j]
+            and state.seg[j] == state.seg[k] >= 0
+            and acc[t]
+            and acc[t - 1]
+            and not lse[t]
+        )
+
+    forced: frozenset[int] = frozenset()
+    manoeuvre = np.zeros(n, dtype=bool)
+    loose = np.zeros(n, dtype=bool)
+    flags, state = settle(np.zeros(n, dtype=bool), forced, loose)
+    tried: set[tuple[int, int, int]] = set()
+
+    def next_trial() -> tuple[int, int, int] | None:
+        for r in _runs(order, flags[order]):
+            if len(r) >= cfg.split_run and (key := (0, int(r[0]), int(r[-1]))) not in tried:
+                return key
+        for k in np.flatnonzero(flags):
+            for i in (int(k), int(k) + 1):
+                key = (1, int(k), i)
+                if 0 < i < n and acc[i] and acc[i - 1] and not loose[i] and key not in tried:
+                    return key
+        return None
+
+    for _ in range(4 * n):
+        if (key := next_trial()) is None:
             break
-        flags, current = keep | new, False
-    split = [r for r in _runs(order, flags[order]) if len(r) >= cfg.split_run]
-    if split:
-        pos = {int(k): i for i, k in enumerate(order)}
-        for r in split:
-            forced.add(int(r[0]))
-            after = pos[int(r[-1])] + 1
-            if after < len(order):
-                forced.add(int(order[after]))
-            flags[r] = False
-        current = False
-    if not current:
-        state = run(flags)
-    # A flagged measurement whose prediction statistic is now below the gate comes back (after a split, or
-    # when the passes ran out before converging); no new flags are added at this stage.
-    dropped = flags & ~still_bad(state.deletion)
-    if dropped.any():
-        flags &= ~dropped
-        state = run(flags)
+        tried.add(key)
+        kind, a, b = key
+        if kind == 0:  # frames a..b as a manoeuvre segment
+            r = order[(order >= a) & (order <= b)]
+            t_forced = forced | {a, b + 1}
+            t_loose = loose.copy()
+            t_loose[a + 1 : b + 1] = True
+            trial = flags.copy()
+            trial[r] = False
+            f2, s2 = settle(trial, t_forced, t_loose)
+            if s2.mask[r].all() and not _short(s2.seg, s2.mask, cfg)[r].any():
+                flags, state, forced, loose = f2, s2, t_forced, t_loose
+                manoeuvre[a : b + 1] = True
+        else:  # frame a back with a single-step manoeuvre on step b (into a, or out of it)
+            t_loose = loose.copy()
+            t_loose[b] = True
+            # Same data and segments, looser step: the forward pass alone gives the NLL.
+            looser = forward(stack_clips([meas], [state.mask], [state.seg], cfg, [t_loose]), params, cfg)
+            if state.nll - looser.nll <= cfg.step_gain:
+                continue  # with frame a still deleted, the other measurements do not ask for that step
+            trial = flags.copy()
+            trial[a] = False
+            s2 = run(trial, forced, t_loose)
+            if not above(s2).any() and anchored(s2, a, b, t_loose):
+                loose = t_loose
+                flags, state = settle(trial, forced, loose)
     seg, mask = state.seg, state.mask
-    counts = np.bincount(seg[mask], minlength=int(seg.max()) + 1) if mask.any() else np.zeros(1, dtype=int)
-    short = (seg >= 0) & (counts[np.maximum(seg, 0)] < cfg.min_segment)
     return SmoothedTrack(
         mean=state.mean,
         cov=state.cov,
@@ -919,11 +1161,13 @@ def smooth_clip(
         segment=seg,
         used=mask.copy(),
         rejected=acc & flags,
-        short=short,
+        short=_short(seg, mask, cfg),
+        manoeuvre=manoeuvre & (seg >= 0),
+        loose=loose,
         nis=state.nis,
         deletion=state.deletion,
         nll=state.nll,
-        n_iter=n_iter,
+        n_iter=passes,
     )
 
 
@@ -936,9 +1180,9 @@ def fit_noise(
     """Label-free maximum-likelihood fit of (κ², q_pan, q_tilt, q_logf) on the innovations of ``clips``.
 
     Each round cleans every clip with the smoother itself (:func:`smooth_clip` with the current parameters:
-    deletion test, run splitting), then minimises the Gaussian innovation NLL of the remaining measurements,
-    segments held fixed, by Nelder-Mead in log units from the simplex h + I. The next round re-cleans with the
-    fitted parameters (skipped when the cleaned measurements do not change).
+    deletions, manoeuvres), then minimises the Gaussian innovation NLL of the remaining measurements, segments
+    and freed steps held fixed, by Nelder-Mead in log units from the simplex h + I. The next round re-cleans
+    with the fitted parameters (skipped when the cleaned measurements do not change).
 
     Why not the gate-truncated NLL on every accepted measurement: it bounds the pull of an outlier, but it is
     unbounded below, and on two dev clips Nelder-Mead ran off to κ² ≈ 1e-13, q ≈ 1e-31. Deleting outliers
@@ -953,7 +1197,7 @@ def fit_noise(
         if prev is not None and all(np.array_equal(a, b) for a, b in zip(prev, masks, strict=True)):
             break
         prev = masks
-        batch = stack_clips(clips, masks, [t.segment for t in tracks], cfg)
+        batch = stack_clips(clips, masks, [t.segment for t in tracks], cfg, [t.loose for t in tracks])
         if not batch.term.any():
             diag |= {"converged": False, "n_terms": 0}
             break
@@ -1037,9 +1281,13 @@ def to_calib_results(
     2. inside a segment that is not short (and not a misfit or failed projection): smoothed state,
        cov_theta = A (P|T + β R_k [used]) Aᵀ with A = ∂θ/∂φ, dof None; flag smoothed / repaired / filled;
     3. used frame of a short segment: PTZ projection, cov_theta = A R_k Aᵀ; flag projected;
-    4. any other raw-OK frame: raw H with cov_theta = κ² Σθ (same scale as the smoothed frames that share its
-       Mondrian bins), dof None; flag passthrough;
-    5. failed raw calibration outside segments: the raw result (abstains).
+    4. measurement deleted by the robust passes with no smoothed state to replace it (outside every segment,
+       or in a short one): abstains (status UNHEALTHY), since its raw camera was judged an outlier; flag
+       rejected;
+    5. any other raw-OK frame: raw H with cov_theta = κ² Σθ, dof None; flag passthrough. This covariance is
+       per-frame, while a smoothed one pools the whole segment, and their scales differ: the evaluation
+       calibrates the conformal quantiles of the two kinds separately;
+    6. failed raw calibration outside segments: the raw result (abstains).
     """
     n = len(raw)
     flags = FrameFlags.empty(n)
@@ -1073,6 +1321,9 @@ def to_calib_results(
         elif centre is not None and in_seg and track.short[k] and track.used[k]:
             out.append(_ptz_result(meas.z[k], track.R[k], centre, r, raw_ok, cfg))
             flags.projected[k] = True
+        elif track.rejected[k]:
+            out.append(CalibResult(CalibStatus.UNHEALTHY, n_inliers=r.n_inliers))
+            flags.rejected[k] = True
         elif raw_ok:
             out.append(replace(r, cov_theta=params.kappa2 * np.asarray(r.cov_theta), dof=None))
             flags.passthrough[k] = True
@@ -1121,6 +1372,8 @@ def empty_track(meas: ClipMeasurements, params: NoiseParams, cfg: SmootherConfig
         used=np.zeros(n, dtype=bool),
         rejected=np.zeros(n, dtype=bool),
         short=np.zeros(n, dtype=bool),
+        manoeuvre=np.zeros(n, dtype=bool),
+        loose=np.zeros(n, dtype=bool),
         nis=np.full(n, np.nan),
         deletion=np.full(n, np.nan),
         nll=0.0,
@@ -1135,10 +1388,13 @@ def smooth_results(
     cfg: SmootherConfig,
     params: NoiseParams,
     cuts: Collection[int] = (),
+    game: CentreEstimate | None = None,
 ) -> tuple[list[CalibResult], FrameFlags, SmoothedTrack]:
-    """Production wrapper: the clip's own centre → measurements → smoothing → CalibResult per frame."""
-    centre = estimate_centre(results, duplicate, cfg)
-    meas = measure_clip("clip", frames, results, duplicate, centre, cfg)
+    """Production wrapper: centre (the clip's own reliable estimate, else ``game``, the median centre of the
+    match's clips from :func:`game_centre`, if it explains the clip) → measurements → smoothing → one
+    CalibResult per frame. The same choice as the dev evaluation, so both score the same camera."""
+    own = estimate_centre(results, duplicate, cfg)
+    meas, _ = measure_at_centre("clip", frames, results, duplicate, own, game, cfg)
     track = smooth_clip(meas, params, cfg, cuts) if meas.accepted.any() else empty_track(meas, params, cfg)
     out, flags = to_calib_results(results, meas, track, params, cfg)
     return out, flags, track

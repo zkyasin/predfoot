@@ -166,15 +166,19 @@ def test_game_centre_and_fallback_order():
     assert tm.game_centre([c]) is None
     assert tm.choose_centre(a, game) is a
     assert tm.choose_centre(c, game) is game
-    assert tm.choose_centre(c, None) is c
+    assert tm.choose_centre(c, None) is None  # an unreliable own centre is never used
     assert tm.choose_centre(None, None) is None
 
 
 # --- filter and smoother ------------------------------------------------------------------------------
 
 
-def dense_gls(dt, has, z, r, params, cfg):
-    """Posterior of the whole trajectory by one dense least-squares solve (independent of the filter)."""
+def dense_gls(dt, has, z, r, params, cfg, accepted=None):
+    """Posterior of the whole trajectory by one dense least-squares solve (independent of the filter).
+
+    λ applies next to frames without an accepted measurement (``accepted`` defaults to ``has``).
+    """
+    acc = has if accepted is None else accepted
     n, dim = len(dt), 8
     qc = np.array([params.q_pan, params.q_tilt, cfg.q_roll, params.q_logf])
     info, vec = np.zeros((n * dim, n * dim)), np.zeros(n * dim)
@@ -191,7 +195,7 @@ def dense_gls(dt, has, z, r, params, cfg):
     p0[:4, :4], p0[4:, 4:] = r[0], np.diag(np.square(cfg.v0))
     add(rows, np.concatenate([z[0], np.zeros(4)]), p0)
     for k in range(1, n):
-        lam = 1.0 if (has[k] and has[k - 1]) else cfg.gap_noise_factor
+        lam = 1.0 if (acc[k] and acc[k - 1]) else cfg.gap_noise_factor
         f = np.block([[np.eye(4), dt[k] * np.eye(4)], [np.zeros((4, 4)), np.eye(4)]])
         q = lam * np.diag(qc)
         qq = np.block([[dt[k] ** 3 / 3 * q, dt[k] ** 2 / 2 * q], [dt[k] ** 2 / 2 * q, dt[k] * q]])
@@ -238,6 +242,29 @@ def test_batched_nll_is_the_sum_of_the_clips(rng):
     ]
     assert total.nll == pytest.approx(sum(p.nll for p in parts), rel=1e-9)
     assert total.n_terms == sum(p.n_terms for p in parts)
+
+
+def test_a_deleted_measurement_keeps_the_process_noise(rng):
+    """λ follows the accepted mask: deleting a measurement does not loosen its steps, so its prediction
+    statistic is the leave-one-out test its deletion statistic was (exact identity in this linear model)."""
+    meas = toy_clip(rng, 30, missing=(9,))
+    params = tm.NoiseParams(kappa2=1.0, q_pan=0.7, q_tilt=0.3, q_logf=1.2)
+    cfg = tm.SmootherConfig(q_roll=0.5, v0=(1.0, 0.8, 0.6, 1.2))
+    seg = np.zeros(30, np.int64)
+    used = meas.accepted.copy()
+    deleted = used.copy()
+    deleted[20] = False
+    batch = tm.stack_clips([meas], [deleted], [seg], cfg)
+    np.testing.assert_array_equal(np.flatnonzero(batch.lam[0] == cfg.gap_noise_factor), [9, 10])
+    fwd = tm.forward(batch, params, cfg, store=True)
+    ms, ps = tm.rts(fwd, batch)
+    r = tm.measurement_cov(meas, params, cfg)
+    mean, cov = dense_gls(batch.dt[0], deleted, np.nan_to_num(meas.z), r, params, cfg, meas.accepted)
+    np.testing.assert_allclose(ms[0], mean, rtol=1e-8, atol=1e-8 * np.abs(mean).max())
+    np.testing.assert_allclose(ps[0], cov, rtol=1e-8, atol=1e-8 * np.abs(cov).max())
+    a = tm._smooth_pass(meas, r, used, seg, params, cfg, np.zeros(30, bool))
+    b = tm._smooth_pass(meas, r, deleted, seg, params, cfg, np.zeros(30, bool))
+    assert a.deletion[20] == pytest.approx(b.deletion[20], rel=1e-6)
 
 
 # --- robust smoothing on synthetic clips --------------------------------------------------------------
@@ -338,7 +365,14 @@ def test_a_three_frame_excursion_becomes_its_own_segment(rng):
 
 
 def test_whip_pan_gap_is_consistent(rng):
-    """Regression for the λ rule: a 0.6 s gap in the middle of the whip pan stays consistent."""
+    """λ rule: a 0.6 s gap in the middle of the whip pan is filled consistently.
+
+    The deceleration goes on after the gap, so under the fitted noise the first measurement after it fails
+    the deletion test (D ≈ 19-25 in 11 of 12 seeds) and, with a freed step on one side and the gap on the
+    other, cannot be tested again: the fill leans on later frames and is checked at the deletion level (χ²₄
+    0.999). Before the robust loop used one model for both statistics, an oscillation released that
+    measurement and the fill passed at 0.99.
+    """
     _, phi = ptz_path()
     calibs = gaussian_calibs(phi, CENTRE, rng, failed=(74, 75))
     meas = measure(calibs)
@@ -346,7 +380,125 @@ def test_whip_pan_gap_is_consistent(rng):
     track = tm.smooth_clip(meas, params, CFG)
     for k in (74, 75):
         d = track.mean[k, :4] - phi[k]
-        assert d @ np.linalg.solve(track.cov[k, :4, :4], d) <= tm.NEES4_99
+        assert d @ np.linalg.solve(track.cov[k, :4, :4], d) <= tm.GATE4
+    assert not (track.used & (track.deletion > CFG.gate)).any()
+
+
+def test_an_inconsistent_burst_is_repaired_not_smoothed(rng):
+    """+4°, −4°, +4° at frames 60-62: the run fails as a manoeuvre segment, so it is repaired from its
+    neighbours, which a masked outlier pair must not pull away."""
+    _, phi = steady_pan_path()
+    obs = phi.copy()
+    obs[60:63, 0] += np.radians([4.0, -4.0, 4.0])
+    calibs = gaussian_calibs(obs, CENTRE, rng)
+    meas = measure(calibs)
+    track = tm.smooth_clip(meas, PARAMS, CFG)
+    _, flags = tm.to_calib_results(calibs, meas, track, PARAMS, CFG)
+    assert flags.repaired[60:63].all()
+    assert flags.smoothed[[59, 63]].all()
+    assert len(np.unique(track.segment)) == 1
+    assert not track.manoeuvre.any()
+    assert np.degrees(np.abs(track.mean[58:65, 0] - phi[58:65, 0])).max() < 0.2
+
+
+def test_moderate_outliers_are_deleted_and_none_stays_used_above_the_gate():
+    """One pan outlier of 5-8 σ on a constant-velocity clip with the true noise: at the end no used
+    measurement is above the gate, and 7-8 σ outliers are deleted."""
+    true = tm.NoiseParams(kappa2=1.8, q_pan=2e-3, q_tilt=2e-4, q_logf=4e-3)
+    sd = np.sqrt(true.kappa2) * 1.5e-3
+    deleted = {}
+    for mult in (5, 6, 7, 8):
+        hits = 0
+        for seed in range(10):
+            (meas,), _ = cv_clips(np.random.default_rng(seed), 1, 150, true, CFG)
+            z = meas.z.copy()
+            z[75, 0] += mult * sd
+            track = tm.smooth_clip(tm.ClipMeasurements(**{**meas.__dict__, "z": z}), true, CFG)
+            assert not (track.used & (track.deletion > CFG.gate)).any()
+            hits += int(track.rejected[75])
+        deleted[mult] = hits
+    assert deleted[7] >= 8
+    assert deleted[8] == 10
+
+
+def test_a_kink_in_the_camera_path_is_followed(rng):
+    """A 12°/s step in pan velocity strains the corner frame past the gate; freeing one step explains it, so
+    it stays used and the output does not cut the corner."""
+    t, phi = steady_pan_path()
+    phi[:, 0] += np.cumsum(np.where((t >= 12.0) & (t <= 13.2), np.radians(12.0), 0.0)) * 0.2
+    calibs = gaussian_calibs(phi, CENTRE, rng)
+    meas = measure(calibs)
+    track = tm.smooth_clip(meas, PARAMS, CFG)
+    res, flags = tm.to_calib_results(calibs, meas, track, PARAMS, CFG)
+    assert track.loose.any()
+    assert not track.rejected[55:72].any()
+    assert flags.smoothed[55:72].all()
+    e = norms(probe_errors([r.H for r in res], h_true(phi)))[55:72]
+    e_raw = norms(probe_errors([c.H for c in calibs], h_true(phi)))[55:72]
+    assert np.nanquantile(e, 0.9) <= 0.5 * np.nanquantile(e_raw, 0.9)
+
+
+def test_a_reframe_beyond_the_fitted_noise_becomes_a_manoeuvre_segment(rng):
+    """The pan swings 6° and back in 2 s with a stiff fitted noise: the run of deleted frames is a camera
+    move, fits as a manoeuvre segment, and is published instead of abstaining."""
+    stiff = tm.NoiseParams(kappa2=1.0, q_pan=3e-4, q_tilt=1e-4, q_logf=1e-3)
+    t, phi = steady_pan_path()
+    swing = (t >= 12.0) & (t <= 14.0)
+    phi[:, 0] += np.radians(6.0) * np.where(swing, np.sin(np.pi * (t - 12.0) / 2.0) ** 2, 0.0)
+    calibs = gaussian_calibs(phi, CENTRE, rng)
+    meas = measure(calibs)
+    track = tm.smooth_clip(meas, stiff, CFG)
+    res, _ = tm.to_calib_results(calibs, meas, track, stiff, CFG)
+    assert track.manoeuvre[55:75].sum() >= 5
+    assert all(r.ok for r in res[55:75])
+    e = norms(probe_errors([r.H for r in res], h_true(phi)))[55:75]
+    e_raw = norms(probe_errors([c.H for c in calibs], h_true(phi)))[55:75]
+    assert np.nanquantile(e, 0.9) <= 0.6 * np.nanquantile(e_raw, 0.9)
+
+
+def test_an_outlier_at_a_segment_edge_is_never_published_raw(rng):
+    """Outliers on the first and last frames and next to a 1.4 s failure gap have no smoothed state on one
+    side: they abstain (flag rejected) or are repaired, never passed through with their raw camera."""
+    _, phi = ptz_path()
+    n = len(phi)
+    edges = [0, 49, 56, n - 1]
+    calibs = gaussian_calibs(phi, CENTRE, rng, outliers=edges, failed=range(50, 56))
+    meas = measure(calibs)
+    track = tm.smooth_clip(meas, PARAMS, CFG)
+    res, flags = tm.to_calib_results(calibs, meas, track, PARAMS, CFG)
+    raw_ok = np.array([c.ok for c in calibs])
+    one_flag = np.sum([getattr(flags, f) for f in ("smoothed", "repaired", "filled", "projected",
+                                                   "passthrough", "duplicate", "rejected")], 0)  # fmt: skip
+    np.testing.assert_array_equal(one_flag[raw_ok], 1)
+    assert not flags.passthrough[edges].any()
+    assert track.rejected[edges].all()
+    for k in edges:
+        assert flags.rejected[k] or flags.repaired[k]
+        if flags.rejected[k]:
+            assert res[k].status is CalibStatus.UNHEALTHY
+            assert res[k].H is None
+
+
+def test_a_nominal_one_second_gap_is_bridged_wherever_it_falls(rng):
+    """Four failed frames at 5 fps leave a 1.0 s gap: bridged at every absolute offset (float times of
+    native frames / 25 used to exceed 1.0 s at some of them)."""
+    for offset in range(1, 750, 37):
+        meas = toy_clip(rng, 30, missing=range(10, 14))
+        frames = meas.frames + offset
+        meas = tm.ClipMeasurements(**{**meas.__dict__, "frames": frames, "times": frames / CFG.fps})
+        seg = tm.segments(meas, tm.measurement_cov(meas, PARAMS, CFG), meas.accepted, CFG)
+        assert seg.max() == 0
+
+
+def test_a_cut_forces_a_segment_boundary(rng):
+    _, phi = ptz_path(n=80)
+    calibs = gaussian_calibs(phi, CENTRE, rng)
+    meas = measure(calibs)
+    plain = tm.smooth_clip(meas, PARAMS, CFG)
+    cut = tm.smooth_clip(meas, PARAMS, CFG, cuts=(int(meas.frames[40]),))
+    assert plain.segment[39] == plain.segment[40]
+    assert cut.segment[39] != cut.segment[40]
+    assert (cut.segment >= 0).all()
 
 
 # --- edge cases and contract --------------------------------------------------------------------------
@@ -391,6 +543,69 @@ def test_duplicates_are_copied_not_measured(rng):
     assert flags.smoothed[30]
 
 
+def test_duplicate_mask_needs_detections():
+    def det(ids, uv):
+        return {
+            "kp_ids": np.array(ids, dtype=int),
+            "kp_uv": np.array(uv, dtype=float).reshape(-1, 2),
+            "line_ids": np.array([], dtype=int),
+            "line_uv": np.zeros((0, 2, 2)),
+        }
+
+    empty, a, b = det([], []), det([3, 7], [[10, 20], [30, 40]]), det([3, 7], [[10, 20], [30, 41]])
+    assert tm.duplicate_mask([empty, empty, a, a, b, b, empty]).tolist() == [
+        False, False, False, True, False, True, False,
+    ]  # fmt: skip
+
+
+def test_a_game_centre_that_does_not_explain_the_clip_is_refused(rng):
+    """A centre 3 m off inflates every misfit alike, which the per-frame gate cannot see: as a game centre it
+    is refused against the game's misfit scale, and the clip passes through instead of getting worse."""
+    _, phi = ptz_path()
+    calibs = gaussian_calibs(phi, CENTRE, rng)
+    frames, dup = frames_of(len(calibs)), np.zeros(len(calibs), bool)
+
+    def game_at(c):
+        return tm.CentreEstimate(np.asarray(c, float), 1e-2 * np.eye(3), 1500, 1.0, 3.4, True, "game")
+
+    off = game_at(CENTRE + np.array([3.0, 0.0, 0.0]))
+    meas, refused = tm.measure_at_centre("g", frames, calibs, dup, None, off, CFG)
+    assert refused
+    assert meas.centre is None
+    assert not meas.accepted.any()
+    res, flags = tm.to_calib_results(calibs, meas, tm.empty_track(meas, PARAMS, CFG), PARAMS, CFG)
+    assert flags.passthrough.all()
+    assert all(np.array_equal(r.H, c.H) for r, c in zip(res, calibs, strict=True))
+    meas, refused = tm.measure_at_centre("g", frames, calibs, dup, None, game_at(CENTRE), CFG)
+    assert not refused
+    assert meas.accepted.mean() > 0.9
+    own = tm.estimate_centre(calibs, dup, CFG)
+    assert own is not None
+    assert tm.measure_at_centre("g", frames, calibs, dup, own, off, CFG)[0].centre is own
+
+
+def test_a_rejected_centre_refit_leaves_the_centre_unreliable(rng, monkeypatch):
+    """When the joint refit is not kept, the returned median centre has no covariance (it used to carry the
+    refit's curvature, which could mark it reliable)."""
+    _, phi = ptz_path()
+    calibs = gaussian_calibs(phi, CENTRE, rng)
+    dup = np.zeros(len(calibs), bool)
+    good = tm.estimate_centre(calibs, dup, CFG)
+    assert good is not None
+    assert good.source == "clip"
+    assert good.reliable
+
+    def diverged(calibs, c0, phis0, kappa2, pp):
+        return np.array([0.0, 0.0, -5.0]), 1e-4 * np.eye(3), np.asarray(phis0)
+
+    monkeypatch.setattr(tm, "_refit_centre", diverged)
+    est = tm.estimate_centre(calibs, dup, CFG)
+    assert est is not None
+    assert est.source == "median"
+    assert est.sd_m == float("inf")
+    assert not est.reliable
+
+
 def test_smoothing_is_deterministic(rng):
     _, phi = ptz_path(n=80)
     calibs = gaussian_calibs(phi, CENTRE, rng, outliers=(10, 50))
@@ -411,7 +626,8 @@ def test_outputs_honour_the_calibration_contract(rng):
     res, flags = tm.to_calib_results(calibs, meas, track, PARAMS, CFG)
     raw_ok = np.array([c.ok for c in calibs])
     one_flag = np.sum(
-        [flags.smoothed, flags.repaired, flags.projected, flags.passthrough, flags.duplicate], 0
+        [flags.smoothed, flags.repaired, flags.projected, flags.passthrough, flags.duplicate, flags.rejected],
+        0,
     )
     np.testing.assert_array_equal(one_flag[raw_ok], 1)
     stages = real_stages({}, None, "t")
@@ -508,6 +724,22 @@ def test_noise_fit_is_robust_to_gross_outliers(rng):
     fitted, diag = tm.fit_noise(dirty, CFG)
     assert diag["deleted"] >= 70
     np.testing.assert_allclose(fitted.log_vector()[:2], true.log_vector()[:2], atol=np.log(1.3))
+
+
+def test_noise_fit_deletes_moderate_outliers(rng):
+    """5 % of frames off by 7 σ in pan: most are deleted and κ², q_pan stay close to the truth (before the
+    robust loop used one model, none was deleted and q_pan came out ×2.2)."""
+    true = tm.NoiseParams(kappa2=1.8, q_pan=2e-3, q_tilt=2e-4, q_logf=4e-3)
+    clips, _ = cv_clips(rng, 10, 150, true, CFG)
+    dirty = []
+    for c in clips:
+        z = c.z.copy()
+        bad = rng.choice(np.arange(3, 147), size=8, replace=False)
+        z[bad, 0] += 7 * np.sqrt(true.kappa2) * 1.5e-3 * rng.choice([-1.0, 1.0], size=len(bad))
+        dirty.append(tm.ClipMeasurements(**{**c.__dict__, "z": z}))
+    fitted, diag = tm.fit_noise(dirty, CFG)
+    assert diag["deleted"] >= 50
+    np.testing.assert_allclose(fitted.log_vector()[:2], true.log_vector()[:2], atol=np.log(1.35))
 
 
 def test_smoothed_state_covers_the_truth_at_the_nominal_level(rng):

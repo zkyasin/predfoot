@@ -16,7 +16,13 @@ import numpy as np
 from predfoot.calib.observations import observations_from_detections
 from predfoot.calib.solver import SolverConfig
 from predfoot.calib.solver import calibrate as solve
-from predfoot.calib.temporal import NoiseParams, SmootherConfig, duplicate_mask, smooth_results
+from predfoot.calib.temporal import (
+    CentreEstimate,
+    NoiseParams,
+    SmootherConfig,
+    duplicate_mask,
+    smooth_results,
+)
 from predfoot.contracts import CalibResult, CalibStatus, FootObs, Localization
 from predfoot.geometry import homography as hg
 from predfoot.pipeline import stub
@@ -33,6 +39,7 @@ def real_stages(
     solver: SolverConfig | None = None,
     seed: int = 0,
     temporal: tuple[SmootherConfig, NoiseParams] | None = None,
+    game_centre: CentreEstimate | None = None,
 ) -> Stages:
     """Stages over ``detections`` keyed by the clip's frame index (0 … n−1).
 
@@ -41,13 +48,19 @@ def real_stages(
 
     With ``temporal = (config, params)``, the first call calibrates every frame once, flags duplicate
     detections and smooths the camera with :func:`predfoot.calib.temporal.smooth_results` (the config's
-    ``fps`` is the frame rate of the clip's frame index); later calls return the cached outputs. The version
-    then carries the smoother's config digest and a hash of its parameters, so cached blocks of another
-    camera are never reused, and the conformal quantiles must come from the same smoother.
+    ``fps`` is the frame rate of the clip's frame index); later calls return the cached outputs. When the
+    clip's own projection centre is unreliable, ``game_centre`` (the median centre of the match's clips,
+    :func:`predfoot.calib.temporal.game_centre`) is used if it explains the clip, as in the dev evaluation;
+    otherwise the clip passes through. The version then carries the smoother's config digest, a hash of its
+    parameters and of the game centre, so cached blocks of another camera are never reused, and the conformal
+    quantiles must come from the same smoother. The dev evaluation calibrates smoothed and passed-through
+    frames separately (their covariances have different scales); a single ``conformal`` model here does not.
     """
     cfg = solver or SolverConfig()
     if temporal is not None:
         version = f"{version}+ptz-{temporal[0].digest()}-{temporal[1].digest()}"
+        if game_centre is not None:
+            version += f"-{game_centre.digest()}"
     smoothed: dict[int, CalibResult] = {}
     done = False
 
@@ -67,7 +80,7 @@ def real_stages(
         frames = sorted(detections)
         raw = [solve_frame(f) for f in frames]
         dup = duplicate_mask([detections[f] for f in frames])
-        out, _, _ = smooth_results(frames, raw, dup, temporal[0], temporal[1])
+        out, _, _ = smooth_results(frames, raw, dup, temporal[0], temporal[1], game=game_centre)
         smoothed.update(zip(frames, out, strict=True))
         done = True
 
