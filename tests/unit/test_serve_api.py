@@ -104,6 +104,10 @@ def _bad_bodies():
     asym = cov.copy()
     asym[0, 1] += 10 * np.sqrt(cov[0, 0] * cov[1, 1])
     not_psd = cov - 2 * np.linalg.eigvalsh(cov)[-1] * np.eye(8)
+    # eigenvalues ±1e300, whose correlations overflow to inf (and their differences to NaN)
+    overflowing = [[1e-300, 1e300], [1e300, 1e-300]]
+    overflowing_theta = np.diag(np.full(8, 1e-300))
+    overflowing_theta[0, 1] = overflowing_theta[1, 0] = 1e300
     feet = localize_body()["feet"]
     return {
         "H[2][2] not 1": localize_body(homography=(2 * h).tolist()),
@@ -112,11 +116,13 @@ def _bad_bodies():
         "cov_theta not 8x8": localize_body(cov_theta=cov[:7].tolist()),
         "cov_theta not symmetric": localize_body(cov_theta=asym.tolist()),
         "cov_theta not PSD": localize_body(cov_theta=not_psd.tolist()),
+        "cov_theta overflows": localize_body(cov_theta=overflowing_theta.tolist()),
         "negative track id": localize_body(feet=[{"track_id": -1, "u": 1.0, "v": 2.0}]),
         "missing pixel": localize_body(feet=[{"track_id": 1, "u": 1.0}]),
         "cov_uv not PSD": localize_body(
             feet=[{"track_id": 1, "u": 1.0, "v": 2.0, "cov_uv": [[1.0, 0.0], [0.0, -1.0]]}]
         ),
+        "cov_uv overflows": localize_body(feet=[{"track_id": 1, "u": 1.0, "v": 2.0, "cov_uv": overflowing}]),
         "unknown field": localize_body(conformal_q=5.0),
         "zero quantile": localize_body(conformal_quantile=0.0),
         "negative dof": localize_body(dof=-3.0),

@@ -31,19 +31,24 @@ def checked_covariance(rows: list[list[float]], name: str) -> list[list[float]]:
     """A symmetric positive semi-definite matrix, symmetrised; raises ValueError otherwise.
 
     The checks run on the correlation scale D^-1/2 C D^-1/2, where entries of very different magnitudes (the
-    perspective terms of θ are ~1e-3, the others ~1e2) weigh the same.
+    perspective terms of θ are ~1e-3, the others ~1e2) weigh the same. A covariance has correlations within
+    [-1, 1]; a matrix whose rescaled entries overflow is refused, and the comparisons are written so that NaN
+    fails them.
     """
     c = np.asarray(rows, dtype=np.float64)
     d = np.diag(c)
     if np.any(d < 0):
         raise ValueError(f"{name} has a negative variance")
     s = 1.0 / np.sqrt(np.where(d > 0, d, 1.0))
-    r = c * s[:, None] * s[None, :]
-    if np.max(np.abs(r - r.T)) > SYMMETRY_TOL:
+    with np.errstate(over="ignore", invalid="ignore"):
+        r = c * s[:, None] * s[None, :]
+    if not np.isfinite(r).all():
+        raise ValueError(f"{name} is not a covariance: its correlations overflow")
+    if not np.max(np.abs(r - r.T)) <= SYMMETRY_TOL:
         raise ValueError(f"{name} is not symmetric")
-    if np.linalg.eigvalsh(0.5 * (r + r.T))[0] < -PSD_TOL:
+    if not np.linalg.eigvalsh(0.5 * (r + r.T))[0] >= -PSD_TOL:
         raise ValueError(f"{name} is not positive semi-definite")
-    return list((0.5 * (c + c.T)).tolist())
+    return list((0.5 * c + 0.5 * c.T).tolist())  # halves first: no overflow near the float limit
 
 
 class Foot(BaseModel):
