@@ -79,60 +79,112 @@ def ransac(
     return hg.dlt(xy[best_inliers], uv[best_inliers]), best_inliers
 
 
+@dataclass(frozen=True)
+class LineObservation:
+    """Image points lying on a planar template segment from ``a`` to ``b`` (pitch metres).
+
+    Typically the two visible ends of a detected pitch line: their position along the line is unknown, so
+    each point only constrains its distance to the projected line (one residual per point).
+    """
+
+    a: tuple[float, float]
+    b: tuple[float, float]
+    uv: FloatArray  # (k, 2) pixels
+    weight: float = 1.0
+
+
+def _projected_line(h: FloatArray, line: LineObservation) -> FloatArray:
+    """Image line through the projections of the segment ends, normalised so that a² + b² = 1."""
+    pa = h @ np.array([line.a[0], line.a[1], 1.0])
+    pb = h @ np.array([line.b[0], line.b[1], 1.0])
+    ln = np.cross(pa, pb)
+    return ln / np.hypot(ln[0], ln[1])
+
+
+def _residuals(
+    theta: FloatArray, xy: FloatArray, uv: FloatArray, w: FloatArray, lines: list[LineObservation]
+) -> FloatArray:
+    """Weighted residuals: 2 per point correspondence, then 1 per point on a line (pixels)."""
+    h = hg.h_from_theta(theta)
+    parts = [(hg.project(h, xy) - uv).reshape(-1) * np.repeat(np.sqrt(w), 2)]
+    for line in lines:
+        parts.append(
+            (np.c_[line.uv, np.ones(len(line.uv))] @ _projected_line(h, line)) * np.sqrt(line.weight)
+        )
+    return np.concatenate(parts)
+
+
+def _jacobian(
+    theta: FloatArray, xy: FloatArray, uv: FloatArray, w: FloatArray, lines: list[LineObservation]
+) -> FloatArray:
+    """Analytic Jacobian for the points; central differences for the line residuals."""
+    h = hg.h_from_theta(theta)
+    jp = hg.jacobian_project_theta(h, xy).reshape(-1, hg.N_PARAMS) * np.repeat(np.sqrt(w), 2)[:, None]
+    if not lines:
+        return jp
+    n_pts = 2 * len(xy)
+    cols = []
+    for k in range(hg.N_PARAMS):
+        step = 1e-6 * max(abs(theta[k]), 1e-6)
+        tp, tm = theta.copy(), theta.copy()
+        tp[k] += step
+        tm[k] -= step
+        cols.append(
+            (_residuals(tp, xy, uv, w, lines)[n_pts:] - _residuals(tm, xy, uv, w, lines)[n_pts:]) / (2 * step)
+        )
+    return np.vstack([jp, np.stack(cols, axis=1)])
+
+
 def refine(
     H0: ArrayLike,
     xy: ArrayLike,
     uv: ArrayLike,
     weights: ArrayLike | None = None,
     config: SolverConfig | None = None,
+    lines: list[LineObservation] | None = None,
 ) -> tuple[FloatArray, FloatArray]:
-    """Robust (soft-L1) Levenberg-Marquardt on reprojection residuals. Returns H and the residuals (n, 2)."""
+    """Robust (soft-L1) Levenberg-Marquardt on point and line residuals.
+
+    Returns H and the (weighted) residual vector at the optimum.
+    """
     cfg = config or SolverConfig()
     xy, uv = np.asarray(xy, dtype=np.float64), np.asarray(uv, dtype=np.float64)
     w = np.ones(len(xy)) if weights is None else np.asarray(weights, dtype=np.float64)
-    sw = np.repeat(np.sqrt(w), 2)
-
-    def fun(theta: FloatArray) -> FloatArray:
-        return (hg.project(hg.h_from_theta(theta), xy) - uv).reshape(-1) * sw
-
-    def jac(theta: FloatArray) -> FloatArray:
-        return hg.jacobian_project_theta(hg.h_from_theta(theta), xy).reshape(-1, hg.N_PARAMS) * sw[:, None]
-
+    obs = lines or []
     res = least_squares(
-        fun, hg.theta_from_h(H0), jac=jac, loss="soft_l1", f_scale=cfg.loss_scale_px, x_scale="jac"
+        _residuals,
+        hg.theta_from_h(H0),
+        jac=_jacobian,
+        args=(xy, uv, w, obs),
+        loss="soft_l1",
+        f_scale=cfg.loss_scale_px,
+        x_scale="jac",
     )
-    h = hg.h_from_theta(res.x)
-    return h, hg.project(h, xy) - uv
+    return hg.h_from_theta(res.x), _residuals(res.x, xy, uv, w, obs)
 
 
 def laplace_covariance(
-    H: ArrayLike,
-    xy: ArrayLike,
+    J: ArrayLike,
     residuals: ArrayLike,
-    weights: ArrayLike | None = None,
     config: SolverConfig | None = None,
 ) -> tuple[FloatArray, float, float, float]:
-    """Covariance of θ for the soft-L1 M-estimator: Σθ = s² (J̃ᵀ J̃)⁻¹, with J̃ = √e · J for element weights e.
+    """Covariance of θ for the soft-L1 M-estimator: Σθ = s² (Jᵀ J)⁻¹ from weighted residuals and Jacobian.
 
     The scale uses Huber's correction for M-estimators,
-    s² = [Σ ψ(r̃)² / (m − 8)] / [mean ψ'(r̃)]², with ψ(r) = r / √(1 + z), ψ'(r) = (1 + z)^(−3/2), z = (r / c)².
+    s² = [Σ ψ(r)² / (m − 8)] / [mean ψ'(r)]², with ψ(r) = r / √(1 + z), ψ'(r) = (1 + z)^(−3/2), z = (r / c)².
     It is consistent under Gaussian noise; the naive IRLS estimate Σ w r² / (m − 8) underestimated σ² by about
     20 % in simulation, which made the 90 % regions cover only 83 %.
 
     The per-frame s² has few degrees of freedom, so it is shrunk towards ``sigma0_px``:
-    s²_post = (ν s² + ν₀ σ₀²) / (ν + ν₀) with ν = 2n − 8: a scaled-inverse-χ² prior with ν₀ degrees of
-    freedom.
-    Regions built from Σθ should therefore use Student/F quantiles with ν + ν₀ degrees of freedom.
+    s²_post = (ν s² + ν₀ σ₀²) / (ν + ν₀) with ν = m − 8: a scaled-inverse-χ² prior with ν₀ degrees of
+    freedom. Regions built from Σθ should therefore use Student/F quantiles with ν + ν₀ degrees of freedom.
 
     Returns (Σθ, s²_post, scaled condition number, ν + ν₀).
     """
     cfg = config or SolverConfig()
-    xy = np.asarray(xy, dtype=np.float64)
-    elem = np.ones(len(xy)) if weights is None else np.asarray(weights, dtype=np.float64)
-    sw = np.repeat(np.sqrt(elem), 2)
-    r = np.asarray(residuals, dtype=np.float64).reshape(-1) * sw
-    J = hg.jacobian_project_theta(H, xy).reshape(-1, hg.N_PARAMS) * sw[:, None]
-    info = J.T @ J
+    jac = np.asarray(J, dtype=np.float64)
+    r = np.asarray(residuals, dtype=np.float64).reshape(-1)
+    info = jac.T @ jac
     z = (r / cfg.loss_scale_px) ** 2
     psi, dpsi = r * _robust_weights(r, cfg.loss_scale_px), (1.0 + z) ** -1.5
     dof = max(len(r) - hg.N_PARAMS, 0)
@@ -151,24 +203,39 @@ def calibrate(
     rng: np.random.Generator,
     weights: ArrayLike | None = None,
     config: SolverConfig | None = None,
+    lines: list[LineObservation] | None = None,
 ) -> tuple[CalibResult, BoolArray]:
-    """Full per-frame calibration from pitch points ``xy`` (metres) and their detections ``uv`` (pixels).
+    """Full per-frame calibration from pitch points ``xy`` (metres), their detections ``uv`` (pixels) and,
+    optionally, points observed on pitch lines.
 
-    Returns the result and the inlier mask. The frame abstains (status ≠ OK) with too few inliers or a
-    degenerate configuration.
+    RANSAC runs on the point correspondences; lines whose points are far from their projection under the
+    RANSAC solution are dropped before the joint refinement. Returns the result and the point inlier mask.
+    The frame abstains (status ≠ OK) with too few inliers or a degenerate configuration.
     """
     cfg = config or SolverConfig()
     xy, uv = np.asarray(xy, dtype=np.float64), np.asarray(uv, dtype=np.float64)
     w = np.ones(len(xy)) if weights is None else np.asarray(weights, dtype=np.float64)
-    if len(xy) < cfg.min_inliers:
+    if len(xy) < 4:
         return CalibResult(CalibStatus.FEW_POINTS, n_inliers=len(xy)), np.zeros(len(xy), dtype=bool)
     h0, inliers = ransac(xy, uv, rng, cfg)
     n_in = int(inliers.sum())
-    if h0 is None or n_in < cfg.min_inliers:
+    if h0 is None:
         return CalibResult(CalibStatus.FEW_POINTS, n_inliers=n_in), inliers
-    h, res = refine(h0, xy[inliers], uv[inliers], w[inliers], cfg)
-    cov, s2, cond, dof = laplace_covariance(h, xy[inliers], res, w[inliers], cfg)
-    rms = float(np.sqrt(np.mean(np.sum(res**2, axis=1))))
+    kept = [
+        ln
+        for ln in (lines or [])
+        if np.all(
+            np.abs(np.c_[ln.uv, np.ones(len(ln.uv))] @ _projected_line(h0, ln)) < 2 * cfg.ransac_threshold_px
+        )
+    ]
+    n_obs = 2 * n_in + sum(len(ln.uv) for ln in kept)
+    if n_obs < 2 * cfg.min_inliers:
+        return CalibResult(CalibStatus.FEW_POINTS, n_inliers=n_in), inliers
+    xi, ui, wi = xy[inliers], uv[inliers], w[inliers]
+    h, r = refine(h0, xi, ui, wi, cfg, kept)
+    cov, s2, cond, dof = laplace_covariance(_jacobian(hg.theta_from_h(h), xi, ui, wi, kept), r, cfg)
+    point_res = hg.project(h, xi) - ui
+    rms = float(np.sqrt(np.mean(np.sum(point_res**2, axis=1))))
     status = CalibStatus.OK
     if not (np.isfinite(h).all() and np.isfinite(cov).all()) or cond > cfg.max_scaled_condition:
         status = CalibStatus.DEGENERATE

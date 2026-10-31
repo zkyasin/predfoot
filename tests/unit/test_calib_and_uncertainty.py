@@ -132,3 +132,36 @@ def test_region_quantile():
     assert region_quantile(2, 0.9, dof=1e9) == pytest.approx(CHI2_2_90, rel=1e-4)
     assert region_quantile(2, 0.9, dof=20) > CHI2_2_90  # an estimated scale widens the region
     assert region_quantile(8, 0.9) == pytest.approx(chi2.ppf(0.9, 8))
+
+
+def test_lines_constrain_a_sparse_frame(rng):
+    from predfoot.calib.solver import LineObservation
+    from predfoot.geometry.pitch import pnlcalib_lines
+
+    cam = look_at([0.0, -50.0, 18.0], [-5.0, 10.0, 0.0], 2200.0)
+    xy, uv = simulated_frame(cam, rng, sigma_px=1.0, n_extra=0, min_points=4)
+    keep = slice(0, 5)  # only five keypoints: a weak frame
+    lines = []
+    for seg in pnlcalib_lines().values():
+        if not seg.planar:
+            continue
+        t = np.linspace(0.05, 0.95, 12)[:, None]
+        pts = np.add(seg.a[:2], t * np.subtract(seg.b[:2], seg.a[:2]))
+        puv, depth = cam.project(np.column_stack([pts, np.zeros(len(pts))]))
+        vis = cam.in_image(puv, depth)
+        if vis.sum() >= 2:
+            ends = puv[vis][[0, -1]] + rng.normal(scale=1.0, size=(2, 2))
+            lines.append(LineObservation(seg.a[:2], seg.b[:2], ends))
+    assert len(lines) >= 3
+    probe = rng.uniform([-40, -25], [30, 25], size=(200, 2))
+    truth = hg.project(cam.H, probe)
+
+    def mean_err(res):
+        return np.median(np.linalg.norm(hg.project(res.H, probe) - truth, axis=1))
+
+    without, _ = calibrate(xy[keep], uv[keep], np.random.default_rng(1), config=FAST)
+    with_lines, _ = calibrate(xy[keep], uv[keep], np.random.default_rng(1), config=FAST, lines=lines)
+    assert with_lines.ok
+    assert with_lines.dof > (without.dof or 0)
+    if without.ok:
+        assert mean_err(with_lines) < mean_err(without)
