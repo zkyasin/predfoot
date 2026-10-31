@@ -9,6 +9,7 @@ from predfoot.cli import app
 from predfoot.io import skillcorner as sc
 from predfoot.io.validate import load_schema, validate_record, validate_tracking
 from predfoot.pipeline.synthetic import look_at_homography
+from tests.cli_output import PLAIN_ENV, plain
 from tests.fixtures import FIXTURES
 
 EXCERPT = FIXTURES / "skillcorner_opendata_excerpt.jsonl"
@@ -260,8 +261,8 @@ def test_cli_validate_exit_codes(tmp_path):
     ok = CliRunner().invoke(app, ["validate", str(good), "--match", str(match)])
     assert ok.exit_code == 0, ok.output
     assert "OK" in ok.output
-    ko = CliRunner().invoke(app, ["validate", str(bad)])
+    ko = CliRunner(env=PLAIN_ENV).invoke(app, ["validate", str(bad)])
     assert ko.exit_code == 1
-    assert "line 1" in ko.output
+    assert "line 1" in plain(ko)
     real = CliRunner().invoke(app, ["validate", str(EXCERPT), "--skillcorner"])
     assert real.exit_code == 0, real.output
