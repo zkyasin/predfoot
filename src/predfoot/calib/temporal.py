@@ -209,6 +209,19 @@ class FrameFlags:
 # --- measurement step ---------------------------------------------------------------------------------
 
 
+#: Detection fields that must all repeat for a frame to count as a duplicate (slow-motion replays).
+DUPLICATE_KEYS = ("kp_ids", "kp_uv", "line_ids", "line_uv")
+
+
+def duplicate_mask(detections: Sequence[Mapping[str, Any]]) -> BoolArray:
+    """True where a frame's detections equal those of the previous frame (keypoints and line ends)."""
+    out = np.zeros(len(detections), dtype=bool)
+    for k in range(1, len(detections)):
+        a, b = detections[k], detections[k - 1]
+        out[k] = all(np.array_equal(np.asarray(a[key]), np.asarray(b[key])) for key in DUPLICATE_KEYS)
+    return out
+
+
 def _usable(r: CalibResult) -> bool:
     return r.ok and r.H is not None and r.cov_theta is not None
 

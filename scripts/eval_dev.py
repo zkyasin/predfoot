@@ -72,7 +72,6 @@ NATIVE_FPS = 25.0
 IMAGE_SIZE = (1920, 1080)
 FAIL_LINE_PX = 10.0
 FLAGS = ("smoothed", "repaired", "filled", "projected", "passthrough", "duplicate")
-DUPLICATE_KEYS = ("kp_ids", "kp_uv", "line_ids", "line_uv")
 
 
 class Smooth(StrEnum):
@@ -126,13 +125,10 @@ def calibrate_clip(
     cc = ClipCalib(clip_id, game, split, frames, [], np.zeros(len(frames), dtype=bool), [])
     p_by_frame = persons.partition_by("frame", as_dict=True)
     l_by_frame = lines.partition_by("frame", as_dict=True)
-    prev_h, prev_det = None, None
+    cc.duplicate[:] = tm.duplicate_mask([dets[f] for f in frames.tolist()])
+    prev_h = None
     for i, frame in enumerate(frames.tolist()):
         det = dets[frame]
-        cc.duplicate[i] = prev_det is not None and all(
-            np.array_equal(det[k], prev_det[k]) for k in DUPLICATE_KEYS
-        )
-        prev_det = det
         xy, uv, w, obs = observations_from_detections(det)
         if cached is None:
             rng = np.random.default_rng(frame * 7919 + int(clip_id.split("-")[1]))

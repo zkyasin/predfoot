@@ -1,5 +1,6 @@
-"""Real stages for ``predfoot run``: cached network detections → robust calibration → delta-method positions
-scaled by conformal quantiles. They keep the signatures of the stubs in :mod:`predfoot.pipeline.stub`.
+"""Real stages for ``predfoot run``: cached network detections → robust calibration (optionally smoothed over
+time) → delta-method positions scaled by conformal quantiles. They keep the signatures of the stubs in
+:mod:`predfoot.pipeline.stub`.
 
 The calibrated covariance of a player is (q̂ / χ²₂(0.90)) · Σp, so its 90 % ellipse is exactly the conformal
 region {e : eᵀ Σp⁻¹ e ≤ q̂}, and ``p90_radius_m`` = √(q̂ · λmax(Σp)) is the circle that contains it.
@@ -15,6 +16,7 @@ import numpy as np
 from predfoot.calib.observations import observations_from_detections
 from predfoot.calib.solver import SolverConfig
 from predfoot.calib.solver import calibrate as solve
+from predfoot.calib.temporal import NoiseParams, SmootherConfig, duplicate_mask, smooth_results
 from predfoot.contracts import CalibResult, CalibStatus, FootObs, Localization
 from predfoot.geometry import homography as hg
 from predfoot.pipeline import stub
@@ -30,22 +32,50 @@ def real_stages(
     version: str,
     solver: SolverConfig | None = None,
     seed: int = 0,
+    temporal: tuple[SmootherConfig, NoiseParams] | None = None,
 ) -> Stages:
     """Stages over ``detections`` keyed by the clip's frame index (0 … n−1).
 
     Without ``conformal``, regions are the uncalibrated Laplace ellipses (q̂ = χ²₂(0.90)); with it, q̂ comes
     from the Mondrian bin of each player (metres per pixel at the feet, number of RANSAC inliers).
+
+    With ``temporal = (config, params)``, the first call calibrates every frame once, flags duplicate
+    detections and smooths the camera with :func:`predfoot.calib.temporal.smooth_results` (the config's
+    ``fps`` is the frame rate of the clip's frame index); later calls return the cached outputs. The version
+    then carries the smoother's config digest and a hash of its parameters, so cached blocks of another
+    camera are never reused, and the conformal quantiles must come from the same smoother.
     """
     cfg = solver or SolverConfig()
+    if temporal is not None:
+        version = f"{version}+ptz-{temporal[0].digest()}-{temporal[1].digest()}"
+    smoothed: dict[int, CalibResult] = {}
+    done = False
 
-    def calibrate(frame: ClipFrame) -> CalibResult:
-        det = detections.get(frame.frame)
+    def solve_frame(frame: int) -> CalibResult:
+        det = detections.get(frame)
         if det is None:
             return CalibResult(CalibStatus.FEW_POINTS)
         xy, uv, w, lines = observations_from_detections(det)
-        rng = np.random.default_rng(seed * 100_003 + frame.frame)
+        rng = np.random.default_rng(seed * 100_003 + frame)
         result, _ = solve(xy, uv, rng, weights=w, config=cfg, lines=lines)
         return result
+
+    def smooth_clip_once() -> None:
+        nonlocal done
+        if done or temporal is None:
+            return
+        frames = sorted(detections)
+        raw = [solve_frame(f) for f in frames]
+        dup = duplicate_mask([detections[f] for f in frames])
+        out, _, _ = smooth_results(frames, raw, dup, temporal[0], temporal[1])
+        smoothed.update(zip(frames, out, strict=True))
+        done = True
+
+    def calibrate(frame: ClipFrame) -> CalibResult:
+        if temporal is None:
+            return solve_frame(frame.frame)
+        smooth_clip_once()
+        return smoothed.get(frame.frame, CalibResult(CalibStatus.FEW_POINTS))
 
     def localize(calib: CalibResult, feet: Sequence[FootObs]) -> list[Localization]:
         if not calib.ok or calib.H is None or calib.cov_theta is None:

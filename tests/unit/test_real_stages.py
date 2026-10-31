@@ -62,3 +62,49 @@ def test_missing_detections_abstain():
     assert not calib.ok
     assert stages.health(calib) == (None, True)
     assert stages.localize(calib, [FootObs(track_id=1, uv=np.array([10.0, 10.0]))])[0].xy is None
+
+
+def ptz_detections(h, rng, sigma=1.0):
+    """Detections of the planar template keypoints seen by homography ``h``."""
+    from .synthetic_camera_track import visible
+
+    kps = pnlcalib_keypoints()
+    ids = np.array([k for k, (_, _, planar) in kps.items() if planar])
+    xy = np.array([kps[k][:2] for k in ids])
+    keep = visible(h, xy)
+    return {
+        "kp_ids": ids[keep],
+        "kp_uv": hg.project(h, xy[keep]) + rng.normal(scale=sigma, size=(keep.sum(), 2)),
+        "kp_conf": np.full(keep.sum(), 0.9),
+        "line_ids": np.array([], dtype=int),
+        "line_uv": np.zeros((0, 2, 2)),
+    }
+
+
+def test_temporal_stages_smooth_a_ptz_clip(rng):
+    from predfoot.calib.temporal import NoiseParams, SmootherConfig
+    from predfoot.geometry import ptz
+
+    from .synthetic_camera_track import CENTRE, common_step_rms, probe_errors, ptz_path
+
+    _, phi = ptz_path(n=30)
+    h_true = [ptz.homography(p, CENTRE) for p in phi]
+    dets = {k: ptz_detections(h, rng, sigma=2.0) for k, h in enumerate(h_true)}
+    cfg, params = SmootherConfig(fps=5.0), NoiseParams()  # the clip's frame index runs at 5 fps
+    per_frame = real_stages(dets, conformal=None, version="v")
+    smoothed = real_stages(dets, conformal=None, version="v", temporal=(cfg, params))
+    assert smoothed.version == f"v+ptz-{cfg.digest()}-{params.digest()}"
+    raw = [per_frame.calibrate(ClipFrame(frame=k)) for k in range(30)]
+    out = [smoothed.calibrate(ClipFrame(frame=k)) for k in range(30)]
+    assert all(r.ok for r in out)
+    assert all(r.dof is None for r in out)
+    centres = np.array([ptz.decompose(r.H)[1] for r in out])
+    assert np.ptp(centres, axis=0).max() < 1e-6  # one projection centre for the whole clip
+    e_raw = probe_errors([r.H for r in raw], h_true)
+    e_out = probe_errors([r.H for r in out], h_true)
+    assert common_step_rms(e_out) < 0.5 * common_step_rms(e_raw)
+    assert not smoothed.calibrate(ClipFrame(frame=99)).ok
+    feet = [FootObs(track_id=0, uv=hg.project(h_true[5], [[10.0, 5.0]])[0])]
+    loc = smoothed.localize(out[5], feet)[0]
+    assert loc.xy is not None
+    assert np.abs(loc.xy - [10.0, 5.0]).max() < 1.0
