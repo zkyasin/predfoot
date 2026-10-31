@@ -10,7 +10,17 @@ from typer.testing import CliRunner
 
 from predfoot.cli import app
 from predfoot.pipeline.run import RunConfig, run_clip
-from predfoot.viz.qa_report import REPORT_NAME, read_run, worst_frames
+from predfoot.viz import qa_report
+from predfoot.viz.qa_report import (
+    _PANEL_H,
+    _PLOT_W,
+    REPORT_NAME,
+    FrameRow,
+    read_run,
+    render_qa_report,
+    timeline_svg,
+    worst_frames,
+)
 from tests.cli_output import PLAIN_ENV, plain
 from tests.fixtures import FIXTURES
 
@@ -233,3 +243,104 @@ def test_worst_frames_come_first(run_dir):
     assert all(not r.abstain for r in worst)
     medians = [r.radius_median for r in worst]
     assert medians == sorted(medians, reverse=True)
+
+
+BAND = re.compile(r'<rect class="band" x="([0-9.]+)" y="([0-9.]+)" width="([0-9.]+)" height="([0-9.]+)"/>')
+
+
+def _rows(n: int, abstained: set[int]) -> list[FrameRow]:
+    return [
+        FrameRow(
+            frame=i,
+            timestamp=None,
+            abstain=i in abstained,
+            health=None,
+            n_players=10,
+            n_located=0 if i in abstained else 10,
+            radius_median=None if i in abstained else 0.5,
+            radius_max=None if i in abstained else 0.8,
+            worst_track=None if i in abstained else 1,
+        )
+        for i in range(n)
+    ]
+
+
+def _shaded_share(svg: str) -> float:
+    """Shaded area of the timeline over the area of its two panels."""
+    area = sum(float(w) * float(h) for _, _, w, h in BAND.findall(svg))
+    return area / (2 * _PLOT_W * _PANEL_H)
+
+
+def test_the_shaded_area_is_the_share_of_abstained_frames_in_a_full_match():
+    """54 000 export frames in 600 columns of 90: 1 % of scattered one-frame abstentions shade 1 % of the
+    chart, not every column that holds one of them (90 % of the columns here)."""
+    n = 54_000
+    abstained = set(range(37, n, 100))
+    svg = timeline_svg(_rows(n, abstained), 10.0)
+    parse(svg)
+    assert _shaded_share(svg) == pytest.approx(len(abstained) / n, rel=0.05)
+    heights = {float(h) for *_, h in BAND.findall(svg)}
+    assert max(heights) < 0.03 * _PANEL_H  # at most two abstained frames of 90 in a column
+
+
+def test_a_long_abstained_span_shades_whole_columns():
+    svg = timeline_svg(_rows(54_000, set(range(9_000, 9_900))), 10.0)  # columns 100-109 exactly
+    bands = BAND.findall(svg)
+    assert len(bands) == 2  # one rectangle per panel
+    assert all(float(h) == _PANEL_H for *_, h in bands)
+    assert _shaded_share(svg) == pytest.approx(900 / 54_000, rel=1e-3)
+
+
+def test_one_column_per_frame_shades_the_abstained_frames_in_full():
+    svg = timeline_svg(_rows(30, {16, 17, 18, 19}), 10.0)
+    bands = BAND.findall(svg)
+    assert len(bands) == 2
+    assert all(float(h) == _PANEL_H for *_, h in bands)
+    assert _shaded_share(svg) == pytest.approx(4 / 30, rel=1e-3)
+
+
+def test_the_legend_explains_the_shading_of_grouped_columns(run_dir, monkeypatch):
+    monkeypatch.setattr(qa_report, "MAX_COLUMNS", 10)  # 30 frames in columns of 3
+    html = render_qa_report(read_run(run_dir))
+    text = parse(html).plain_text
+    assert "Each column groups 3 export frames" in text
+    assert "a shading as high as the share of them that abstain" in text
+    timeline = html[html.index('aria-labelledby="timeline-t"') :]
+    timeline = timeline[: timeline.index("</svg>")]
+    assert _shaded_share(timeline) == pytest.approx(4 / 30, rel=1e-3)  # frames 16-19: 2/3 of two columns
+
+
+def _copy_run(run_dir, target):
+    for name in ("tracking.jsonl", "match.json", "meta.json", "metrics.json"):
+        (target / name).write_bytes((run_dir / name).read_bytes())
+
+
+@pytest.mark.parametrize("fps", [1e20, 1e-320, 0, -10])
+def test_an_absurd_export_rate_in_meta_json_falls_back_to_the_default(run_dir, tmp_path, fps):
+    _copy_run(run_dir, tmp_path)
+    meta = json.loads((tmp_path / "meta.json").read_text(encoding="utf-8"))
+    meta["export_fps"] = fps
+    (tmp_path / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    run = read_run(tmp_path)
+    assert run.export_fps == 10.0
+    assert "Valid: the 30 records" in parse(render_qa_report(run)).plain_text
+
+
+def test_the_time_axis_has_a_bounded_number_of_ticks_at_any_rate():
+    for fps in (1e20, 1e-3, 10.0, 1e3):
+        svg = timeline_svg(_rows(30, set()), fps)
+        x_ticks = re.findall(r'<text class="tick" [^>]*text-anchor="middle">', svg)  # y ticks: "end"
+        assert 2 <= len(x_ticks) <= 10, fps
+
+
+def test_a_deeply_nested_line_is_unreadable_not_fatal(run_dir, tmp_path):
+    _copy_run(run_dir, tmp_path)
+    lines = (tmp_path / "tracking.jsonl").read_text(encoding="utf-8").splitlines()
+    lines.insert(2, "[" * 100_000)
+    (tmp_path / "tracking.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    result = CliRunner(env=PLAIN_ENV).invoke(app, ["qa", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert "validation FAILED" in plain(result)
+    text = parse((tmp_path / REPORT_NAME).read_text(encoding="utf-8")).plain_text
+    assert "line 3: invalid JSON (nested too deeply)" in text
+    assert "1 line(s) of tracking.jsonl are not JSON objects" in text

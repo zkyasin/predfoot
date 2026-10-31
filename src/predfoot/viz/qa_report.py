@@ -44,6 +44,8 @@ WORST_FRAMES = 15
 MAX_SPANS = 20
 #: The timeline groups frames into at most this many columns (a full match has 54 000 export frames).
 MAX_COLUMNS = 600
+#: An export rate read from meta.json outside this range is not trusted: the report assumes the default.
+FPS_RANGE = (1e-3, 1e3)
 HISTOGRAM_BINS = 30
 #: A minimap larger than this is not embedded.
 MAX_EMBEDDED_PNG_BYTES = 5 * 1024 * 1024
@@ -55,6 +57,7 @@ CONTENT_SECURITY_POLICY = "default-src 'none'; style-src 'unsafe-inline'; img-sr
 _W = 960
 _LEFT, _RIGHT = 64, 20
 _PLOT_W = _W - _LEFT - _RIGHT
+_PANEL_H = 110.0  # height of each timeline panel
 
 
 # --- reading the run ---------------------------------------------------------------------------------
@@ -155,7 +158,7 @@ def summarise_tracking(path: Path) -> TrackingSummary:
                 continue
             try:
                 record = json.loads(line)
-            except ValueError:
+            except (ValueError, RecursionError):  # RecursionError: arrays nested thousands deep
                 summary.unreadable += 1
                 continue
             if not isinstance(record, dict):
@@ -218,7 +221,7 @@ def read_run(out_dir: Path) -> RunFiles:
         if problem:
             problems[name] = problem
     fps = _finite(_get(loaded["meta.json"], "export_fps"))
-    export_fps = fps if fps is not None and fps > 0 else float(EXPORT_FPS)
+    export_fps = fps if fps is not None and FPS_RANGE[0] <= fps <= FPS_RANGE[1] else float(EXPORT_FPS)
     validation, validation_error = None, None
     try:
         validation = validate_tracking(
@@ -293,7 +296,7 @@ def _time_label(seconds: float, duration: float) -> str:
 
 def _nice_step(span: float, target: int) -> float:
     """A 1-2-5 step that cuts ``span`` into about ``target`` intervals."""
-    if span <= 0:
+    if not math.isfinite(span) or span <= 0:
         return 1.0
     raw = span / target
     magnitude = 10 ** math.floor(math.log10(raw))
@@ -341,6 +344,10 @@ class _Column:
     health_min: float | None
     radius_max_median: float | None
 
+    @property
+    def abstained_share(self) -> float:
+        return self.abstained / (self.last - self.first + 1)
+
 
 def _columns(rows: Sequence[FrameRow]) -> list[_Column]:
     size = max(1, math.ceil(len(rows) / MAX_COLUMNS))
@@ -359,6 +366,21 @@ def _columns(rows: Sequence[FrameRow]) -> list[_Column]:
             )
         )
     return out
+
+
+def _abstained_runs(columns: Sequence[_Column]) -> list[tuple[float, int, int]]:
+    """(share of abstained frames, first row, last row) of each maximal run of neighbouring columns that share
+    the same non-zero share: one shaded rectangle each."""
+    runs: list[tuple[float, int, int]] = []
+    for c in columns:
+        share = c.abstained_share
+        if share == 0:
+            continue
+        if runs and runs[-1][0] == share and runs[-1][2] == c.first - 1:
+            runs[-1] = (share, runs[-1][1], c.last)
+        else:
+            runs.append((share, c.first, c.last))
+    return runs
 
 
 def _polylines(points: Sequence[tuple[float, float] | None]) -> list[str]:
@@ -395,67 +417,76 @@ def _centre_note(top: float, height: float, text: str) -> str:
 
 def timeline_svg(rows: Sequence[FrameRow], fps: float) -> str:
     """Two panels on one time axis, calibration health (0-1) and the median p90 radius of each frame, with
-    the abstained frames shaded across both. ``rows`` must not be empty."""
+    the abstained frames shaded across both. A column that groups several frames is shaded up to the share
+    of them that abstain, so the shaded area of the chart is the share of abstained frames whatever the
+    grouping. ``rows`` must not be empty."""
     columns = _columns(rows)
-    n = len(columns)
-    panel_h, top1, gap = 110.0, 34.0, 44.0
-    top2 = top1 + panel_h + gap
-    bottom = top2 + panel_h
+    n_rows = len(rows)
+    top1, gap = 34.0, 44.0
+    top2 = top1 + _PANEL_H + gap
+    bottom = top2 + _PANEL_H
     frame0 = rows[0].frame
-    duration = len(rows) / fps
+    duration = n_rows / fps
 
-    def x_of(i: float) -> float:
-        return _LEFT + _PLOT_W * i / n
+    def x_at(row: float) -> float:
+        """Left edge of record ``row``: columns are as wide as the frames they hold, like the time axis."""
+        return _LEFT + _PLOT_W * row / n_rows
+
+    def centre(c: _Column) -> float:
+        return (x_at(c.first) + x_at(c.last + 1)) / 2
 
     parts = [
         f'<svg class="chart" viewBox="0 0 {_W} {_f(bottom + 40)}" role="img" aria-labelledby="timeline-t">',
-        '<title id="timeline-t">Calibration health and median p90 radius per frame; abstained frames are '
-        "shaded</title>",
+        '<title id="timeline-t">Calibration health and median p90 radius per frame; the shaded height of a '
+        "column is the share of its frames that abstain</title>",
     ]
-    for a, b in _ranges([c.abstained > 0 for c in columns]):
+    for share, start, end in _abstained_runs(columns):
+        height = _PANEL_H * share
         for top in (top1, top2):
-            parts.append(_rect("band", x_of(a), top, x_of(b + 1) - x_of(a), panel_h))
+            parts.append(
+                _rect("band", x_at(start), top + _PANEL_H - height, x_at(end + 1) - x_at(start), height)
+            )
 
     parts.append(_text("panel-title", _LEFT, top1 - 12, "Calibration health (0-1)"))
-    parts += _y_axis(top1, panel_h, 1.0, 0.5, lambda v: f"{v:g}")
+    parts += _y_axis(top1, _PANEL_H, 1.0, 0.5, lambda v: f"{v:g}")
     health = [
-        None if c.health_min is None else (x_of(i + 0.5), top1 + panel_h * (1.0 - c.health_min))
-        for i, c in enumerate(columns)
+        None if c.health_min is None else (centre(c), top1 + _PANEL_H * (1.0 - c.health_min)) for c in columns
     ]
     if any(p is not None for p in health):
         parts += _polylines(health)
     else:
         parts.append(
-            _centre_note(top1, panel_h, "No health score in this run: calib_health is null in every frame")
+            _centre_note(top1, _PANEL_H, "No health score in this run: calib_health is null in every frame")
         )
 
     parts.append(_text("panel-title", _LEFT, top2 - 12, "Median p90 radius of the frame (m)"))
     radii = [c.radius_max_median for c in columns if c.radius_max_median is not None]
     if radii:
         hi, step = _nice_ceiling(max(radii))
-        parts += _y_axis(top2, panel_h, hi, step, lambda v: f"{v:g}")
+        parts += _y_axis(top2, _PANEL_H, hi, step, lambda v: f"{v:g}")
         parts += _polylines(
             [
                 None
                 if c.radius_max_median is None
-                else (x_of(i + 0.5), top2 + panel_h * (1.0 - c.radius_max_median / hi))
-                for i, c in enumerate(columns)
+                else (centre(c), top2 + _PANEL_H * (1.0 - c.radius_max_median / hi))
+                for c in columns
             ]
         )
     else:
         parts.append(_line("axis", _LEFT, bottom, _W - _RIGHT, bottom))
-        parts.append(_centre_note(top2, panel_h, "No published p90 radius"))
+        parts.append(_centre_note(top2, _PANEL_H, "No published p90 radius"))
 
     step = _nice_step(duration, 8)
-    k = 0
-    while (t := k * step) <= duration + 1e-9:
-        x = _LEFT + _PLOT_W * t * fps / len(rows)
+    # About 8 ticks; the relative slack keeps the end tick despite rounding, and bounds the loop whatever
+    # the duration.
+    for k in range(math.floor(duration / step * (1 + 1e-9)) + 1):
+        t = k * step
+        x = x_at(t * fps)
         parts.append(_line("axis", x, bottom, x, bottom + 5))
         parts.append(_text("tick", x, bottom + 20, _time_label(round(t, 6), duration), "middle"))
-        k += 1
 
     # Hover targets, one per column: the native tooltip carries the numbers (no JavaScript).
-    for i, c in enumerate(columns):
+    for c in columns:
         first, last = rows[c.first], rows[c.last]
         frames = f"frame {first.frame}" if c.first == c.last else f"frames {first.frame}-{last.frame}"
         when = first.timestamp or f"{(first.frame - frame0) / fps:.2f} s"
@@ -463,7 +494,7 @@ def timeline_svg(rows: Sequence[FrameRow], fps: float) -> str:
             f"{frames} at {when}: abstained {c.abstained}/{c.last - c.first + 1}; health "
             f"{_num(c.health_min, 3)}; median p90 radius {_num(c.radius_max_median, 2, ' m')}"
         )
-        parts.append(_rect("hit", x_of(i), top1, x_of(i + 1) - x_of(i), bottom - top1, tip))
+        parts.append(_rect("hit", x_at(c.first), top1, x_at(c.last + 1) - x_at(c.first), bottom - top1, tip))
     parts.append("</svg>")
     return "\n".join(parts)
 
@@ -711,7 +742,8 @@ def _timeline_section(run: RunFiles) -> str:
     grouping = (
         "One column per export frame."
         if size == 1
-        else f"Each column groups {size} export frames: their lowest health, their largest median radius."
+        else f"Each column groups {size} export frames: their lowest health, their largest median radius, "
+        "and a shading as high as the share of them that abstain."
     )
     body = [
         '<p class="legend"><span class="swatch band-swatch" aria-hidden="true"></span> abstained (no '
