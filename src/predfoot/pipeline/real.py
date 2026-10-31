@@ -8,6 +8,7 @@ region {e : eᵀ Σp⁻¹ e ≤ q̂}, and ``p90_radius_m`` = √(q̂ · λmax(Σ
 from __future__ import annotations
 
 import hashlib
+import math
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -85,14 +86,22 @@ def real_stages(
 
 
 def conformal_provenance(model: MondrianConformal) -> dict[str, Any]:
-    """What meta.json records about a conformal model: enough to recognise it and to recompute every q̂."""
+    """What meta.json records about a conformal model: enough to recognise it and to recompute every q̂.
+
+    meta.json is strict JSON, so a non-finite quantile (an empty calibration set gives +inf) is written as a
+    string, "inf".
+    """
+
+    def number(value: float) -> float | str:
+        return float(value) if math.isfinite(value) else str(float(value))
+
     return {
         "kind": "mondrian",
         "sha256": hashlib.sha256(model.to_json().encode("utf-8")).hexdigest(),
         "alpha": model.alpha,
-        "pooled": model.pooled,
+        "pooled": number(model.pooled),
         "edges": model.edges,
-        "quantiles": model.quantiles,
+        "quantiles": {key: number(q) for key, q in model.quantiles.items()},
     }
 
 

@@ -132,8 +132,11 @@ def load_detections(path: Path) -> tuple[dict[int, dict[str, Any]], str]:
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(raw, dict) or raw.get("format") != DETECTIONS_FORMAT:
         raise ValueError(f"{path}: not a {DETECTIONS_FORMAT} file")
+    frames = raw.get("frames")
+    if not isinstance(frames, list):
+        raise ValueError(f"{path}: 'frames' must be a list")
     out: dict[int, dict[str, Any]] = {}
-    for entry in raw.get("frames", []):
+    for entry in frames:
         frame = entry.get("frame") if isinstance(entry, dict) else None
         if not isinstance(frame, int) or isinstance(frame, bool) or frame < 0 or frame in out:
             raise ValueError(f"{path}: frame {frame!r} is not a new non-negative integer")

@@ -95,3 +95,6 @@ def test_duplicate_frames_and_other_formats_are_refused(tmp_path):
     path.write_text(json.dumps({"format": "predfoot-clip/1", "frames": []}), encoding="utf-8")
     with pytest.raises(ValueError, match="not a predfoot-detections/1 file"):
         cache.load_detections(path)
+    path.write_text(json.dumps({"format": cache.DETECTIONS_FORMAT, "frames": 3}), encoding="utf-8")
+    with pytest.raises(ValueError, match="'frames' must be a list"):
+        cache.load_detections(path)

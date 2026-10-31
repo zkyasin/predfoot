@@ -1,4 +1,5 @@
 import hashlib
+import json
 
 import numpy as np
 
@@ -83,3 +84,13 @@ def test_real_stages_describe_themselves_for_meta_json():
         "edges": {"mpp": [0.05]},
         "quantiles": {"0": 6.0},
     }
+
+
+def test_infinite_quantiles_stay_valid_json_in_meta():
+    inf = float("inf")
+    model = MondrianConformal(alpha=0.1, edges={"mpp": [0.05]}, quantiles={"0": inf}, pooled=inf)
+    provenance = real_stages({}, conformal=model, version="test").conformal
+    assert provenance is not None
+    assert provenance["pooled"] == "inf"
+    assert provenance["quantiles"] == {"0": "inf"}
+    json.dumps(provenance, allow_nan=False)  # meta.json is written without NaN or Infinity
