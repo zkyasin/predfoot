@@ -279,11 +279,24 @@ def main() -> None:
     parser.add_argument("--n-boot", type=int, default=2000)
     parser.add_argument("--seed", type=int, default=20261031)
     parser.add_argument("--report", type=Path, default=reports_dir() / "kpi_sensitivity.md")
+    parser.add_argument(
+        "--measured",
+        nargs=4,
+        type=float,
+        metavar=("SIGMA", "RHO", "SIGMA_COMMON", "RHO_COMMON"),
+        help="add a condition with the error process measured on SN-GSR (scripts/error_process.py); "
+        "σ in metres per axis, ρ per 25 Hz frame",
+    )
     args = parser.parse_args()
 
     t_start = time.perf_counter()
     cfg = load_kpi_config(args.config)
     conditions = build_conditions(cfg)
+    if args.measured:
+        sigma, rho, sigma_c, rho_c = args.measured
+        measured = ErrorModel("measured", sigma=sigma, rho=rho, sigma_common=sigma_c, rho_common=rho_c)
+        label = f"measured on SN-GSR (σ {sigma:g}/{sigma_c:g} m, ρ {rho:g}/{rho_c:g})"
+        conditions.append(Condition("measured", label, "noise", cfg, cfg.output_hz, measured))
     kpis = [k for k in kpi_names(cfg) if k != "minutes"]
     per90 = [k for k in kpis if k != "psv99_kmh"]
     sha, dirty = git_info()
