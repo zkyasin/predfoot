@@ -7,7 +7,14 @@
   here is binding until `scripts/freeze_prereg.py` freezes the file: it refuses a text that still carries a
   draft marker, writes `docs/preregistration.lock.json` (SHA-256 of this file and of the frozen artifacts,
   code commit, date) and prints the line that README.md quotes.
-- No test result exists. No test file, label or frame has been downloaded, listed or opened for this work.
+- Prior exposure to the test split, stated exactly. At M0 the SN-GSR labels of every split, test included
+  (v1.3), were downloaded (`scripts/download_data.py sn-gsr-labels`) and parsed by `scripts/build_index.py`
+  into `index/clips.parquet` (one row per clip, test clips included) and `index/test/` (the test split's
+  per-frame tables, kept apart so that nothing reads them by accident). Only the split's structure was
+  reported (`reports/data_audit.md`: 49 clips; games 7, 8 and 11 with 16, 19 and 14 clips; 750 frames each).
+  Since then no analysis has read a test label: `index/test/` has not been opened, no test frame has been
+  downloaded and no test result exists. Nothing in the lock can prove this; stage C's claim to be the only
+  reading of the test labels rests on nobody opening `index/test/` outside it.
 - Locked test games: SN-GSR test split, games 7, 8 and 11 (49 clips). Development games: 2, 3, 4, 5, 6 and 9
   (115 clips).
 
@@ -29,8 +36,8 @@
   labelled positions, and labels from a failed raw camera (raw and smoothed labels more than 5 m apart).
 - **R1, SN-GSR raw labels (`bbox_pitch_raw`): primary reference** (proposed, pending owner approval).
 - **R2, trusted line oracle: secondary reference** (proposed, pending owner approval). The homography fitted to
-  the annotated pitch lines of the frame, used only where it fits those lines within 3 px (about half of the
-  player-frames on dev).
+  the annotated pitch lines of the frame, used only where it fits those lines within 3 px (about 60 % of the
+  player-frames on dev: 61 % for the per-frame camera, 62 % for the smoothed one).
 - The two references are not symmetric, and neither is exact:
   - R1 comes from the annotators' camera, which sits 3.9 px (median) from the annotated lines on dev: coverage
     against R1 mixes predfoot's error with the labels' own.
@@ -38,8 +45,16 @@
     dev both cameras over-cover against R2 (94.4 % [92.9, 96.0] for the smoothed camera, 94.4 % [92.7, 96.0]
     for the per-frame one), and the smoothed camera's regions calibrated against R2 are twice those of the
     per-frame camera (median 26.2 m² against 12.6 m²), whereas against R1 they are smaller (5.4 against
-    6.2 m²). R2 therefore cannot referee the smoothing; it checks that no gross error hides behind the labels.
-- Smoothed labels (`bbox_pitch`) serve only as the reference of the KPI proxy (temporal metrics).
+    6.2 m²). R2 therefore cannot referee the smoothing.
+  - R2 has gross failures of its own: fitting the annotated lines within 3 px does not make the homography
+    right where the lines are few or nearly parallel. On dev, 1.6 % of the per-frame camera's R2
+    player-frames (449 frames) and 1.4 % of the smoothed camera's (366 frames) are more than 10 m from R2,
+    while the camera agrees with R1 (median error 0.79 and 0.34 m on those rows). R2's error tails (p99) and
+    part of its coverage therefore measure R2's failures as well as the camera's; R2 is not a gross-error
+    check.
+- Smoothed labels (`bbox_pitch`) are used three ways: as the reference of the KPI proxy (temporal metrics);
+  in the exclusion rule (raw and smoothed labels more than 5 m apart); and as a third reference of the
+  position errors (secondary analysis 7).
 
 ## 3. Method under test (frozen at the commit that freezes this file)
 
@@ -80,14 +95,20 @@
 | P2 | Median region area / area of the constant circle at the same nominal level | PTZ-smoothed | R1 | Ratio below 1 |
 | P3 | AUROC of the frozen gradient boosting minus AUROC of the frozen best single feature, on the per-frame calibrations of the test frames with self-consistent lines (failure: mean distance to the annotated lines above 10 px) | per-frame | annotated lines | Difference above 0 |
 
-P1 and P2 use the headline rows: player-frames whose raw calibration succeeded (frames that only the smoother
-fills are reported apart). P2 and P3 are decided on the point estimate; their intervals are reported.
+P1 and P2 use the headline rows of their camera: player-frames whose raw calibration succeeded and for which
+that camera publishes a position. For the per-frame camera these are all raw-OK player-frames. The smoothed
+camera also abstains on some raw-OK frames (the smoother rejects the frame or cannot check it): those rows are
+not in its headline rows, so the two cameras' rows differ slightly (on dev, 2,788 raw-OK player-frames, 1.1 %,
+in 168 frames, with larger per-frame errors: p90 2.72 m against 2.02 m). Their number and share are reported
+next to P1, with P1's coverage counting them as misses. Frames that only the smoother fills (raw calibration
+failed) are reported apart. P2 and P3 are decided on the point estimate; their intervals are reported.
 
 ## 5. Secondary analyses
 
 All are reported; none is a success criterion.
 
-1. P1 and P2 for the per-frame camera (comparison arm), and for both cameras against R2.
+1. P1 and P2 for the per-frame camera (comparison arm), and for both cameras against R2; for the smoothed
+   camera, the raw-OK player-frames where it abstains and the coverage counting them as misses.
 2. Coverage of the constant circle; coverage of the uncalibrated Laplace regions.
 3. Coverage by distance tercile (metres per pixel at the feet, terciles of the test rows).
 4. Simultaneous coverage: the share of frames in which every player is inside their region (the marginal
@@ -100,13 +121,16 @@ All are reported; none is a success criterion.
    for every frozen detector; clip-bootstrap interval of the AUROC difference of P3; AUROC per game; and the
    best single feature on the test frames (post hoc, a stricter comparison than P3).
 9. Residual failures of the smoothed camera, descriptive: the share of frames with self-consistent lines
-   whose output camera is more than 10 px from the annotated lines, overall and per output type (smoothed,
-   repaired, filled, bridged, passthrough, duplicate), next to the per-frame camera; published-position rates.
+   whose camera is more than 10 px from the annotated lines, for both cameras on the same frames (raw and
+   output cameras both calibrated, as on dev); frames filled by the smoother and raw-OK frames where it
+   abstains counted apart; the share per output type (smoothed, repaired, filled, bridged, passthrough,
+   duplicate) over every published frame of the smoothed camera; published-position rates.
 10. **KPI proxy** (proposed, pending owner approval): the model-free proxy of `predfoot.kpi.proxy` (5 fps,
     Savitzky-Golay window 5, order 2, runs of at least 8 frames with every error against R1 below 10 m), with
     the distance bias and the high-speed-running (≥ 20 km/h) distance bias against the smoothed labels, for
-    both cameras on the same player-frames; the raw labels' own bias against the smoothed labels is the noise
-    floor of that reference.
+    both cameras from the same input player-frames. Each camera's runs break at its own errors above 10 m, so
+    the two cameras' runs can differ slightly (their counts are reported). The raw labels' own bias against
+    the smoothed labels is the noise floor of that reference.
 
 ## 6. Unit of analysis and intervals
 
@@ -120,13 +144,25 @@ All are reported; none is a success criterion.
 1. The owner reviews this text, settles every proposed choice and removes the draft markers.
 2. `scripts/freeze_prereg.py` (clean working tree only) fits every frozen artifact on dev only (smoother
    noise, conformal models, detectors) into `artifacts/prereg/v1/`, writes `docs/preregistration.lock.json`
-   and prints the line to quote in README.md. The artifacts and the lock are committed together.
+   and prints the line to quote in README.md. The lock records the SHA-256 of this file and of every
+   artifact, the code commit, the configuration digests, the detection model version of the dev caches, the
+   SHA-256 of the network weights, the interpreter and package versions (torch included), and the test clip
+   list (count and digest of the (clip id, game) pairs of `index/clips.parquet`). The artifacts and the lock
+   are committed together, in one commit that holds nothing else (the freeze commit).
 3. `scripts/run_test_once.py` refuses to run unless the lock matches: the hashes of this file and of the
-   artifacts, no change under `src/`, `scripts/` or `configs/` since the lock commit, and a clean working
-   tree. Stage A (test frames at 5 fps, keypoint networks into a separate cache) and stage B (per-frame
-   calibration, smoothing with the frozen noise parameters) read no label and resume after a crash. Stage C,
-   the only stage that reads test labels, writes its marker before reading anything and runs once; a second
-   stage C is refused, even after a crash.
+   artifacts; the lock anchored in its freeze commit (lock, preregistration and artifacts tracked, unchanged
+   since that commit, which adds only them to the lock's code commit); no change under `src/`, `scripts/`,
+   `configs/`, `pyproject.toml`, `uv.lock` or `.python-version` since the lock commit; a clean working tree
+   (no tracked file hiding its changes, no ignored file under those paths); the interpreter and package
+   versions of the freeze; and the pinned clip list. A re-freeze (lock and artifacts deleted, then frozen and
+   committed again) stays possible until stage C has started; every re-freeze is visible in git history.
+   Stage A (test frames at 5 fps, weights checked against the lock, keypoint networks into a cache of its own)
+   and stage B (per-frame calibration, smoothing with the frozen noise parameters) read no label and resume
+   after a crash. Their outputs are tied to the lock: a re-freeze starts them from nothing, and stage C
+   refuses outputs of another lock. Stage C, the only stage that reads test labels, first checks and loads
+   every label-free input, then writes its markers before reading any label, and runs once: a second stage C
+   is refused, even after a crash, and a crash after the markers still writes `reports/test_run.md`, naming
+   the failure.
 4. Every result goes into `reports/test_run.md`, failed criteria included. Nothing is re-run or re-analysed
    after stage C; any deviation from this text is listed in the report.
 
@@ -138,8 +174,13 @@ All are reported; none is a success criterion.
   and P1 can fail through between-game variability alone.
 - The clip bootstrap resamples clips within the three test games and treats the games as fixed: it does not
   capture between-game variability, so its interval is narrower than the uncertainty about a new game.
-- Both references carry their own errors (section 2): coverage against R1 includes the labels' error, R2
-  covers about half of the player-frames and penalises a smooth camera.
+- Both references carry their own errors (section 2): coverage against R1 includes the labels' error; R2
+  covers about 60 % of the player-frames, penalises a smooth camera and fails grossly on about 1.5 % of its
+  player-frames.
+- The single evaluation is enforced by markers in one data folder (`PREDFOOT_DATA_DIR/test_once/`) and one
+  checkout (`runs/test_once/`), and by `reports/test_run.md` once it is committed. A fresh clone with
+  another data folder, before that report is committed, would not be refused: across clones the guarantee
+  rests on committing the report (written even when stage C fails) and on the owner.
 - The KPI proxy's reference, the smoothed labels, carries track-smoothing artefacts; it measures the cost of
   jitter, not absolute KPI accuracy.
 - For orientation only (dev, leave-one-game-out, not a prediction): coverage against R1 90.6 % [89.0, 92.1]
