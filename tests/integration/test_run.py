@@ -19,9 +19,9 @@ from tests.cli_output import PLAIN_ENV, plain
 from tests.fixtures import FIXTURES
 
 CLIP = FIXTURES / "synthetic_clip.json"
-OUTPUTS = ("tracking.jsonl", "match.json", "meta.json", "metrics.json", "minimap.png")
+OUTPUTS = ("tracking.jsonl", "match.json", "meta.json", "metrics.json", "minimap.png", "qa_report.html")
 #: Everything but metrics.json, which records timings and reused blocks.
-STABLE = ("tracking.jsonl", "match.json", "meta.json", "minimap.png")
+STABLE = ("tracking.jsonl", "match.json", "meta.json", "minimap.png", "qa_report.html")
 
 
 @pytest.fixture(scope="module")

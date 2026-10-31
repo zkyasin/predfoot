@@ -1,7 +1,8 @@
 """``predfoot run``: the end-to-end tracer bullet, processed in blocks that survive a crash.
 
 Native frames → stages (``CalibResult``, ``FootObs``, ``Localization``) → export frames at 10 fps →
-``tracking.jsonl``, ``match.json``, ``meta.json``, ``metrics.json`` and ``minimap.png`` in the output folder.
+``tracking.jsonl``, ``match.json``, ``meta.json``, ``metrics.json``, ``minimap.png`` and ``qa_report.html`` in
+the output folder.
 The stages are the stubs of :mod:`predfoot.pipeline.stub` until the real modules replace them.
 
 Resume: export frames are processed in blocks of ``block_size``, each written atomically to ``OUT/.parts/``.
@@ -48,6 +49,7 @@ from predfoot.paths import REPO_ROOT
 from predfoot.pipeline import stub
 from predfoot.pipeline.clip import ClipFrame, ClipInput, load_clip
 from predfoot.viz.minimap import render_minimap, select_panels
+from predfoot.viz.qa_report import write_qa_report
 
 #: Bump when the stub stages change their outputs, so stale blocks are not reused.
 STUB_VERSION = 1
@@ -308,6 +310,7 @@ def run_clip(
             },
         },
     )
+    write_qa_report(out_dir)  # reads the files above; holds no timings, so it is byte-stable too
     shutil.rmtree(parts)
     return RunResult(out_dir, len(clip.frames), summary.n_frames, n_abstained, computed, reused)
 

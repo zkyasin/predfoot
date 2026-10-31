@@ -39,7 +39,8 @@ def run(
     fps: Annotated[float, typer.Option(help="Export frame rate.")] = 10.0,
     block_size: Annotated[int, typer.Option(help="Export frames per block: the resume granularity.")] = 100,
 ) -> None:
-    """Run the pipeline on a clip: tracking.jsonl, match.json, meta.json, metrics.json, minimap.png.
+    """Run the pipeline on a clip: tracking.jsonl, match.json, meta.json, metrics.json, minimap.png and
+    qa_report.html.
 
     Re-running after a crash reuses the finished blocks and gives byte-identical outputs.
     """
@@ -110,6 +111,49 @@ def validate(
     more = "+" if report.truncated else ""
     typer.echo(f"FAILED: {len(report.issues)}{more} problem(s) in {report.n_records} records", err=True)
     raise typer.Exit(code=1)
+
+
+@app.command()
+def qa(
+    out_dir: Annotated[
+        Path,
+        typer.Argument(
+            metavar="OUT_DIR",
+            exists=True,
+            file_okay=False,
+            readable=True,
+            help="Output folder of predfoot run (holds tracking.jsonl).",
+        ),
+    ],
+    output: Annotated[
+        Path | None,
+        typer.Option(dir_okay=False, help="Where to write the report (default: OUT_DIR/qa_report.html)."),
+    ] = None,
+) -> None:
+    """Rebuild the QA report of a run from its outputs: one self-contained HTML file that opens offline.
+
+    Summary, validation of the outputs, timeline of calibration health and abstentions, distribution of the
+    p90 radii, worst frames and field definitions.
+    """
+    from predfoot.io.files import atomic_write_text
+    from predfoot.viz.qa_report import read_run, render_qa_report
+
+    try:
+        run_files = read_run(out_dir)
+    except FileNotFoundError as err:
+        typer.echo(str(err), err=True)
+        raise typer.Exit(code=2) from err
+    target = output if output is not None else out_dir / "qa_report.html"
+    atomic_write_text(target, render_qa_report(run_files))
+    report = run_files.validation
+    if report is None:
+        status = f"validation could not run ({run_files.validation_error})"
+    elif report.ok:
+        status = "outputs valid"
+    else:
+        status = f"validation FAILED ({len(report.issues)}{'+' if report.truncated else ''} problems)"
+    summary = run_files.summary
+    typer.echo(f"{target}: {summary.n_frames} frames, {summary.n_abstained} abstained; {status}")
 
 
 @app.command()
