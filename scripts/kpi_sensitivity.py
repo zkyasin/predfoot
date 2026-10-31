@@ -217,7 +217,13 @@ def git_info() -> tuple[str, bool]:
     sha = subprocess.run(
         ["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, cwd=REPO_ROOT
     )
-    status = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, cwd=REPO_ROOT)
+    # Tracked changes outside reports/ (the report being regenerated does not make the code dirty).
+    status = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=no", "--", ".", ":(exclude)reports"],
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+    )
     return sha.stdout.strip() or "unknown", bool(status.stdout.strip())
 
 
