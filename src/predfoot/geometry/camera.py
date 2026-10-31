@@ -61,6 +61,8 @@ def look_at(
     forward = np.asarray(target, dtype=np.float64) - c
     forward /= np.linalg.norm(forward)
     right = np.cross(forward, [0.0, 0.0, 1.0])
+    if np.linalg.norm(right) < 1e-9:
+        raise ValueError("a vertical optical axis has no defined image right")
     right /= np.linalg.norm(right)
     down = np.cross(forward, right)
     R = np.stack([right, down, forward])

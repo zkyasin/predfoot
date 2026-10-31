@@ -185,3 +185,8 @@ def test_image_line_contains_projected_points(camera):
     line = hg.image_line(camera.H, a, b)
     mid = hg.project(camera.H, [[-36.0, 0.0]])[0]
     assert abs(line @ np.append(mid, 1.0)) < 1e-6
+
+
+def test_look_at_refuses_a_vertical_optical_axis():
+    with pytest.raises(ValueError, match="vertical"):
+        look_at([0.0, 0.0, 30.0], [0.0, 0.0, 0.0], 1500.0)
