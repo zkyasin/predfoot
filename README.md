@@ -2,50 +2,192 @@
 
 **Calibrated position uncertainty for broadcast football tracking.**
 
-Broadcast tracking data gives each player a position, but not how far off that position might be. predfoot
-estimates the camera from the pitch lines of each broadcast frame, then gives every visible player:
+Broadcast tracking gives every player a pitch position, but no error bar. predfoot calibrates the camera of
+each broadcast frame from the pitch markings and adds three things to the positions it produces:
 
-- a pitch position with a **90 % uncertainty ellipse** whose coverage is checked on matches held out from
-  every tuning step;
-- a **calibration health score** that abstains before positions go wrong;
+- a **90 % region per player and frame**, an ellipse calibrated by conformal prediction on games held out
+  from every fitting step;
+- a **calibration health score** that flags frames whose camera is probably wrong, so they can abstain
+  (evaluated on the development games, not yet wired into `predfoot run`);
 - an **error budget for physical KPIs** (distance, high-speed running, sprints, PSV-99).
 
-Outputs follow the SkillCorner open-data JSONL schema, with the uncertainty as extra fields.
+Outputs follow the SkillCorner open-data JSONL schema at 10 fps, with the uncertainty as extra fields
+(`p90_radius_m`, `pos_cov_m2`, `calib_health`, `abstain`).
 
-> Status: early development. The pipeline runs end to end on real broadcast frames; development results are
-> in [`reports/`](reports/). Test-set numbers will appear here only after the preregistered run
-> ([`docs/preregistration.md`](docs/preregistration.md), draft).
+> **Development results only.** Everything below comes from the six SN-GSR development games. The test games
+> (7, 8 and 11) stay locked until the preregistered run ([`docs/preregistration.md`](docs/preregistration.md),
+> draft), whose results will all be published here, failed criteria included.
 
-## Layout
+![Side-by-side minimaps of one dev clip: per-frame camera on the left, PTZ-smoothed camera on the right](assets/minimap_demo.gif)
 
-| Path | Contents |
-|---|---|
-| `src/predfoot/` | The package: `geometry`, `keypoints`, `calib`, `uncertainty`, `health`, `detect`, `io`, `kpi`, `eval`, `viz`, `serve` |
-| `tests/` | `unit`, `property` (hypothesis), `integration`, synthetic `fixtures` only |
-| `scripts/` | Data download and verification, experiments, checks |
-| `configs/` | YAML configs, validated with pydantic |
-| `docs/adr/` | Architecture decision records |
-| `notebooks/tutorials/` | Numbered tutorials |
-| `reports/` | Generated reports with aggregate numbers |
-| `assets/` | Images for the documentation |
+One SN-GSR dev clip (SNGS-081, game 5), 15 s at 5 fps, with the labelled player boxes as input. Left: the
+camera calibrated frame by frame; right: the same calibrations smoothed over time. Each shaded ellipse is a
+player's calibrated 90 % region, with quantiles fitted on the five other dev games; black dots are the labelled
+positions; a grey panel publishes no position. The clip was picked by a stated rule to show the smoothing and
+is not typical: its frame-to-frame jitter of the common-mode error falls from 0.52 m to 0.11 m (ratio 0.21,
+median over the dev clips 0.35; [`reports/minimap_demo.md`](reports/minimap_demo.md)). SoccerNet frames cannot
+be redistributed, so SoccerNet results appear only as metrics, plots and minimaps.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the pipeline and [CLAUDE.md](CLAUDE.md) for the working rules.
+## Development results
+
+SN-GSR dev: 115 clips from games 2, 3, 4, 5, 6 and 9, frames one in five, labelled boxes as foot points.
+Leave one game out: each game's conformal quantiles are fitted on the five other games. Intervals resample
+clips, since frames within a clip are correlated.
+
+| | Per-frame camera | PTZ-smoothed camera |
+|---|---|---|
+| Coverage of the 90 % regions, raw labels as reference [95 % CI] | 90.4 % [88.8, 91.8] | 90.6 % [89.0, 92.1] |
+| ... per held-out game | 85.6 to 93.3 % | 84.0 to 95.6 % |
+| ... trusted line oracle as reference [95 % CI] | 94.4 % [92.7, 96.0] | 94.4 % [92.9, 96.0] |
+| Median region area; constant circle at the same nominal level | 6.21 m²; 14.56 m² | 5.37 m²; 7.44 m² |
+| Position error against the raw labels, p50 / p90 / p99 | 0.59 / 2.02 / 5.64 m | 0.46 / 1.46 / 3.99 m |
+| Line reprojection p90; frames above 10 px (9950 frames with self-consistent line annotations) | 10.4 px; 10.7 % | 4.9 px; 1.0 % |
+| KPI proxy, distance / high-speed-running distance bias | +27.0 % / +67.2 % | +2.7 % / +6.2 % |
+| Frames with published positions | 95.5 % | 95.1 % |
+
+Sources: [`m2_logo_dev.md`](reports/m2_logo_dev.md), [`m2_temporal_dev.md`](reports/m2_temporal_dev.md),
+[`error_process_temporal_dev.md`](reports/error_process_temporal_dev.md). The constant circle covers 90.9 % and
+90.5 %. Before the conformal step, the Laplace ellipses cover only 17.9 % (per-frame) and 7.2 % (smoothed) at
+the same level. The KPI proxy compares 5 fps tracks with the smoothed labels, whose raw counterparts have
+their own bias of +17.9 % / +43.1 % against them.
+
+Failure detection, per-frame camera ([`m3_health_dev.md`](reports/m3_health_dev.md)): a frame fails when the
+annotated lines sit more than 10 px from the projected pitch (11.0 % of 10024 frames). Scored out-of-game, the
+AUROC is 0.89 for gradient boosting, 0.79 for logistic regression and 0.73 for the best single feature;
+abstaining on the riskiest 10 % of frames removes 50 %, 32 % and 29 % of the failures.
+
+![Coverage against the nominal level, both cameras, against the raw labels and the trusted line oracle](reports/figures/reliability.png)
+
+At the 50, 80, 90 and 95 % levels the regions cover 49.5, 80.0, 90.4 and 95.7 % of the labelled positions
+(per-frame camera; smoothed: 49.7, 80.0, 90.6 and 95.7 %), and over-cover at every level against the line
+oracle. Region size against the constant circle, coverage by distance and the KPI proxy:
+[`reports/dev_figures.md`](reports/dev_figures.md).
+
+## How it works
+
+```mermaid
+flowchart LR
+  F["Broadcast frame"] --> K["PnLCalib networks<br/>keypoints + line points"]
+  K --> C["Robust calibration<br/>RANSAC + LM → H, Σθ"]
+  C --> T["PTZ smoother<br/>fixed centre, Kalman + RTS"]
+  T --> D["Delta method<br/>Σp per player"]
+  B["Player boxes<br/>foot points"] --> D
+  D --> M["Grouped Mondrian conformal<br/>q̂ per bin → 90 % region"]
+  C --> H["Health features<br/>→ abstain"]
+  M --> E["SkillCorner JSONL<br/>+ uncertainty fields"]
+  H --> E
+  E --> KPI["KPI error budget"]
+```
+
+1. **Calibration.** PnLCalib's keypoint and line networks (published CC BY 4.0 weights, not fine-tuned) find
+   pitch keypoints and points on the lines. MSAC RANSAC and a robust Levenberg-Marquardt fit give the
+   homography H; a Laplace approximation gives the 8 × 8 covariance Σθ of its parameters.
+2. **Fixed-centre PTZ smoothing.** A broadcast camera pans, tilts and zooms around an almost fixed point. Per
+   clip, predfoot estimates that projection centre without labels and projects each frame's homography onto
+   pan, tilt, roll and log focal length (4 degrees of freedom instead of 8). A constant-velocity Kalman
+   filter and RTS smoother run on them within shot segments, with noise parameters fitted on the innovations
+   of other games. A brief run of frames the PTZ model cannot explain (at most 0.5 s) gets the smoothed
+   camera, a longer one keeps its own; frames of a segment whose calibration failed are filled from the
+   smoother.
+3. **Delta method, then grouped Mondrian conformal.** Σθ is propagated to each foot point:
+   Σp = J Σθ Jᵀ. The score of a position error e is d² = eᵀ Σp⁻¹ e, and the region is
+   {e : eᵀ Σp⁻¹ e ≤ q̂}. q̂ is a split-conformal quantile grouped by clip (every clip weighs the same, and the
+   finite-sample correction counts clips), per Mondrian bin of metres per pixel at the feet × RANSAC inliers,
+   within each covariance source (smoothed, bridged or filled, single frame).
+4. **Health and abstention.** Features of each calibration (spread of a predicted position at the image
+   centre, jump from the previous frame, residuals, inlier geometry) feed a failure classifier.
+5. **Export and KPIs.** Records follow the SkillCorner open-data schema at 10 fps (kloppy loads them); the KPI
+   modules compute distance, high-speed running, sprints and PSV-99 at 10 fps and how position errors bias
+   them.
+
+**What `predfoot run` does today:** steps 1, 3 and 5, from cached network detections. The PTZ smoother is
+implemented and used by the dev evaluation, and the real pipeline stages accept it, but the command line does
+not expose it yet. The health classifier is evaluated on dev only (`scripts/eval_health.py`): in
+`predfoot run`, `calib_health` is null and a frame abstains when its calibration fails. Details:
+[ARCHITECTURE.md](ARCHITECTURE.md), conventions in [ADR-0001](docs/adr/0001-conventions.md).
+
+## What the evidence shows, and what it does not
+
+- **Coverage holds on held-out games, on average.** Against the raw labels the regions cover the nominal
+  level at 50 to 95 % and in each distance tercile (89.6 to 91.1 % at 90 %), but per held-out game coverage
+  ranges from 84.0 % (game 6) to 95.6 % (game 3) for the smoothed camera. Three test games could land
+  anywhere in that range.
+- **Neither reference is the truth.** The SN-GSR labels are the annotators' camera applied to the boxes; that
+  camera sits 3.9 px (median) from the annotated lines ([`spike_s0.md`](reports/spike_s0.md)). The trusted line
+  oracle is a homography fitted to the annotated lines of each frame, kept where it fits them within 3 px.
+  Against it the regions over-cover (94.4 % at 90 %, intervals above 92 %), and since it is fitted frame by
+  frame it penalises a smooth camera: smoothing doubles the median region area needed against it (12.58 to
+  26.16 m²). The draft preregistration makes this oracle its primary reference; on dev, its coverage
+  criterion (a 95 % interval containing 90 %) would fail as the method stands.
+- **Inputs are labelled boxes.** Detection and tracking errors are not part of these numbers.
+- **SoccerTrack v2 supplies demo pixels only.** Its released calibration misses its own annotated keypoints by
+  8 to 23 px (median), metres on the far half of the pitch, so it cannot referee predfoot. On its virtual
+  broadcast views, the dev quantiles cover 52.0 % of positions (92.7 % on the near half, 33.1 % on the far
+  half; [`soccertrack_v2.md`](reports/soccertrack_v2.md)).
+- **The KPI simulation overstates the cost.** The measured evidence is the model-free proxy above (5 fps
+  against the smoothed labels), where the smoothed camera's bias is below the reference's own noise floor. A
+  spectral error model fitted to the same errors and injected into clean IDSSE tracking gives 1.6 to 5.1 times
+  the measured proxy biases and fails its 5 fps check for the smoothed camera, so its budget is an upper bound,
+  not predfoot's KPI error ([`kpi_budget_spectral.md`](reports/kpi_budget_spectral.md)). The per-player KPI
+  cards are checked only on simulated errors ([`kpi_card.md`](reports/kpi_card.md)).
+- **Scope.** Six development games from one league and broadcast style; no claim beyond that.
+
+## Quick start
+
+No dataset needed: the golden fixture holds synthetic network detections of a known camera.
+
+```bash
+uv sync                                             # Python 3.12 and the dev tools; no torch
+uv run predfoot run tests/fixtures/golden/clip.json --out out-golden/ \
+    --detections tests/fixtures/golden/detections.json --conformal tests/fixtures/golden/conformal.json
+uv run python -m predfoot.io.compare out-golden/ tests/fixtures/golden/expected/
+uv run predfoot validate out-golden/tracking.jsonl --match out-golden/match.json
+uv run predfoot qa out-golden/                      # rebuilds out-golden/qa_report.html
+uv run pytest -m "not slow and not data and not network and not vision"   # what CI runs
+```
+
+`predfoot run` calibrates each frame, places the feet with their covariances, scales the regions with the
+conformal model and writes `tracking.jsonl`, `match.json` (loadable with kloppy), `meta.json` (versions,
+hashes, stages, conformal model), `metrics.json`, `minimap.png` and `qa_report.html` (one self-contained
+page). Without `--detections` it runs stub stages from a clip JSON (`tests/fixtures/synthetic_clip.json`).
+
+## Reproducing the development results
+
+These steps need the SN-GSR data from Hugging Face (`SoccerNet/SN-GSR-2025`, a token read by
+`huggingface_hub`), the PnLCalib weights and the `vision` extra. Downloads go to `PREDFOOT_DATA_DIR`; frame
+downloads and keypoint caching refuse the locked test split.
+
+```bash
+export PREDFOOT_DATA_DIR=/path/to/data
+uv sync --extra vision
+uv run python scripts/download_data.py sn-gsr-labels --splits train valid
+uv run python scripts/build_index.py
+uv run python scripts/download_data.py sn-gsr-frames --all-dev --every 5
+uv run python scripts/download_data.py pnlcalib-weights
+uv run python scripts/cache_keypoints.py           # network inference on every dev frame, once
+uv run python scripts/eval_dev.py                  # per-frame camera → reports/m2_logo_dev.md, runs/<none>/
+uv run python scripts/eval_dev.py --smooth ptz --calib-from runs/<none>/calib.npz   # → runs/<ptz>/report.md
+uv run python scripts/eval_health.py runs/<none>/frames.parquet
+uv run python scripts/error_process.py runs/<ptz>/players.parquet --compare runs/<none>/players.parquet \
+    --name ptz --compare-name none --out reports/error_process_temporal_dev.md \
+    --json reports/error_process_temporal_dev.json
+uv run python scripts/make_figures.py --none-run runs/<none> --ptz-run runs/<ptz>
+uv run python scripts/render_minimap_demo.py --none-run runs/<none> --ptz-run runs/<ptz>
+```
+
+`scripts/modal_cache_keypoints.py` runs the network inference on Modal instead of locally. Every report
+names the command, commit and run folder it came from; the run folders (`runs/`) stay local.
 
 ## Demo on SoccerTrack v2 pixels
 
 ![predfoot on a virtual broadcast view of a SoccerTrack v2 panorama](assets/demo.jpg)
 
-A virtual broadcast camera turns inside the fixed panorama of SoccerTrack v2 match 117093. Its camera is
-known exactly under SoccerTrack's released calibration (cyan lines), which is itself metres off on the far half
-of the pitch. predfoot calibrates each view from the pitch lines (magenta lines), places the foot points of
-SoccerTrack's ground-truth boxes (not detections) on the pitch and draws their 90 % regions on the minimap;
-foot points are coloured by the size of that region. The regions are calibrated on SN-GSR broadcast frames, not
-on SoccerTrack: against the released calibration they cover 52 % of the positions here, 93 % on the near half
-and 33 % on the far half, where they are also the narrower ones. The still comes from a 10-frame smoke run in
-which the calibration finds only 7-11 inliers per view; on the night match 117092 every frame abstains. Pixels:
-SoccerTrack v2 (CC BY 4.0, Scott et al.), cropped and reprojected.
-[`reports/soccertrack_v2.md`](reports/soccertrack_v2.md) explains why SoccerTrack v2 is a demo source here, not
-a metric benchmark.
+Public pixels come from SoccerTrack v2 (CC BY 4.0): a virtual broadcast camera turns inside the fixed panorama
+of match 117093. predfoot calibrates each view from the pitch lines (magenta), with SoccerTrack's released
+calibration in cyan, and draws the 90 % regions of the ground-truth boxes' foot points on the minimap. The
+regions borrow the SN-GSR dev quantiles (`src/predfoot/demo/dev_calibration.json`, aggregate numbers only), so
+the demo needs no SoccerNet data. The still comes from a 10-frame smoke run with 7 to 11 inliers per view; on
+the night match 117092 every frame abstains. Pixels: SoccerTrack v2 (Scott et al.), cropped and reprojected.
 
 ```bash
 uv sync --extra vision
@@ -54,188 +196,46 @@ uv run python scripts/download_data.py pnlcalib-weights
 uv run python scripts/render_demo.py --match 117093 --start 0 --frames 10 --step 5 --fps 5   # runs/<run>/demo.mp4
 ```
 
-The demo needs no SoccerNet data: the noise parameters and conformal quantiles it borrows from the SN-GSR dev
-evaluation are versioned in `src/predfoot/demo/dev_calibration.json` (aggregate numbers only).
+## Serving and Docker
 
-## Real pipeline on a development clip
+- `predfoot serve` exposes `/v1/calibrate` (image → camera and Σθ), `/v1/localize` (camera and foot points →
+  positions with calibrated regions), `/healthz` and `/metrics`: [`docs/serving.md`](docs/serving.md), with
+  ONNX export and latency (0.46 s per frame for both networks with ONNX Runtime CoreML on an M4 Pro,
+  [`reports/latency_m4.md`](reports/latency_m4.md)).
+- `docker/Dockerfile.cpu` builds a CLI image and a serving image without torch, smoke-tested in CI and
+  released to the GitHub Container Registry on version tags: [`docs/docker.md`](docs/docker.md).
 
-```bash
-uv sync --extra vision
-uv run python scripts/download_data.py sn-gsr-labels --splits train valid
-uv run python scripts/build_index.py
-uv run python scripts/download_data.py sn-gsr-frames --clips SNGS-056 --every 5
-uv run python scripts/download_data.py pnlcalib-weights
-uv run python scripts/cache_keypoints.py --splits valid      # network inference, once per clip
-uv run python scripts/run_real_clip.py SNGS-056 --out runs/real/SNGS-056
-```
+## Layout
 
-SoccerNet-derived outputs stay local: they are for evaluation only and are never published.
-
-## Tracer bullet
-
-The pipeline already runs end to end with stub stages (homographies and foot points read from a small clip
-JSON, placeholder uncertainty); each real module will replace one stub.
-
-```bash
-uv run predfoot run tests/fixtures/synthetic_clip.json --out out/
-uv run predfoot validate out/tracking.jsonl --match out/match.json
-```
-
-`out/` then holds `tracking.jsonl` (SkillCorner open-data schema at 10 fps, plus `p90_radius_m`, `pos_cov_m2`,
-`calib_health` and `abstain`), `match.json` (loadable with kloppy), `meta.json` (versions, hashes, the stages
-that ran and their conformal model), `metrics.json`, `minimap.png` and `qa_report.html`. A killed run resumes
-from its finished blocks and produces the same bytes (only `metrics.json`, which holds timings, differs). The
-synthetic clip comes from `scripts/make_synthetic_clip.py`; the frame schema is
-`src/predfoot/io/schema/frame-1.0.json`.
-
-### Real stages from detections
-
-With a detections file (`predfoot-detections/1`: the PnLCalib keypoints and line ends of the clip's frames),
-`predfoot run` runs the real stages instead of the stubs: robust calibration of each frame, delta-method
-positions, and 90 % regions scaled by a Mondrian conformal model when one is given. No torch is needed, so the
-CPU images run them too. Frames are keyed by their 0-based index in the clip file (`frame` in
-`predfoot-clip/1`), not by image number as in the detection cache (1, 6, 11, … for SN-GSR frames downloaded
-one in five): re-key cached detections with `predfoot.keypoints.cache.by_clip_index` before writing them with
-`dumps_detections`, as `scripts/run_real_clip.py` does when it writes `input_clip.json`, `detections.json` and
-`conformal.json` next to its outputs, so that `predfoot run --fps 5 --detections ...` reruns it from files. A
-file that names frames beyond the clip is refused before anything runs, and a file without frame 0 gets a
-warning. The golden fixture is such an input:
-
-```bash
-uv run predfoot run tests/fixtures/golden/clip.json --out out-golden/ \
-    --detections tests/fixtures/golden/detections.json --conformal tests/fixtures/golden/conformal.json
-uv run python -m predfoot.io.compare out-golden/ tests/fixtures/golden/expected/
-```
-
-### QA report
-
-`qa_report.html` is one self-contained file that opens offline: inline CSS and SVG, the minimap embedded as
-a PNG, no script and no external reference (a Content-Security-Policy forbids loading anything), every string
-from the run files escaped. It shows the run summary (frames, published share, abstentions, provenance and
-stages), the validation of the outputs plus consistency checks between `metrics.json`, `match.json` and
-`tracking.jsonl`, a timeline of calibration health, abstentions and median p90 radius per frame (when a
-column groups several frames, its shading is as high as the share of them that abstain), the distribution of
-the p90 radii, the worst frames, the abstained spans and short definitions of the fields.
-`predfoot qa` rebuilds it from the outputs of a finished run, byte for byte:
-
-```bash
-uv run predfoot qa out/                       # → out/qa_report.html
-uv run predfoot qa out/ --output report.html
-```
-
-## Docker
-
-`docker/Dockerfile.cpu` builds two CPU images without torch, both running as an unprivileged user
-(uid 10001):
-
-| Target | Contents | Default command |
-|---|---|---|
-| `cli` (default) | The command-line tools | `predfoot --help` |
-| `serve` | The tools and the HTTP API (extra `serve`); `EXPOSE 8000`, a `HEALTHCHECK` on `/healthz` | `predfoot serve`, on `PREDFOOT_HOST=0.0.0.0` and `PREDFOOT_PORT=8000` |
-
-```bash
-docker build -f docker/Dockerfile.cpu --build-arg GIT_SHA="$(git rev-parse HEAD)" -t predfoot:cli .
-mkdir -p out && chmod 0777 out
-docker run --rm -v "$PWD/tests/fixtures:/in:ro" -v "$PWD/out:/out" \
-    predfoot:cli run /in/synthetic_clip.json --out /out
-docker run --rm -v "$PWD/out:/out:ro" predfoot:cli validate /out/tracking.jsonl --match /out/match.json
-
-docker build -f docker/Dockerfile.cpu --target serve -t predfoot:serve .
-docker run --rm -p 8000:8000 predfoot:serve
-```
-
-In the `serve` image, `/healthz`, `/v1/localize` and `/metrics` work; `/v1/calibrate` answers 503 because the
-keypoint networks need torch (extra `vision`), which the CPU images leave out. `predfoot serve` reads its
-interface and port from `PREDFOOT_HOST` and `PREDFOOT_PORT` when the command line does not set them, so
-`docker run -p 8000:8000 predfoot:serve serve --conformal /models/conformal.json` still listens on every
-interface; the `HEALTHCHECK` probes `PREDFOOT_PORT`, without proxies.
-
-Two scripts smoke-test the images, locally or in CI: `docker/smoke-cli.sh IMAGE` (non-root user,
-`predfoot run`, `validate` and `qa`, then the real stages on the golden fixture, whose outputs must match
-`tests/fixtures/golden/expected/`; it runs on both targets) and `docker/smoke-serve.sh IMAGE` (a healthy
-`HEALTHCHECK`, `/healthz`, `POST /v1/localize` with 200 and finite values, `POST /v1/calibrate` with 503,
-`/metrics`). The `docker` workflow builds both targets on every pull request that touches what the images
-contain and runs them; nothing is pushed there.
-
-### Release
-
-Bump the version in `pyproject.toml` and in `src/predfoot/__init__.py` (a unit test checks that they agree),
-merge, then push a tag `v<version>`. The `release` workflow checks that the tag matches the package version,
-runs the smoke scripts of the `docker` workflow on each image (and `predfoot version`), the HTTP checks
-included for the `serve` image, and only then pushes them to the GitHub Container Registry with
-`GITHUB_TOKEN`, with OCI labels (source, revision, version, licence):
-
-| Image | Tags |
+| Path | Contents |
 |---|---|
-| `ghcr.io/zkyasin/predfoot` (cli) | `<version>`, `sha-<commit>` |
-| `ghcr.io/zkyasin/predfoot` (serve) | `<version>-serve`, `sha-<commit>-serve` |
-
-## Serving
-
-```bash
-uv sync --extra serve --extra vision      # vision (torch) is only needed by /v1/calibrate
-uv run python scripts/fit_conformal.py runs/<eval_dev run>/players.parquet --out conformal.json
-uv run predfoot serve --port 8000 --conformal conformal.json   # OpenAPI docs at http://127.0.0.1:8000/docs
-```
-
-| Endpoint | In → out |
-|---|---|
-| `GET /healthz` | Status, package version, versions of the loaded models: networks (loaded on first use, or with `--preload`) and conformal model |
-| `POST /v1/calibrate` | Multipart `image` (JPEG or PNG, at most 20 MiB) → PnLCalib keypoints and lines → `status`, `homography`, `cov_theta`, `dof`, `rms_px`, `n_inliers`, `image_corners_projection`. 503 when the networks cannot load (torch or weights missing), or with `Retry-After` when 8 calibrations are already running or queued |
-| `POST /v1/localize` | `homography` (pitch → image, H[2][2] = 1), `cov_theta` (8 × 8), `n_inliers`, optional `dof`, `feet` [{`track_id`, `u`, `v`, optional `cov_uv`}], optional `conformal_quantile` → per foot `x`, `y`, `pos_cov_m2`, `p90_radius_m`, `quantile`, all null above the horizon |
-| `GET /metrics` | Request counters and latency histograms (Prometheus text format) |
-
-```bash
-curl -s -F "image=@frame.jpg;type=image/jpeg" localhost:8000/v1/calibrate > calib.json
-jq '{homography, cov_theta, dof, n_inliers, feet: [{track_id: 7, u: 960, v: 800}]}' calib.json \
-  | curl -s -H "content-type: application/json" -d @- localhost:8000/v1/localize
-```
-
-`/v1/localize` uses the definitions of the pipeline: the calibrated covariance is (q / 4.605) · Σp and the
-radius √(q · λmax(Σp)). With `--conformal`, each foot gets the q̂ of its Mondrian bin (metres per pixel at
-the feet × RANSAC inliers, hence `n_inliers`), exactly as the real pipeline stages do with the same model
-(`scripts/run_real_clip.py`); this is the construction that covered 90.4 % of the held-out dev errors
-(leave one game out). A `conformal_quantile` in the request overrides the model with one threshold for all
-feet. Without either, q is the uncalibrated Laplace threshold, which covers
-only about 18 % of the errors on the dev games. The model is calibrated on Σp from Σθ alone: a foot sent
-with `cov_uv` gets a wider region than the one calibrated. predfoot never saves uploaded images (Starlette
-spools uploads above 1 MiB to an anonymous temporary file that goes away with the request).
-
-The keypoint networks also export to ONNX (opset 18, parity with PyTorch within 0.5 px on decoded keypoints)
-and run on ONNX Runtime. [`reports/latency_m4.md`](reports/latency_m4.md) times both networks per frame on an
-M4 Pro: 0.46 s with ONNX Runtime CoreML, 0.56 s with PyTorch MPS, about 1.1-1.9 s on the CPU (a 3-frame
-smoke run on a busy machine, which inflated the CPU frames).
-
-```bash
-uv sync --extra vision --extra export
-uv run python scripts/export_onnx.py      # → $PREDFOOT_DATA_DIR/models/onnx/, never git
-uv run python scripts/bench_latency.py --frames 3 --out reports/latency_m4.md
-```
+| `src/predfoot/` | The package: `geometry`, `keypoints`, `calib`, `uncertainty`, `health`, `io`, `kpi`, `eval`, `viz`, `pipeline`, `serve`, `demo` |
+| `scripts/` | Data download, experiments and evaluations, figures, checks |
+| `tests/` | `unit`, `property` (hypothesis), `integration`; synthetic fixtures and a three-record SkillCorner excerpt |
+| `reports/` | Generated reports with aggregate numbers, and their figures ([index](reports/README.md)) |
+| `docs/` | Architecture decision records, preregistration, serving and Docker |
+| `configs/` | YAML configs, validated with pydantic |
+| `docker/` | CPU images and their smoke tests |
+| `assets/` | Images for this README |
 
 ## Development
 
 ```bash
-uv sync                      # core + dev tools
-uv sync --extra vision       # + torch, for the keypoint model
-uv sync --extra serve        # + FastAPI, for the HTTP API and its tests (CI installs it)
+uv sync --extra serve        # core, dev tools and the API extra, as in CI; add --extra vision for torch
 uv run pre-commit install
-uv run pytest
+uv run ruff check . && uv run ruff format --check . && uv run mypy
+uv run pytest -m "not slow and not data and not network and not vision"
+uv run python scripts/check_licenses.py
 ```
 
-The golden test (`tests/integration/test_golden_real.py`) runs the real stages (calibration, conformal
-regions, localization, export) on synthetic network detections of a known camera, committed in
-`tests/fixtures/golden/`, and compares the outputs with `tests/fixtures/golden/expected/`: exact on structure,
-ids and flags, within one unit of the last written decimal on numbers (macOS and Linux round a few values
-differently). After an intended change of the outputs, regenerate and review the diff:
-
-```bash
-uv run python scripts/make_golden.py --update
-```
-
-Datasets are downloaded at runtime and never committed. Set `PREDFOOT_DATA_DIR` to share them between
-checkouts.
+The golden test (`tests/integration/test_golden_real.py`) runs the real stages on the golden fixture and
+compares the outputs with `tests/fixtures/golden/expected/`: exact on structure, ids and flags, within one unit
+of the last written decimal on numbers. After an intended change of the outputs, regenerate it with
+`uv run python scripts/make_golden.py --update` and review the diff. Working rules for contributors:
+[CLAUDE.md](CLAUDE.md).
 
 ## Licence and credits
 
-Apache-2.0. Third-party data and weights are listed in [ATTRIBUTION.md](ATTRIBUTION.md).
-predfoot is an independent project, not affiliated with SkillCorner.
+Apache-2.0. Third-party data and weights (PnLCalib, SN-GSR, SoccerTrack v2, IDSSE, SkillCorner open data) are
+credited in [ATTRIBUTION.md](ATTRIBUTION.md); none is redistributed beyond what that file lists. predfoot is an
+independent project, not affiliated with SkillCorner.
