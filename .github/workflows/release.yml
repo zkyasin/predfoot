@@ -2,8 +2,10 @@ name: release
 
 # On a version tag (v*), builds both CPU images and pushes them to the GitHub Container Registry as
 # ghcr.io/zkyasin/predfoot: the cli image tagged <version> and sha-<commit>, the serve image with the same
-# tags and a -serve suffix (0.1.0-serve, sha-<commit>-serve). OCI labels give the source repository,
-# revision, version and licence. GITHUB_TOKEN is the only credential.
+# tags and a -serve suffix (0.1.0-serve, sha-<commit>-serve). Nothing is pushed unless the image passes the
+# smoke tests of the docker workflow first (docker/smoke-cli.sh, and docker/smoke-serve.sh for the serve
+# image, whose server must start, turn healthy and answer). OCI labels give the source repository, revision,
+# version and licence. GITHUB_TOKEN is the only credential.
 on:
   push:
     tags: ["v*"]
@@ -74,25 +76,15 @@ jobs:
           cache-from: type=gha,scope=release-${{ matrix.target }}
           cache-to: type=gha,mode=max,scope=release-${{ matrix.target }}
 
-      - name: Smoke test before pushing
+      - name: Smoke test before pushing (the checks of the docker workflow)
         env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          test "$(docker run --rm --entrypoint id predfoot:release -u)" != "0"
-          test "$(docker run --rm --entrypoint predfoot predfoot:release version)" = "$VERSION"
-          mkdir -p out
-          chmod 0777 out
-          docker run --rm --entrypoint predfoot -v "$PWD/tests/fixtures:/in:ro" -v "$PWD/out:/out" \
-            predfoot:release run /in/synthetic_clip.json --out /out
-          docker run --rm --entrypoint predfoot -v "$PWD/out:/out:ro" \
-            predfoot:release validate /out/tracking.jsonl --match /out/match.json
-          mkdir -p golden-out
-          chmod 0777 golden-out
-          docker run --rm --entrypoint predfoot -v "$PWD/tests/fixtures/golden:/golden:ro" \
-            -v "$PWD/golden-out:/out" predfoot:release run /golden/clip.json \
-            --detections /golden/detections.json --conformal /golden/conformal.json --out /out
-          docker run --rm --entrypoint python -v "$PWD/tests/fixtures/golden:/golden:ro" \
-            -v "$PWD/golden-out:/out:ro" predfoot:release -m predfoot.io.compare /out /golden/expected
+          EXPECTED_VERSION: ${{ steps.version.outputs.version }}
+          EXPECTED_GIT_SHA: ${{ github.sha }}
+        run: docker/smoke-cli.sh predfoot:release
+
+      - name: Smoke test of the HTTP API before pushing
+        if: matrix.target == 'serve'
+        run: docker/smoke-serve.sh predfoot:release
 
       - uses: docker/login-action@v3
         with:

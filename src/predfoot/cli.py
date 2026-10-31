@@ -202,9 +202,10 @@ def qa(
 @app.command()
 def serve(
     host: Annotated[
-        str, typer.Option(help="Interface to listen on (0.0.0.0 for every interface).")
+        str,
+        typer.Option(envvar="PREDFOOT_HOST", help="Interface to listen on (0.0.0.0 for every interface)."),
     ] = "127.0.0.1",
-    port: Annotated[int, typer.Option(help="TCP port.")] = 8000,
+    port: Annotated[int, typer.Option(envvar="PREDFOOT_PORT", help="TCP port.")] = 8000,
     device: Annotated[
         str, typer.Option(help="Torch device of /v1/calibrate: auto, cpu, mps or cuda.")
     ] = "auto",

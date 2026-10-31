@@ -13,7 +13,9 @@
 #   docker build -f docker/Dockerfile.cpu --target serve -t predfoot:serve .
 #   docker run --rm -p 8000:8000 predfoot:serve
 #   docker run --rm -p 8000:8000 -v "$PWD/conformal.json:/models/conformal.json:ro" predfoot:serve \
-#       serve --host 0.0.0.0 --port 8000 --conformal /models/conformal.json
+#       serve --conformal /models/conformal.json
+#
+# Smoke tests of both images, as CI runs them: docker/smoke-cli.sh IMAGE and docker/smoke-serve.sh IMAGE.
 
 ARG PYTHON_VERSION=3.12
 
@@ -79,12 +81,17 @@ ENTRYPOINT ["predfoot"]
 # --- serve: the HTTP API ----------------------------------------------------------------------------------
 FROM runtime AS serve
 COPY --from=build-serve /opt/venv /opt/venv
+# predfoot serve takes its interface and port from these unless the command line sets them, so a command that
+# only adds options (serve --conformal ...) still listens on every interface of the container.
+ENV PREDFOOT_HOST=0.0.0.0 \
+    PREDFOOT_PORT=8000
 EXPOSE 8000
-# Python's urllib, so that the image needs no curl. It probes the default port: a server started on another
-# port needs its own --health-cmd.
+# Python's urllib, so that the image needs no curl, with no proxy (the Docker CLI can pass the host's proxy
+# variables to containers). It probes PREDFOOT_PORT: a server given --port on the command line instead needs
+# its own --health-cmd.
 HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 \
-    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=4)"]
-CMD ["serve", "--host", "0.0.0.0", "--port", "8000"]
+    CMD ["python", "-c", "import os, urllib.request as u; u.build_opener(u.ProxyHandler({})).open('http://127.0.0.1:%s/healthz' % os.environ.get('PREDFOOT_PORT', '8000'), timeout=4)"]
+CMD ["serve"]
 
 # --- cli: the command-line tools; the last stage, hence the default target --------------------------------
 FROM runtime AS cli

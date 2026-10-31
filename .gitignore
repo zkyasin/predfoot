@@ -15,6 +15,7 @@ build/
 # Data and artefacts never go to git (SoccerNet frames and labels cannot be redistributed)
 data/
 runs/
+smoke/
 models/weights/
 mlruns/
 reports/cache/
