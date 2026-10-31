@@ -172,7 +172,7 @@ def test_calibrate_returns_a_camera_that_localize_accepts():
     assert body["n_inliers"] == len(body["keypoints"]) == 25
     assert body["lines"] == []
     assert body["model_version"] == "synthetic@test"
-    assert set(body["timings_ms"]) == {"decode", "networks", "calibration"}
+    assert set(body["timings_ms"]) == {"decode", "load", "networks", "calibration"}
     cov = np.array(body["cov_theta"])
     assert cov.shape == (8, 8)
     np.testing.assert_allclose(cov, cov.T)

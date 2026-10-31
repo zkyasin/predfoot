@@ -152,7 +152,9 @@ class CalibrateResponse(BaseModel):
     keypoints: list[Keypoint]
     lines: list[LineDetection]
     model_version: str
-    timings_ms: dict[str, float]
+    timings_ms: dict[str, float] = Field(
+        description="decode, load (the networks, on the first request only), networks, calibration."
+    )
 
 
 class Health(BaseModel):

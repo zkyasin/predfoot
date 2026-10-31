@@ -159,9 +159,11 @@ def create_app(
             raise HTTPException(err.status_code, str(err)) from err
         decoded = time.perf_counter()
         try:
-            kps, ends = networks.detect(rgb)
+            networks.get()  # loads the networks on the first request
         except ModelUnavailable as err:
             raise HTTPException(503, str(err)) from err
+        loaded = time.perf_counter()
+        kps, ends = networks.detect(rgb)
         detected = time.perf_counter()
         result, corners = calibrate_detections(kps, ends, size)
         done = time.perf_counter()
@@ -187,7 +189,8 @@ def create_app(
             model_version=networks.version or "",
             timings_ms={
                 "decode": 1e3 * (decoded - start),
-                "networks": 1e3 * (detected - decoded),
+                "load": 1e3 * (loaded - decoded),
+                "networks": 1e3 * (detected - loaded),
                 "calibration": 1e3 * (done - detected),
             },
         )
