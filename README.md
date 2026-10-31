@@ -74,8 +74,8 @@ uv run predfoot serve --port 8000 --conformal conformal.json   # OpenAPI docs at
 
 | Endpoint | In → out |
 |---|---|
-| `GET /healthz` | Status, package version, versions of the loaded models (the networks load on first use, or with `--preload`) |
-| `POST /v1/calibrate` | Multipart `image` (JPEG or PNG, at most 20 MiB) → PnLCalib keypoints and lines → `status`, `homography`, `cov_theta`, `dof`, `rms_px`, `n_inliers`, `image_corners_projection`. 503 when torch or the weights are missing |
+| `GET /healthz` | Status, package version, versions of the loaded models: networks (loaded on first use, or with `--preload`) and conformal model |
+| `POST /v1/calibrate` | Multipart `image` (JPEG or PNG, at most 20 MiB) → PnLCalib keypoints and lines → `status`, `homography`, `cov_theta`, `dof`, `rms_px`, `n_inliers`, `image_corners_projection`. 503 when the networks cannot load (torch or weights missing), or with `Retry-After` when 8 calibrations are already running or queued |
 | `POST /v1/localize` | `homography` (pitch → image, H[2][2] = 1), `cov_theta` (8 × 8), `n_inliers`, optional `dof`, `feet` [{`track_id`, `u`, `v`, optional `cov_uv`}], optional `conformal_quantile` → per foot `x`, `y`, `pos_cov_m2`, `p90_radius_m`, `quantile`, all null above the horizon |
 | `GET /metrics` | Request counters and latency histograms (Prometheus text format) |
 

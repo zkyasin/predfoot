@@ -31,9 +31,13 @@ the project uses [semantic versioning](https://semver.org/).
 - Scripts: spike S0, dev evaluation with leave-one-game-out coverage, failure detection, error process.
 - Preregistration draft for the locked test run.
 - HTTP API, `predfoot serve` (extra `serve`): `/healthz`; `/v1/localize`, pitch positions with calibrated
-  covariances and 90 % radii from a camera and its 8 × 8 Σθ, nulls above the horizon; `/v1/calibrate`, one
-  uploaded frame → PnLCalib keypoints and lines → calibration and image corners, with size and content
-  checks before decoding and a 503 when torch or the weights are missing; `/metrics` for Prometheus.
-- ONNX export of both keypoint networks with a parity check against PyTorch (`scripts/export_onnx.py`,
-  extra `export`; within 0.5 px on decoded keypoints) and a latency benchmark on PyTorch CPU and MPS and
-  ONNX Runtime CPU and CoreML (`scripts/bench_latency.py`, `reports/latency_m4.md`).
+  covariances and 90 % radii from a camera and its 8 × 8 Σθ, nulls above the horizon, with the Mondrian
+  conformal regions of the pipeline when the server loads a model (`--conformal`, fitted by
+  `scripts/fit_conformal.py`); `/v1/calibrate`, one uploaded frame → PnLCalib keypoints and lines →
+  calibration and image corners, with size and content checks before decoding, a bounded queue on worker
+  threads of its own, and a 503 when the networks cannot load or the queue is full; `/metrics` for
+  Prometheus.
+- ONNX export of both keypoint networks, installed only once it passes a parity check against PyTorch
+  (`scripts/export_onnx.py`, extra `export`; heatmaps within 1e-4, the same detections, decoded keypoints
+  within 0.5 px) and a latency benchmark on PyTorch CPU, MPS and CUDA and ONNX Runtime CPU, CoreML and CUDA
+  (`scripts/bench_latency.py`, `reports/latency_m4.md`).
