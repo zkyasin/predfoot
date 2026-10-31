@@ -57,7 +57,8 @@ def resample(values: ArrayLike, hz_in: int, hz_out: int) -> FloatArray:
 
     Output sample j is at time j / hz_out (the first input sample is at time 0). It is the linear
     interpolation of the two input samples around it (a copy when it falls on one), and NaN when either of
-    them is NaN, so gaps are never bridged. Integer arithmetic keeps the sample times exact.
+    them is NaN. Gaps are never bridged: an output sample that follows a missing input sample unused by its
+    predecessor is NaN too. Integer arithmetic keeps the sample times exact.
     """
     x = np.asarray(values, dtype=np.float64)
     if hz_in == hz_out:
@@ -74,6 +75,14 @@ def resample(values: ArrayLike, hz_in: int, hz_out: int) -> FloatArray:
     if between.any():
         w = (rem[between] / hz_out).reshape((-1,) + (1,) * (x.ndim - 1))
         out[between] = (1.0 - w) * x[k0[between]] + w * x[k0[between] + 1]
+    # When downsampling, two consecutive output samples can straddle a missing input sample that neither of
+    # them uses; the later one is dropped so that no output step spans the gap.
+    invalid = ~_valid_rows(x)
+    if invalid.any() and m > 1:
+        before = np.concatenate([[0], np.cumsum(invalid)])  # invalid input samples in x[:k]
+        last_used = k0 + between
+        hidden = before[k0[1:]] - before[last_used[:-1] + 1] > 0
+        out[1:][hidden] = np.nan
     return out
 
 

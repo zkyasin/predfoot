@@ -164,3 +164,16 @@ def test_plausible_tracks_and_existing_gaps_are_left_alone():
     clean, dropped = drop_glitches(xy, hz=25, max_speed_ms=12.0)
     assert dropped == 0
     np.testing.assert_array_equal(clean, xy)
+
+
+def test_resampling_never_bridges_a_gap_that_falls_between_output_samples():
+    # 10 fps samples use 25 Hz samples (12, 13) and (15): sample 14 is used by neither. A one-sample gap
+    # there, followed by a teleport, must still separate the two sides.
+    xy = _walk(40)
+    xy[14] = np.nan
+    xy[15:] += 20.0
+    out = resample(xy, 25, 10)
+    assert np.isfinite(out[5]).all()  # t = 0.5 s uses samples 12 and 13
+    assert np.isnan(out[6]).all()  # t = 0.6 s would be the first sample after the hidden gap
+    kin = pipeline(xy, KpiConfig(), resample_to=10)
+    assert np.nanmax(kin.speed) == pytest.approx(1.5, abs=1e-6)
