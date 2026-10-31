@@ -126,7 +126,7 @@ interface; the `HEALTHCHECK` probes `PREDFOOT_PORT`, without proxies.
 
 Two scripts smoke-test the images, locally or in CI: `docker/smoke-cli.sh IMAGE` (non-root user,
 `predfoot run`, `validate` and `qa`, then the real stages on the golden fixture, whose outputs must match
-`tests/fixtures/golden/expected/`; both targets pass it) and `docker/smoke-serve.sh IMAGE` (a healthy
+`tests/fixtures/golden/expected/`; it runs on both targets) and `docker/smoke-serve.sh IMAGE` (a healthy
 `HEALTHCHECK`, `/healthz`, `POST /v1/localize` with 200 and finite values, `POST /v1/calibrate` with 503,
 `/metrics`). The `docker` workflow builds both targets on every pull request that touches what the images
 contain and runs them; nothing is pushed there.

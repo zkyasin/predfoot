@@ -5,7 +5,7 @@ name: docker
 # publishing is the job of release.yml, on version tags.
 on:
   pull_request:
-    paths:  # every file the image copies or the smoke tests read (tests/unit/test_docker_files.py checks it)
+    paths:  # what the images copy (checked by tests/unit/test_docker_files.py) and what the smoke tests read
       - "docker/**"
       - ".dockerignore"
       - "src/**"

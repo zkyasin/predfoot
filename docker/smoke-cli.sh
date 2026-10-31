@@ -4,7 +4,7 @@
 # The checks the docker workflow runs on every pull request and the release workflow runs before pushing:
 # the image runs as uid 10001; predfoot run on the synthetic clip, then validate; the QA report holds no URL
 # and no script, and predfoot qa rebuilds it byte for byte; the real stages reproduce the golden outputs.
-# Both targets pass it (the serve image holds the command-line tools too).
+# It runs on both targets (the serve image holds the command-line tools too).
 #
 # Environment: SMOKE_DIR, where outputs go (default smoke/, git-ignored); EXPECTED_VERSION and
 # EXPECTED_GIT_SHA, when set, must match `predfoot version` and the git_sha of meta.json.
