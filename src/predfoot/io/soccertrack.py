@@ -204,6 +204,21 @@ def load_keypoints(match: str, root: Path | None = None) -> tuple[list[str], Flo
     return parse_keypoints(raw_path(match, "keypoints.json", root).read_text())
 
 
+def keypoint_groups(xy: ArrayLike) -> tuple[NDArray[np.str_], NDArray[np.bool_]]:
+    """Group of each annotated keypoint (internal pitch points (n, 2)) and whether it is a marked landmark.
+
+    Groups: ``far_touchline``, ``near_touchline`` or ``interior`` (goal lines, boxes, halfway line, centre
+    circle, centre spot). Touchline points other than the corners and the halfway line are not painted on the
+    pitch: the annotators placed them by eye every 5.5 m along the line.
+    """
+    p = np.asarray(xy, dtype=np.float64).reshape(-1, 2)
+    far = np.isclose(p[:, 1], PITCH_WIDTH_M / 2)
+    near = np.isclose(p[:, 1], -PITCH_WIDTH_M / 2)
+    group = np.where(far, "far_touchline", np.where(near, "near_touchline", "interior"))
+    on_marked_x = np.isclose(p[:, 0], 0.0) | np.isclose(np.abs(p[:, 0]), PITCH_LENGTH_M / 2)
+    return group.astype(np.str_), ~(far | near) | on_marked_x
+
+
 def decode_maps(map1: NDArray[np.int16], map2: NDArray[np.uint16]) -> tuple[FloatArray, FloatArray]:
     """OpenCV fixed-point remap tables → float32 maps (x, y), exact to the 1/32 px grid of the tables."""
     mx, my = cv2.convertMaps(np.ascontiguousarray(map1), np.ascontiguousarray(map2), cv2.CV_32FC1)
