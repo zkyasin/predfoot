@@ -188,6 +188,8 @@ def _parse(line: str) -> dict[str, Any]:
         obj = json.loads(line, parse_constant=_reject_constant, object_pairs_hook=_no_duplicate_keys)
     except json.JSONDecodeError as err:
         raise ValueError(f"invalid JSON ({err.msg})") from err
+    except RecursionError as err:  # arrays or objects nested thousands deep
+        raise ValueError("invalid JSON (nested too deeply)") from err
     if not isinstance(obj, dict):
         raise ValueError("a record must be a JSON object")
     return obj

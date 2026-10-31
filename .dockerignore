@@ -13,6 +13,7 @@ dist
 build
 data
 runs
+smoke
 models
 mlruns
 out

@@ -49,6 +49,24 @@ the project uses [semantic versioning](https://semver.org/).
   (`scripts/export_onnx.py`, extra `export`; heatmaps within 1e-4, the same detections, decoded keypoints
   within 0.5 px) and a latency benchmark on PyTorch CPU, MPS and CUDA and ONNX Runtime CPU, CoreML and CUDA
   (`scripts/bench_latency.py`, `reports/latency_m4.md`).
+- QA report: `predfoot run` writes `qa_report.html` next to `tracking.jsonl`, and `predfoot qa OUT` rebuilds it
+  from the outputs of a run. One self-contained file (inline CSS and SVG, no script, no external reference)
+  with the run summary, the validation of the outputs and consistency checks, a timeline of calibration
+  health, abstentions and p90 radii, the distribution of the radii, the worst frames and field definitions.
+- Docker: a `serve` target next to the default `cli` one (API extra, port 8000, `HEALTHCHECK` on `/healthz`,
+  numeric non-root user); the `docker` workflow builds and smoke-tests both; a `release` workflow pushes both
+  images to `ghcr.io/zkyasin/predfoot` on `v*` tags, with version and commit tags and OCI labels.
+- Golden test of the real stages on committed synthetic detections (`scripts/make_golden.py --update`
+  regenerates the expected outputs), detection files as JSON (`predfoot-detections/1`) and a generator of
+  network-style detections from a known camera.
+- `predfoot run --detections FILE [--conformal MODEL]` runs the real stages (calibration from the detections,
+  delta-method regions, Mondrian conformal scaling) without torch; `python -m predfoot.io.compare` compares a
+  run with golden outputs, one written decimal of slack on numbers. The Docker and release workflows run the
+  golden check inside the images.
+- `docker/smoke-cli.sh` and `docker/smoke-serve.sh`: the smoke tests of the images, shared by the `docker` and
+  `release` workflows and runnable locally.
+- `scripts/run_real_clip.py` writes its inputs next to its outputs (`input_clip.json`, `detections.json`
+  re-keyed by clip frame index, `conformal.json`), so `predfoot run --detections` reruns a dev clip from files.
 
 ### Fixed
 - Temporal smoothing tails: a run of misfit frames lasting at most 0.5 s strictly inside a segment gets the
@@ -58,3 +76,26 @@ the project uses [semantic versioning](https://semver.org/).
   manoeuvre factor. `eval_dev.py` calibrates filled and bridged frames in their own covariance source with one
   pooled quantile, counts PTZ-projected frames as single-frame calibrations, gives a source its own quantiles
   only with at least 10 calibration clips, and reports robust common-mode step statistics.
+- The export rate entered the config hash as given, so `RunConfig()` (10) and `predfoot run` (10.0) hashed the
+  same configuration differently, and a run resumed through the other path recomputed every block.
+- `meta.json` described every stage as a stub and the conformal model as null even when the real stages ran
+  with a Mondrian model; stages now describe themselves, and the real ones record their model (hash, alpha,
+  pooled quantile, edges, per-bin quantiles).
+- The release could push the `serve` image without ever starting its server: its smoke test only ran CLI
+  commands, and nothing tied a tag to a green `docker` run. The release now runs the same scripts as the
+  `docker` workflow, the HTTP checks included, before it logs in to the registry.
+- The QA timeline shaded a whole column as soon as one of its frames abstained: on a full match (90 frames per
+  column), 1 % of scattered abstentions shaded 90 % of the chart. The shading is now as high as the share of
+  abstained frames, and columns are as wide as the frames they hold.
+- `predfoot run --detections` ran detections keyed by image number (as the detection cache keys them) with
+  the cameras of other frames and no warning. Detections that name frames beyond the clip are refused before
+  anything runs, a file without frame 0 gets a warning, and the 0-based key is documented.
+- The `serve` image's `HEALTHCHECK` went through the proxy variables the Docker CLI can pass to containers, and
+  a command that only added options to `serve` listened on 127.0.0.1 alone. The probe now ignores proxies, and
+  `predfoot serve` takes its host and port from `PREDFOOT_HOST` and `PREDFOOT_PORT`, set in the image.
+- A conformal model with an infinite bin edge passed the start-up checks, then made `meta.json` unwritable
+  after the whole computation; it is now refused when it is loaded.
+- The non-root checks of the Docker workflows passed when `docker run` itself failed, and the `docker` workflow
+  did not run when `README.md`, `LICENSE` or `ATTRIBUTION.md`, which the images copy, changed.
+- `predfoot qa` never returned on an absurd `export_fps` in `meta.json` (it now falls back to 10 fps outside
+  1e-3 to 1e3) and crashed on a line nested thousands deep, which the validator now reports as invalid JSON.

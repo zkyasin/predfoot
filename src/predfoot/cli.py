@@ -38,24 +38,68 @@ def run(
     out: Annotated[Path, typer.Option(file_okay=False, help="Output folder (created if needed).")],
     fps: Annotated[float, typer.Option(help="Export frame rate.")] = 10.0,
     block_size: Annotated[int, typer.Option(help="Export frames per block: the resume granularity.")] = 100,
+    detections: Annotated[
+        Path | None,
+        typer.Option(
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="Keypoint and line detections of the clip's frames (JSON, predfoot-detections/1), keyed by "
+            "the 0-based index of the clip's frames (not by image number): run the real stages, which "
+            "calibrate every frame from them (the clip's homographies are then ignored).",
+        ),
+    ] = None,
+    conformal: Annotated[
+        Path | None,
+        typer.Option(
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="Mondrian conformal model (JSON, from scripts/fit_conformal.py) for the 90 % regions of the "
+            "real stages; needs --detections.",
+        ),
+    ] = None,
 ) -> None:
-    """Run the pipeline on a clip: tracking.jsonl, match.json, meta.json, metrics.json, minimap.png.
+    """Run the pipeline on a clip: tracking.jsonl, match.json, meta.json, metrics.json, minimap.png and
+    qa_report.html.
 
-    Re-running after a crash reuses the finished blocks and gives byte-identical outputs.
+    Without --detections, the stub stages read the homographies and foot points of the clip; with it, the real
+    stages calibrate each frame (RANSAC, robust least squares, Laplace covariance) and give delta-method
+    regions, scaled by --conformal when given. Re-running after a crash reuses the finished blocks and gives
+    byte-identical outputs.
     """
     from pydantic import ValidationError
 
-    from predfoot.pipeline.run import RunConfig, run_clip
+    from predfoot.pipeline.run import ClipMismatch, RunConfig, Stages, run_clip
 
     if fps <= 0:
         raise typer.BadParameter("must be positive", param_hint="--fps")
     if block_size < 1:
         raise typer.BadParameter("must be at least 1", param_hint="--block-size")
+    if conformal is not None and detections is None:
+        raise typer.BadParameter(
+            "needs --detections: the stub stages have no calibrated regions", param_hint="--conformal"
+        )
+    stages: Stages | None = None
+    if detections is not None:
+        from predfoot.pipeline.real import stages_from_files
+        from predfoot.serve.localize import load_conformal
+
+        try:
+            model = None if conformal is None else load_conformal(conformal)
+        except ValueError as err:
+            raise typer.BadParameter(str(err), param_hint="--conformal") from err
+        try:
+            stages = stages_from_files(detections, model)
+        except ValueError as err:
+            raise typer.BadParameter(str(err), param_hint="--detections") from err
     try:
-        result = run_clip(clip, out, RunConfig(export_fps=fps, block_size=block_size))
+        result = run_clip(clip, out, RunConfig(export_fps=fps, block_size=block_size), stages)
     except ValidationError as err:
         typer.echo(f"invalid clip file {clip}:\n{err}", err=True)
         raise typer.Exit(code=2) from err
+    except ClipMismatch as err:  # raised before anything is computed or written
+        raise typer.BadParameter(str(err), param_hint="--detections") from err
     typer.echo(
         f"{result.n_export} frames at {fps:g} fps from {result.n_native} native frames, "
         f"{result.n_abstained} abstained; blocks computed {result.blocks_computed}, "
@@ -113,11 +157,55 @@ def validate(
 
 
 @app.command()
+def qa(
+    out_dir: Annotated[
+        Path,
+        typer.Argument(
+            metavar="OUT_DIR",
+            exists=True,
+            file_okay=False,
+            readable=True,
+            help="Output folder of predfoot run (holds tracking.jsonl).",
+        ),
+    ],
+    output: Annotated[
+        Path | None,
+        typer.Option(dir_okay=False, help="Where to write the report (default: OUT_DIR/qa_report.html)."),
+    ] = None,
+) -> None:
+    """Rebuild the QA report of a run from its outputs: one self-contained HTML file that opens offline.
+
+    Summary, validation of the outputs, timeline of calibration health and abstentions, distribution of the
+    p90 radii, worst frames and field definitions.
+    """
+    from predfoot.io.files import atomic_write_text
+    from predfoot.viz.qa_report import read_run, render_qa_report
+
+    try:
+        run_files = read_run(out_dir)
+    except FileNotFoundError as err:
+        typer.echo(str(err), err=True)
+        raise typer.Exit(code=2) from err
+    target = output if output is not None else out_dir / "qa_report.html"
+    atomic_write_text(target, render_qa_report(run_files))
+    report = run_files.validation
+    if report is None:
+        status = f"validation could not run ({run_files.validation_error})"
+    elif report.ok:
+        status = "outputs valid"
+    else:
+        status = f"validation FAILED ({len(report.issues)}{'+' if report.truncated else ''} problems)"
+    summary = run_files.summary
+    typer.echo(f"{target}: {summary.n_frames} frames, {summary.n_abstained} abstained; {status}")
+
+
+@app.command()
 def serve(
     host: Annotated[
-        str, typer.Option(help="Interface to listen on (0.0.0.0 for every interface).")
+        str,
+        typer.Option(envvar="PREDFOOT_HOST", help="Interface to listen on (0.0.0.0 for every interface)."),
     ] = "127.0.0.1",
-    port: Annotated[int, typer.Option(help="TCP port.")] = 8000,
+    port: Annotated[int, typer.Option(envvar="PREDFOOT_PORT", help="TCP port.")] = 8000,
     device: Annotated[
         str, typer.Option(help="Torch device of /v1/calibrate: auto, cpu, mps or cuda.")
     ] = "auto",

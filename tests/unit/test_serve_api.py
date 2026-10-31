@@ -435,3 +435,22 @@ def test_calibrate_answers_503_without_the_networks(tmp_path):
     assert "weights" in detail or "torch" in detail
     assert str(tmp_path) not in detail
     assert client.get("/healthz").json()["models"] == {}
+
+
+def test_the_docker_smoke_test_request_answers_with_finite_values(client):
+    """The body .github/workflows/docker.yml posts to the serve image (from scripts/make_golden.py)."""
+    from tests.fixtures import FIXTURES
+
+    body = json.loads((FIXTURES / "golden" / "localize_request.json").read_text(encoding="utf-8"))
+    r = client.post("/v1/localize", json=body)
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert out["quantile_source"] == "laplace_f"  # the request carries the dof of its calibration
+    positions = out["positions"]
+    assert [p["track_id"] for p in positions] == [f["track_id"] for f in body["feet"]]
+    assert positions[-1]["x"] is None  # the foot above the horizon
+    for p in positions[:-1]:
+        values = [p["x"], p["y"], p["p90_radius_m"], p["quantile"], *np.ravel(p["pos_cov_m2"])]
+        assert np.isfinite(values).all(), p
+        assert -52.5 <= p["x"] <= 52.5
+        assert -34.0 <= p["y"] <= 34.0

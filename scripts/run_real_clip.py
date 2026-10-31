@@ -5,6 +5,13 @@ comes from our calibration of the cached detections; the conformal quantiles, wh
 dev games other than the clip's own (scores against the SN-GSR labels). Frames are the cached ones (one in
 five), so the clip runs at 5 fps. Internal check only: outputs derived from SoccerNet data are not published.
 
+The inputs are written next to the outputs: ``input_clip.json``, ``detections.json`` (the cached detections
+re-keyed from image numbers to the clip's 0-based frame indices, pixels rounded to 1e-3 px) and, with
+``--conformal-from``, ``conformal.json``. ``predfoot run`` then runs the same stages from files::
+
+    uv run predfoot run OUT/input_clip.json --out OTHER --fps 5 --detections OUT/detections.json \
+        [--conformal OUT/conformal.json]
+
 Usage:
     uv run python scripts/run_real_clip.py SNGS-056 --out runs/real/SNGS-056 \
         --conformal-from runs/<eval_dev run>/players.parquet
@@ -20,7 +27,7 @@ import numpy as np
 import polars as pl
 import typer
 
-from predfoot.keypoints.cache import cache_path, cached_detections
+from predfoot.keypoints.cache import by_clip_index, cache_path, cached_detections, dumps_detections
 from predfoot.paths import data_dir, index_dir
 from predfoot.pipeline.real import real_stages
 from predfoot.pipeline.run import RunConfig, run_clip
@@ -82,11 +89,13 @@ def main(
         "frames": frames,
     }
     input_path.write_text(json.dumps(clip_json))
+    indexed = by_clip_index(dets)  # frame i of input_clip.json is image source_frames[i]
+    (out / "detections.json").write_text(dumps_detections(indexed, model_version), encoding="utf-8")
     conformal = fit_conformal(conformal_from, int(clip["game_id"])) if conformal_from else None
+    if conformal is not None:
+        (out / "conformal.json").write_text(conformal.to_json(), encoding="utf-8")
     tag = hashlib.sha256(conformal.to_json().encode()).hexdigest()[:12] if conformal else "laplace"
-    stages = real_stages(
-        dict(enumerate(dets[f] for f in source_frames)), conformal, f"real-{model_version}-{tag}"
-    )
+    stages = real_stages(indexed, conformal, f"real-{model_version}-{tag}")
     result = run_clip(input_path, out, RunConfig(export_fps=5.0), stages)
     typer.echo(f"{clip_id}: {result}")
 

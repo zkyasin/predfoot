@@ -1,3 +1,5 @@
+import tomllib
+
 import pytest
 from typer.testing import CliRunner
 
@@ -23,6 +25,25 @@ def test_serve_command_runs_the_api(monkeypatch):
     [(served, kwargs)] = calls
     assert isinstance(served, FastAPI)
     assert kwargs == {"host": "0.0.0.0", "port": 8123}
+
+
+def test_serve_takes_host_and_port_from_the_environment(monkeypatch):
+    """The serve image sets PREDFOOT_HOST=0.0.0.0, so `serve --conformal ...` listens on every interface."""
+    pytest.importorskip("fastapi")
+    uvicorn = pytest.importorskip("uvicorn")
+    calls = []
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kwargs: calls.append(kwargs))
+    env = {"PREDFOOT_HOST": "0.0.0.0", "PREDFOOT_PORT": "8124"}
+    assert CliRunner(env=env).invoke(app, ["serve"]).exit_code == 0
+    assert CliRunner(env=env).invoke(app, ["serve", "--host", "127.0.0.1"]).exit_code == 0
+    assert calls == [{"host": "0.0.0.0", "port": 8124}, {"host": "127.0.0.1", "port": 8124}]
+
+
+def test_the_package_version_is_the_pyproject_version():
+    """`predfoot version`, /healthz and meta.json print __version__; the release tag is checked against
+    pyproject.toml. Bump both together."""
+    pyproject = tomllib.loads((paths.REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert __version__ == pyproject["project"]["version"]
 
 
 def test_serve_checks_the_device():

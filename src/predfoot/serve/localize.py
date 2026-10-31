@@ -63,7 +63,8 @@ def region_threshold(
 
 def check_conformal(model: MondrianConformal) -> None:
     """Raises ValueError unless ``model`` gives 90 % regions from features that /v1/localize can compute, with
-    sorted bin edges and positive finite quantiles (a broken model fails at start-up, not on requests)."""
+    sorted finite bin edges and positive finite quantiles (a broken model fails at start-up, not on requests
+    or, in ``predfoot run``, after the computation)."""
     if not math.isclose(model.alpha, 0.1):
         level = f"{1 - model.alpha:.0%}"
         raise ValueError(f"the conformal model is fitted for {level} regions, the API serves 90 % regions")
@@ -72,8 +73,8 @@ def check_conformal(model: MondrianConformal) -> None:
         known = list(MONDRIAN_FEATURES)
         raise ValueError(f"the conformal model bins on {unknown}; /v1/localize only computes {known}")
     edges = [np.asarray(e, dtype=np.float64) for e in model.edges.values()]
-    if not all(e.ndim == 1 and np.all(np.diff(e) >= 0) for e in edges):
-        raise ValueError("the conformal model has bin edges that are not sorted numbers")
+    if not all(e.ndim == 1 and np.all(np.isfinite(e)) and np.all(np.diff(e) >= 0) for e in edges):
+        raise ValueError("the conformal model has bin edges that are not sorted finite numbers")
     q = np.asarray([model.pooled, *model.quantiles.values()], dtype=np.float64)
     if not np.all(np.isfinite(q) & (q > 0)):
         raise ValueError("the conformal model has a quantile that is not a positive finite number")

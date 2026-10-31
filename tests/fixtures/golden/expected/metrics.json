@@ -1,0 +1,14 @@
+{
+  "clip_id": "synthetic-golden-001",
+  "frames": {
+    "native": 20,
+    "exported": 8,
+    "abstained": 1,
+    "abstention_rate": 0.125
+  },
+  "players": {
+    "tracks": 14,
+    "positions": 85,
+    "unlocated_in_live_frames": 4
+  }
+}
