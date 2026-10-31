@@ -491,6 +491,19 @@ def render_report(
         "> on the predicted uncertainty) is measured on SN-GSR later (ticket T4.2) and injected in T4.3. KPI",
         "> definitions marked *assumption* below are ours, not SkillCorner's.",
         "",
+        *(
+            [
+                "> **Measured condition.** The row *measured on SN-GSR* injects the error process",
+                "> measured by `scripts/error_process.py` (per-frame calibration, no temporal smoothing",
+                "> of the camera). Its σ is measured against the SN-GSR labels, which carry their own",
+                "> error, so it is an upper bound; its 25 Hz correlations come from 5 fps measurements",
+                "> under an exponential-decay assumption, which overstates the correlation of per-frame",
+                "> jitter. Read it as the KPI cost of calibrating each frame independently.",
+                "",
+            ]
+            if any(c.name == "measured" for c in conditions)
+            else []
+        ),
         f"- **Command**: `{meta['command']}`",
         f"- **Git commit**: `{meta['git_sha']}`{dirty}; date {meta['date']}; runtime {meta['runtime_s']} s",
         "- **Data**: IDSSE (Bassek, Rein, Weber & Memmert 2025, CC BY 4.0, "
