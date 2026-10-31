@@ -31,6 +31,24 @@ Outputs follow the SkillCorner open-data JSONL schema, with the uncertainty as e
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the pipeline and [CLAUDE.md](CLAUDE.md) for the working rules.
 
+## Demo on SoccerTrack v2 pixels
+
+![predfoot on a virtual broadcast view of a SoccerTrack v2 panorama](assets/demo.jpg)
+
+A virtual broadcast camera turns and zooms inside the fixed panorama of SoccerTrack v2 match 117093. Its
+camera is known by construction. predfoot calibrates each view from the pitch lines (white lines), places the
+players' foot points on the pitch and draws their calibrated 90 % regions on the minimap. Foot points are
+coloured by the size of that region. Pixels: SoccerTrack v2 (CC BY 4.0, Scott et al.), cropped and
+reprojected. The still comes from a 10-frame smoke run: the calibration finds only 7-11 inliers per view and the
+regions are wide on the far half. [`reports/soccertrack_v2.md`](reports/soccertrack_v2.md) explains why
+SoccerTrack v2 is a demo source here, not a metric benchmark.
+
+```bash
+uv run python scripts/download_data.py soccertrack-v2 --match 117093 --parts raw mot clip
+uv run python scripts/download_data.py pnlcalib-weights
+uv run python scripts/render_demo.py --match 117093 --start 0 --frames 10 --step 5 --fps 5   # runs/<run>/demo.mp4
+```
+
 ## Real pipeline on a development clip
 
 ```bash
