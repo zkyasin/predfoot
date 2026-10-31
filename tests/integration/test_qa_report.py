@@ -203,6 +203,16 @@ def test_missing_side_files_are_listed(run_dir, tmp_path):
     assert run.validation.ok  # validated without match.json, at 10 fps
 
 
+def test_report_of_the_real_stages_shows_their_conformal_model(tmp_path):
+    from tests.integration.test_golden_real import GOLDEN, golden
+
+    golden.run_golden(GOLDEN, tmp_path)
+    text = parse((tmp_path / REPORT_NAME).read_text(encoding="utf-8")).plain_text
+    assert "kind: mondrian, sha256: 892b11963c54, alpha: 0.1, pooled: 6.5" in text
+    assert "Mondrian conformal quantile of each player's bin" in text
+    assert "frame 3 (00:00:00.30): 1 frame" in text
+
+
 def test_worst_frames_come_first(run_dir):
     run = read_run(run_dir)
     worst = worst_frames(run.summary.rows, n=5)

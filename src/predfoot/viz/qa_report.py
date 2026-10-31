@@ -584,7 +584,11 @@ def _conformal_text(conformal: Any) -> str:
     if conformal is None:
         return "none"
     if isinstance(conformal, Mapping):
-        scalars = [f"{k}: {v}" for k, v in conformal.items() if not isinstance(v, Mapping | list)]
+        scalars = [
+            f"{k}: {_short(v) if k == 'sha256' else v}"
+            for k, v in conformal.items()
+            if not isinstance(v, Mapping | list)
+        ]
         return ", ".join(scalars) or "yes"
     return str(conformal)
 
@@ -719,9 +723,12 @@ def _timeline_section(run: RunFiles) -> str:
     items = []
     for a, b in spans[:MAX_SPANS]:
         ra, rb = rows[a], rows[b]
-        label = f"frame {ra.frame}" if a == b else f"frames {ra.frame}-{rb.frame}"
-        if ra.timestamp and rb.timestamp:
-            label += f" ({ra.timestamp}-{rb.timestamp})"
+        if a == b:
+            label = f"frame {ra.frame}" + (f" ({ra.timestamp})" if ra.timestamp else "")
+        else:
+            label = f"frames {ra.frame}-{rb.frame}"
+            if ra.timestamp and rb.timestamp:
+                label += f" ({ra.timestamp}-{rb.timestamp})"
         items.append(f"<li>{_e(label)}: {b - a + 1} frame{'s' if b > a else ''}</li>")
     if len(spans) > MAX_SPANS:
         items.append(f"<li>… and {len(spans) - MAX_SPANS} more spans</li>")
