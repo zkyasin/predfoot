@@ -14,6 +14,7 @@ Every command is idempotent (complete files are skipped) and resumable (interrup
 from __future__ import annotations
 
 import sys
+import zipfile
 from collections import defaultdict
 from pathlib import Path, PurePosixPath
 from typing import Annotated
@@ -52,6 +53,15 @@ def expand_multi_value_options(argv: list[str]) -> list[str]:
         current = None
         out.append(token)
     return out
+
+
+def zip_is_intact(path: Path) -> bool:
+    """PyTorch checkpoints are zip archives: check every member's CRC-32 (GitHub publishes no digest)."""
+    try:
+        with zipfile.ZipFile(path) as zf:
+            return zf.testzip() is None
+    except (zipfile.BadZipFile, OSError):
+        return False
 
 
 def _report(label: str, stats: SyncStats) -> None:
@@ -135,7 +145,10 @@ def pnlcalib_weights() -> None:
     with Manifest(root) as manifest:
         for name in PNLCALIB_FILES:
             stats = sync_file(
-                HttpRangeFetcher(f"{PNLCALIB_RELEASE}/{name}"), root / "weights" / "pnlcalib" / name, manifest
+                HttpRangeFetcher(f"{PNLCALIB_RELEASE}/{name}"),
+                root / "weights" / "pnlcalib" / name,
+                manifest,
+                verify=zip_is_intact,
             )
             _report(name, stats)
 

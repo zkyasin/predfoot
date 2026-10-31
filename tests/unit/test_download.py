@@ -120,3 +120,25 @@ def test_sync_file_deletes_a_download_that_fails_its_check(tmp_path):
 )
 def test_multi_value_options_accept_space_separated_values(argv, expected):
     assert download_data.expand_multi_value_options(argv) == expected
+
+
+def test_verify_data_fails_on_one_corrupted_byte(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    spec = importlib.util.spec_from_file_location("verify_data", REPO_ROOT / "scripts" / "verify_data.py")
+    assert spec is not None
+    assert spec.loader is not None
+    verify_data = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(verify_data)
+    monkeypatch.setenv("PREDFOOT_DATA_DIR", str(tmp_path))
+    dest = tmp_path / "weights" / "w.bin"
+    with Manifest(tmp_path) as manifest:
+        sync_file(BytesFetcher(bytes(range(256)) * 4), dest, manifest)
+    runner = CliRunner()
+    assert runner.invoke(verify_data.app, []).exit_code == 0
+    data = bytearray(dest.read_bytes())
+    data[500] ^= 0x80
+    dest.write_bytes(bytes(data))
+    result = runner.invoke(verify_data.app, [])
+    assert result.exit_code == 1
+    assert "SHA256" in result.output
