@@ -19,6 +19,7 @@ dependencies = [
     "jsonschema>=4.23",
     "matplotlib>=3.9",
     "huggingface-hub>=0.26",
+    "scikit-learn>=1.9.1",
 ]
 
 [project.optional-dependencies]

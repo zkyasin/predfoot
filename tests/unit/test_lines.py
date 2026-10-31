@@ -71,3 +71,16 @@ def test_goal_frames_and_arcs_are_ignored(camera):
     xy, _ = intersection_correspondences(lines)
     xy_clean, _ = intersection_correspondences(annotate(camera))
     assert len(xy) == len(xy_clean)
+
+
+def test_non_finite_and_degenerate_annotations_are_skipped(camera):
+    lines = annotate(camera)
+    reference = intersection_correspondences({k: v for k, v in lines.items() if k != "Middle line"})[0]
+    noisy = dict(lines)
+    first = next(iter(noisy))
+    noisy[first] = np.vstack([noisy[first], [[np.nan, np.nan]]])
+    noisy["Middle line"] = np.array([[500.0, 500.0], [500.2, 500.1]])  # sub-pixel span: no direction
+    xy, _ = intersection_correspondences(noisy)
+    assert np.isfinite(xy).all()
+    assert len(xy) == len(reference)  # the NaN point is dropped, the degenerate line ignored
+    assert np.isfinite(line_reprojection_px(camera.H, noisy))

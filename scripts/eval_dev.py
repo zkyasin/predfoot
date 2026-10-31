@@ -29,6 +29,7 @@ from predfoot.calib.lines import intersection_correspondences, line_oracle, line
 from predfoot.calib.solver import LineObservation, SolverConfig, calibrate
 from predfoot.geometry import homography as hg
 from predfoot.geometry.pitch import pnlcalib_keypoints, pnlcalib_lines
+from predfoot.health.features import calibration_features
 from predfoot.keypoints.cache import cache_path, cached_detections
 from predfoot.paths import data_dir, index_dir
 from predfoot.uncertainty.conformal import MondrianConformal, grouped_quantile
@@ -62,14 +63,17 @@ def frame_inputs(det: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[Li
 
 def predict_clip(
     clip_id: str, split: str, game: int, persons: pl.DataFrame, lines: pl.DataFrame
-) -> list[dict]:
+) -> tuple[list[dict], list[dict]]:
+    """Per-frame rows (health features and failure labels) and per-player rows (errors, covariances)."""
     clip_dir = data_dir() / "sn-gsr" / split / clip_id
     n = len(list((clip_dir / "img1").glob("*.jpg")))
     if not cache_path(clip_id, n).exists():
-        return []
+        return [], []
     dets, _, _ = cached_detections(clip_dir, clip_id)
     cfg = SolverConfig()
-    out = []
+    out: list[dict] = []
+    frame_rows: list[dict] = []
+    prev_h = None
     p_by_frame = persons.partition_by("frame", as_dict=True)
     l_by_frame = lines.partition_by("frame", as_dict=True)
     for frame, det in sorted(dets.items()):
@@ -77,8 +81,6 @@ def predict_clip(
         if p is None:
             continue
         p = p.filter(~pl.col("truncated") & pl.col("x_raw").is_not_null())
-        if p.height == 0:
-            continue
         frame_lines = {}
         lf = l_by_frame.get((frame,))
         if lf is not None:
@@ -91,17 +93,31 @@ def predict_clip(
         xy, uv, w, obs = frame_inputs(det)
         rng = np.random.default_rng(frame * 7919 + int(clip_id.split("-")[1]))
         res, _ = calibrate(xy, uv, rng, weights=w, config=cfg, lines=obs)
+        evidence = np.vstack([uv.reshape(-1, 2), *[o.uv for o in obs]]) if obs else uv
+        n_kp = int(sum(KP[int(k)][2] for k in det["kp_ids"]))
+        feats = calibration_features(res, evidence, n_kp, len(obs), det["kp_conf"], prev_h)
+        prev_h = res.H if res.ok else None
+        line_px = line_reprojection_px(res.H, frame_lines) if res.ok else float("nan")
         feet = p.select("foot_u", "foot_v").to_numpy()
         gt = p.select("x_raw", "y_raw").to_numpy()
         tracks = p["track_id"].to_numpy()
         base = {"clip": clip_id, "game": game, "frame": frame, "ok": res.ok, "n_corr": len(xy) + len(obs)}
-        if not res.ok:
-            out.append({**base, "track_id": -1})
+        frame_row = {**base, **feats, "line_px": line_px, "oracle_px": oracle_px, "trusted": trusted}
+        if not res.ok or p.height == 0:
+            frame_rows.append(frame_row | {"err_p90_lab": np.nan, "err_p90_or": np.nan})
             continue
         pred, cov, valid = position_covariance(res.H, res.cov_theta, feet)
         ref_or = hg.backproject(h_or, feet)[0] if trusted else np.full_like(gt, np.nan)
         mpp = np.sqrt(np.abs(np.linalg.det(hg.jacobian_backproject_uv(res.H, feet))))
-        line_px = line_reprojection_px(res.H, frame_lines)
+        e_lab = np.linalg.norm(pred - gt, axis=1)[valid]
+        e_or = np.linalg.norm(pred - ref_or, axis=1)[valid]
+        frame_rows.append(
+            frame_row
+            | {
+                "err_p90_lab": float(np.quantile(e_lab, 0.9)) if len(e_lab) else np.nan,
+                "err_p90_or": float(np.quantile(e_or, 0.9)) if trusted and len(e_or) else np.nan,
+            }
+        )
         for i in np.flatnonzero(valid):
             out.append(
                 {
@@ -116,11 +132,10 @@ def predict_clip(
                     "c11": cov[i, 1, 1],
                     "mpp": mpp[i],
                     "rms_px": res.rms_px,
-                    "line_px": line_px,
                     "dof": res.dof,
                 }
             )
-    return out
+    return frame_rows, out
 
 
 def logo(df: pl.DataFrame, ref: str, rng: np.random.Generator, n_boot: int = 300) -> list[dict]:
@@ -190,22 +205,25 @@ def main(out: Path = Path("reports/m2_logo_dev.md"), max_clips: int = 0) -> None
     persons = pl.read_parquet(index_dir() / "persons.parquet")
     lines = pl.read_parquet(index_dir() / "lines.parquet")
     rows: list[dict] = []
+    frame_rows: list[dict] = []
     for i, c in enumerate(clips.sort("clip_id").iter_rows(named=True)):
         if max_clips and i >= max_clips:
             break
         cp = persons.filter(pl.col("clip_id") == c["clip_id"])
         cl = lines.filter(pl.col("clip_id") == c["clip_id"])
-        rows.extend(predict_clip(c["clip_id"], c["split"], int(c["game_id"]), cp, cl))
-    df = pl.DataFrame(rows, infer_schema_length=None)
+        f_rows, p_rows = predict_clip(c["clip_id"], c["split"], int(c["game_id"]), cp, cl)
+        frame_rows.extend(f_rows)
+        rows.extend(p_rows)
+    players = pl.DataFrame(rows, infer_schema_length=None)
+    frames = pl.DataFrame(frame_rows, infer_schema_length=None)
     sha = subprocess.run(
         ["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True
     ).stdout.strip()
     run_dir = Path("runs") / f"{datetime.now(UTC):%Y%m%d-%H%M}_{sha}"
     run_dir.mkdir(parents=True, exist_ok=True)
-    df.write_parquet(run_dir / "dev_predictions.parquet")
+    players.write_parquet(run_dir / "players.parquet")
+    frames.write_parquet(run_dir / "frames.parquet")
 
-    frames = df.unique(["clip", "frame"])
-    players = df.filter(pl.col("track_id") >= 0)
     n_clips, n_games = players["clip"].n_unique(), players["game"].n_unique()
     col = lambda name: players[name].cast(pl.Float64).fill_null(np.nan).to_numpy()  # noqa: E731
     err_lab = np.hypot(col("ex_lab"), col("ey_lab"))

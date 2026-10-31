@@ -18,12 +18,20 @@ app = typer.Typer(add_completion=False)
 
 
 @app.command()
-def main(splits: list[str] = typer.Option(["train", "valid"]), device: str = "auto") -> None:  # noqa: B008
+def main(
+    splits: list[str] = typer.Option(["train", "valid"]),  # noqa: B008
+    device: str = "auto",
+    reverse: bool = typer.Option(
+        False, help="Walk the clips backwards (to share the work with a second run)."
+    ),
+) -> None:
     if "test" in splits:
         raise typer.BadParameter("the test split stays locked until the preregistration is frozen")
     clip_dirs = sorted(
         d for s in splits for d in (data_dir() / "sn-gsr" / s).glob("SNGS-*") if (d / "img1").is_dir()
     )
+    if reverse:
+        clip_dirs = clip_dirs[::-1]
     t_start, done = time.perf_counter(), 0
     for i, clip_dir in enumerate(clip_dirs, start=1):
         n = len(list((clip_dir / "img1").glob("*.jpg")))

@@ -27,6 +27,15 @@ def fit_image_line(points: ArrayLike) -> FloatArray:
     return np.array([normal[0], normal[1], -normal @ centre])
 
 
+def _clean(points: ArrayLike) -> FloatArray:
+    """Finite points only; empty when fewer than 2 remain or they span less than a pixel."""
+    p = np.asarray(points, dtype=np.float64).reshape(-1, 2)
+    p = p[np.isfinite(p).all(axis=1)]
+    if len(p) < 2 or np.ptp(p, axis=0).max() < 1.0:
+        return np.empty((0, 2))
+    return p
+
+
 def _straight_planar(name: str) -> Segment | None:
     el = _ELEMENTS.get(name)
     return el if isinstance(el, Segment) and el.planar else None
@@ -40,8 +49,8 @@ def intersection_correspondences(lines: Mapping[str, ArrayLike]) -> tuple[FloatA
     """
     fitted = {
         name: (seg, fit_image_line(pts))
-        for name, pts in lines.items()
-        if (seg := _straight_planar(name)) is not None and len(np.asarray(pts)) >= 2
+        for name, raw in lines.items()
+        if (seg := _straight_planar(name)) is not None and len(pts := _clean(raw)) >= 2
     }
     names = sorted(fitted)
     xy, uv = [], []
@@ -75,7 +84,8 @@ def line_reprojection_px(H: ArrayLike | None, lines: Mapping[str, ArrayLike]) ->
         if seg is None:
             continue
         line = hg.image_line(H, seg.a, seg.b)
-        p = np.asarray(pts, dtype=np.float64)
+        p = np.asarray(pts, dtype=np.float64).reshape(-1, 2)
+        p = p[np.isfinite(p).all(axis=1)]
         dists.extend(np.abs(np.c_[p, np.ones(len(p))] @ line).tolist())
     return float(np.mean(dists)) if dists else float("nan")
 
