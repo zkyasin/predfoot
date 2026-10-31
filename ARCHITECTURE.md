@@ -43,8 +43,13 @@ Shared contracts live in `predfoot/contracts.py`; conventions in [ADR-0001](docs
 
 `tracking.jsonl` (one SkillCorner-style record per frame at 10 fps, plus `p90_radius_m`, `pos_cov_m2`,
 `calib_health`, `abstain`; schema `src/predfoot/io/schema/frame-1.0.json`), `match.json`, `meta.json`
-(versions, hashes, conformal quantiles), `metrics.json`, `minimap.png` and, later, `qa_report.html`.
+(versions, hashes, the stages that ran, the conformal model and its quantiles), `metrics.json`, `minimap.png`
+and `qa_report.html` (`predfoot.viz.qa_report`: a self-contained HTML page, rebuilt by `predfoot qa`).
 
 Runs are processed in blocks of export frames written atomically to `OUT/.parts/`. A re-run with the same
 input, configuration and stages reuses the finished blocks, so a killed run resumes to byte-identical files
 (only `metrics.json`, which holds timings, differs).
+
+The real stages are pinned by a golden test: synthetic detections of a known camera
+(`tests/fixtures/golden/`) through calibration, conformal regions, localization and export, compared with
+committed outputs.

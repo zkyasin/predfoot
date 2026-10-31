@@ -56,13 +56,64 @@ uv run predfoot validate out/tracking.jsonl --match out/match.json
 ```
 
 `out/` then holds `tracking.jsonl` (SkillCorner open-data schema at 10 fps, plus `p90_radius_m`, `pos_cov_m2`,
-`calib_health` and `abstain`), `match.json` (loadable with kloppy), `meta.json`, `metrics.json` and
-`minimap.png`. A killed run resumes from its finished blocks and produces the same bytes. The synthetic clip
-comes from `scripts/make_synthetic_clip.py`; the frame schema is `src/predfoot/io/schema/frame-1.0.json`.
+`calib_health` and `abstain`), `match.json` (loadable with kloppy), `meta.json` (versions, hashes, the stages
+that ran and their conformal model), `metrics.json`, `minimap.png` and `qa_report.html`. A killed run resumes
+from its finished blocks and produces the same bytes (only `metrics.json`, which holds timings, differs). The
+synthetic clip comes from `scripts/make_synthetic_clip.py`; the frame schema is
+`src/predfoot/io/schema/frame-1.0.json`.
+
+### QA report
+
+`qa_report.html` is one self-contained file that opens offline: inline CSS and SVG, the minimap embedded as
+a PNG, no script and no external reference (a Content-Security-Policy forbids loading anything), every string
+from the run files escaped. It shows the run summary (frames, published share, abstentions, provenance and
+stages), the validation of the outputs plus consistency checks between `metrics.json`, `match.json` and
+`tracking.jsonl`, a timeline of calibration health, abstentions and median p90 radius per frame, the
+distribution of the p90 radii, the worst frames, the abstained spans and short definitions of the fields.
+`predfoot qa` rebuilds it from the outputs of a finished run, byte for byte:
 
 ```bash
-docker build -f docker/Dockerfile.cpu -t predfoot:cpu .   # CPU image, no torch
+uv run predfoot qa out/                       # → out/qa_report.html
+uv run predfoot qa out/ --output report.html
 ```
+
+## Docker
+
+`docker/Dockerfile.cpu` builds two CPU images without torch, both running as an unprivileged user
+(uid 10001):
+
+| Target | Contents | Default command |
+|---|---|---|
+| `cli` (default) | The command-line tools | `predfoot --help` |
+| `serve` | The tools and the HTTP API (extra `serve`); `EXPOSE 8000`, a `HEALTHCHECK` on `/healthz` | `predfoot serve --host 0.0.0.0 --port 8000` |
+
+```bash
+docker build -f docker/Dockerfile.cpu --build-arg GIT_SHA="$(git rev-parse HEAD)" -t predfoot:cli .
+mkdir -p out && chmod 0777 out
+docker run --rm -v "$PWD/tests/fixtures:/in:ro" -v "$PWD/out:/out" \
+    predfoot:cli run /in/synthetic_clip.json --out /out
+docker run --rm -v "$PWD/out:/out:ro" predfoot:cli validate /out/tracking.jsonl --match /out/match.json
+
+docker build -f docker/Dockerfile.cpu --target serve -t predfoot:serve .
+docker run --rm -p 8000:8000 predfoot:serve
+```
+
+In the `serve` image, `/healthz`, `/v1/localize` and `/metrics` work; `/v1/calibrate` answers 503 because the
+keypoint networks need torch (extra `vision`), which the CPU images leave out. The `docker` workflow builds
+both targets on every pull request that touches the package and smoke-tests them: `predfoot run`, `validate`
+and `qa` in the `cli` image; in the `serve` image, a healthy `HEALTHCHECK`, `POST /v1/localize` (200, finite
+values), `POST /v1/calibrate` (503) and `/metrics`. Nothing is pushed there.
+
+### Release
+
+Bump `version` in `pyproject.toml`, merge, then push a tag `v<version>`. The `release` workflow checks that
+the tag matches the package version, smoke-tests both images and pushes them to the GitHub Container Registry
+with `GITHUB_TOKEN`, with OCI labels (source, revision, version, licence):
+
+| Image | Tags |
+|---|---|
+| `ghcr.io/zkyasin/predfoot` (cli) | `<version>`, `sha-<commit>` |
+| `ghcr.io/zkyasin/predfoot` (serve) | `<version>-serve`, `sha-<commit>-serve` |
 
 ## Serving
 
@@ -114,6 +165,16 @@ uv sync --extra vision       # + torch, for the keypoint model
 uv sync --extra serve        # + FastAPI, for the HTTP API and its tests (CI installs it)
 uv run pre-commit install
 uv run pytest
+```
+
+The golden test (`tests/integration/test_golden_real.py`) runs the real stages (calibration, conformal
+regions, localization, export) on synthetic network detections of a known camera, committed in
+`tests/fixtures/golden/`, and compares the outputs with `tests/fixtures/golden/expected/`: exact on structure,
+ids and flags, within one unit of the last written decimal on numbers (macOS and Linux round a few values
+differently). After an intended change of the outputs, regenerate and review the diff:
+
+```bash
+uv run python scripts/make_golden.py --update
 ```
 
 Datasets are downloaded at runtime and never committed. Set `PREDFOOT_DATA_DIR` to share them between

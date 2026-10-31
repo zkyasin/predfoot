@@ -41,3 +41,18 @@ the project uses [semantic versioning](https://semver.org/).
   (`scripts/export_onnx.py`, extra `export`; heatmaps within 1e-4, the same detections, decoded keypoints
   within 0.5 px) and a latency benchmark on PyTorch CPU, MPS and CUDA and ONNX Runtime CPU, CoreML and CUDA
   (`scripts/bench_latency.py`, `reports/latency_m4.md`).
+- QA report: `predfoot run` writes `qa_report.html` next to `tracking.jsonl`, and `predfoot qa OUT` rebuilds it
+  from the outputs of a run. One self-contained file (inline CSS and SVG, no script, no external reference)
+  with the run summary, the validation of the outputs and consistency checks, a timeline of calibration
+  health, abstentions and p90 radii, the distribution of the radii, the worst frames and field definitions.
+- Docker: a `serve` target next to the default `cli` one (API extra, port 8000, `HEALTHCHECK` on `/healthz`,
+  numeric non-root user); the `docker` workflow builds and smoke-tests both; a `release` workflow pushes both
+  images to `ghcr.io/zkyasin/predfoot` on `v*` tags, with version and commit tags and OCI labels.
+- Golden test of the real stages on committed synthetic detections (`scripts/make_golden.py --update`
+  regenerates the expected outputs), detection files as JSON (`predfoot-detections/1`) and a generator of
+  network-style detections from a known camera.
+
+### Fixed
+- `meta.json` described every stage as a stub and the conformal model as null even when the real stages ran
+  with a Mondrian model; stages now describe themselves, and the real ones record their model (hash, alpha,
+  pooled quantile, edges, per-bin quantiles).
