@@ -76,3 +76,27 @@ def test_networks_load_and_run_on_a_blank_frame():
     assert hl.shape == (1, 23, 270, 480)
     assert np.isfinite(hk).all()
     assert np.isfinite(hl).all()
+
+
+def test_parity_measures_decoded_shifts_in_frame_pixels():
+    # the ONNX parity check on synthetic heatmaps: no runtime needed
+    from predfoot.keypoints.onnx_models import parity
+    from predfoot.keypoints.pnlcalib import N_KEYPOINTS, N_LINES
+
+    def heatmaps(kp_centre, line_ends):
+        hk = np.zeros((1, N_KEYPOINTS, 270, 480), dtype=np.float32)
+        hk[0, 0] = gaussian_map(270, 480, [kp_centre])
+        hl = np.zeros((1, N_LINES, 270, 480), dtype=np.float32)
+        hl[0, 4] = gaussian_map(270, 480, line_ends)
+        return hk, hl
+
+    reference = heatmaps((100.0, 50.0), [(20.0, 30.0), (200.0, 150.0)])
+    same = parity(reference, reference, (1920, 1080))
+    assert same.ok
+    assert (same.max_abs_heatmap, same.max_keypoint_px, same.max_line_end_px, same.n_flips) == (0, 0, 0, 0)
+    assert same.n_points == 3  # one keypoint, two line ends
+    # a keypoint 0.25 cell away is 1 px away in a 1920 × 1080 frame (stride 2, input 960 × 540): too far
+    moved = parity(reference, heatmaps((100.25, 50.0), [(200.0, 150.0), (20.0, 30.0)]), (1920, 1080))
+    assert moved.max_keypoint_px == pytest.approx(1.0, abs=0.05)
+    assert moved.max_line_end_px == pytest.approx(0.0, abs=1e-6)  # the order of the two ends does not matter
+    assert not moved.ok
