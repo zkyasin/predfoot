@@ -110,3 +110,31 @@ def validate(
     more = "+" if report.truncated else ""
     typer.echo(f"FAILED: {len(report.issues)}{more} problem(s) in {report.n_records} records", err=True)
     raise typer.Exit(code=1)
+
+
+@app.command()
+def serve(
+    host: Annotated[
+        str, typer.Option(help="Interface to listen on (0.0.0.0 for every interface).")
+    ] = "127.0.0.1",
+    port: Annotated[int, typer.Option(help="TCP port.")] = 8000,
+    device: Annotated[
+        str, typer.Option(help="Torch device of /v1/calibrate: auto, cpu, mps or cuda.")
+    ] = "auto",
+    preload: Annotated[
+        bool,
+        typer.Option(help="Load the keypoint networks at start-up rather than on the first calibration."),
+    ] = False,
+) -> None:
+    """Serve the HTTP API: /healthz, /v1/localize, /v1/calibrate and /metrics (OpenAPI docs at /docs).
+
+    Needs the 'serve' extra; /v1/calibrate also needs the 'vision' extra and the PnLCalib weights.
+    """
+    try:
+        import uvicorn
+
+        from predfoot.serve.app import create_app
+    except ImportError as err:
+        typer.echo(f"predfoot serve needs the 'serve' extra (uv sync --extra serve): {err}", err=True)
+        raise typer.Exit(code=2) from err
+    uvicorn.run(create_app(device=device, preload=preload), host=host, port=port)
