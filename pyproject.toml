@@ -25,8 +25,16 @@ dependencies = [
 [project.optional-dependencies]
 # Neural networks (keypoint model, critic). Kept out of CI to keep it fast.
 vision = ["torch>=2.5", "torchvision>=0.20"]
-serve = ["fastapi>=0.115", "uvicorn>=0.30"]
-export = ["onnx>=1.17", "onnxruntime>=1.20"]
+# HTTP API (`predfoot serve`): python-multipart parses the uploads of /v1/calibrate, pillow reads image headers.
+serve = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "prometheus-client>=0.21",
+    "python-multipart>=0.0.18",
+    "pillow>=10",
+]
+# ONNX export of the keypoint networks and ONNX Runtime inference (scripts/export_onnx.py, bench_latency.py).
+export = ["onnx>=1.17", "onnxruntime>=1.20", "onnxscript>=0.3"]
 cloud = [
     "modal>=1.6",
 ]
@@ -44,6 +52,7 @@ dev = [
     "pip-licenses>=5.0",
     "kloppy>=3.15",
     "types-pyyaml",
+    "httpx2>=2.0",  # HTTP client of fastapi.testclient (starlette prefers httpx2 to httpx)
 ]
 
 [build-system]

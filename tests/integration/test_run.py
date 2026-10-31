@@ -19,9 +19,9 @@ from tests.cli_output import PLAIN_ENV, plain
 from tests.fixtures import FIXTURES
 
 CLIP = FIXTURES / "synthetic_clip.json"
-OUTPUTS = ("tracking.jsonl", "match.json", "meta.json", "metrics.json", "minimap.png")
+OUTPUTS = ("tracking.jsonl", "match.json", "meta.json", "metrics.json", "minimap.png", "qa_report.html")
 #: Everything but metrics.json, which records timings and reused blocks.
-STABLE = ("tracking.jsonl", "match.json", "meta.json", "minimap.png")
+STABLE = ("tracking.jsonl", "match.json", "meta.json", "minimap.png", "qa_report.html")
 
 
 @pytest.fixture(scope="module")
@@ -215,6 +215,12 @@ def test_blocks_from_other_stages_are_never_reused(tmp_path, monkeypatch):
     result = run_clip(CLIP, tmp_path, config, stages=other)
     assert result.blocks_reused == 0
     assert json.loads((tmp_path / "meta.json").read_text())["config"]["stages"] == "calib-v2"
+
+
+def test_the_same_rate_written_as_int_or_float_is_one_configuration():
+    assert RunConfig(export_fps=10).output_settings() == RunConfig(export_fps=10.0).output_settings()
+    assert json.dumps(RunConfig(export_fps=10).output_settings()) == json.dumps(RunConfig().output_settings())
+    assert RunConfig().output_settings()["export_fps"] == 10.0
 
 
 def test_run_config_rejects_bad_settings():

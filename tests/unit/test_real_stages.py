@@ -94,6 +94,8 @@ def test_temporal_stages_smooth_a_ptz_clip(rng):
     per_frame = real_stages(dets, conformal=None, version="v")
     smoothed = real_stages(dets, conformal=None, version="v", temporal=(cfg, params))
     assert smoothed.version == f"v+ptz-{cfg.digest()}-{params.digest()}"
+    assert "smoothing" in smoothed.description["calibration"]
+    assert "smoothing" not in per_frame.description["calibration"]
     raw = [per_frame.calibrate(ClipFrame(frame=k)) for k in range(30)]
     out = [smoothed.calibrate(ClipFrame(frame=k)) for k in range(30)]
     assert all(r.ok for r in out)

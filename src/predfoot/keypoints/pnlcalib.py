@@ -107,12 +107,12 @@ class PnLCalibNetworks:
 
     def heatmaps(self, frames_rgb: NDArray[np.uint8]) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
         """Raw heatmaps for frames (B, H, W, 3) uint8 RGB: keypoints (B, 57, h, w), lines (B, 23, h, w)."""
-        import torch
-        from torchvision.transforms.functional import resize
+        return self.heatmaps_from_input(preprocess(frames_rgb))
 
-        x = torch.from_numpy(np.ascontiguousarray(frames_rgb)).permute(0, 3, 1, 2).float() / 255.0
-        if (x.shape[-1], x.shape[-2]) != INPUT_SIZE:
-            x = resize(x, [INPUT_SIZE[1], INPUT_SIZE[0]], antialias=True)
+    def heatmaps_from_input(self, x: Any) -> tuple[NDArray[np.float32], NDArray[np.float32]]:
+        """Heatmaps, background channel dropped, for a batch made by :func:`preprocess` (a CPU tensor)."""
+        import torch
+
         with torch.inference_mode():
             x = x.to(self.device)
             hk = self.kp(x)[:, :-1].float().cpu().numpy()
@@ -128,21 +128,47 @@ class PnLCalibNetworks:
         """Keypoints and line ends, in pixels of the original frames."""
         frame_size = (frames_rgb.shape[2], frames_rgb.shape[1])
         hk, hl = self.heatmaps(frames_rgb)
-        out = []
-        for b in range(len(frames_rgb)):
-            cells, score = decode_peaks(hk[b])
-            keep = score > kp_threshold
-            kps = KeypointObs(
-                ids=np.flatnonzero(keep).astype(np.int64) + 1,
-                uv=cells_to_pixels(cells[keep], STRIDE, INPUT_SIZE, frame_size),
-                conf=score[keep],
-            )
-            ends, escore = decode_two_peaks(hl[b])
-            lkeep = (escore > line_threshold).all(axis=1)
-            lines = LineEnds(
-                line_ids=np.flatnonzero(lkeep).astype(np.int64) + 1,
-                uv=cells_to_pixels(ends[lkeep], STRIDE, INPUT_SIZE, frame_size),
-                conf=escore[lkeep],
-            )
-            out.append((kps, lines))
-        return out
+        return decode_detections(hk, hl, frame_size, kp_threshold, line_threshold)
+
+
+def preprocess(frames_rgb: NDArray[np.uint8]) -> Any:
+    """Network input for frames (B, H, W, 3) uint8 RGB: a float32 CPU tensor (B, 3, 540, 960) in [0, 1].
+
+    Frames of another size are resized with antialiasing; there is no mean/std normalisation.
+    """
+    import torch
+    from torchvision.transforms.functional import resize
+
+    x = torch.from_numpy(np.ascontiguousarray(frames_rgb)).permute(0, 3, 1, 2).float() / 255.0
+    if (x.shape[-1], x.shape[-2]) != INPUT_SIZE:
+        x = resize(x, [INPUT_SIZE[1], INPUT_SIZE[0]], antialias=True)
+    return x
+
+
+def decode_detections(
+    hk: NDArray[np.floating],
+    hl: NDArray[np.floating],
+    frame_size: tuple[int, int],
+    kp_threshold: float = KEYPOINT_THRESHOLD,
+    line_threshold: float = LINE_THRESHOLD,
+) -> list[tuple[KeypointObs, LineEnds]]:
+    """Keypoints and line ends from heatmaps (B, 57, h, w) and (B, 23, h, w), whatever runtime made them, in
+    pixels of the original frames of ``frame_size`` (width, height)."""
+    out = []
+    for b in range(len(hk)):
+        cells, score = decode_peaks(hk[b])
+        keep = score > kp_threshold
+        kps = KeypointObs(
+            ids=np.flatnonzero(keep).astype(np.int64) + 1,
+            uv=cells_to_pixels(cells[keep], STRIDE, INPUT_SIZE, frame_size),
+            conf=score[keep],
+        )
+        ends, escore = decode_two_peaks(hl[b])
+        lkeep = (escore > line_threshold).all(axis=1)
+        lines = LineEnds(
+            line_ids=np.flatnonzero(lkeep).astype(np.int64) + 1,
+            uv=cells_to_pixels(ends[lkeep], STRIDE, INPUT_SIZE, frame_size),
+            conf=escore[lkeep],
+        )
+        out.append((kps, lines))
+    return out
