@@ -6,16 +6,21 @@ for network inference twice. The cache key is the model family and the number of
 
 from __future__ import annotations
 
+import json
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
 
+from predfoot.geometry.pitch import pnlcalib_keypoints, pnlcalib_lines
 from predfoot.paths import cache_dir, data_dir
 
 MODEL_FAMILY = "pnlcalib-sv"
+#: Format of detections stored as JSON (small committed fixtures; the cache itself is .npz).
+DETECTIONS_FORMAT = "predfoot-detections/1"
 
 
 def _read_rgb(path: Path) -> NDArray[np.uint8]:
@@ -75,3 +80,77 @@ def save_detections(path: Path, dets: dict[int, dict[str, Any]], seconds: float,
     tmp = path.with_suffix(".tmp.npz")
     np.savez(tmp, dets=np.array(dets, dtype=object), seconds=seconds, version=version)
     tmp.replace(path)
+
+
+def dumps_detections(dets: Mapping[int, Mapping[str, Any]], model_version: str, decimals: int = 3) -> str:
+    """Detections as JSON (format ``predfoot-detections/1``), one frame per line so that diffs stay readable.
+
+    ``dets`` maps frame indices to the cache layout (``kp_ids``, ``kp_uv``, ``kp_conf``, ``line_ids``,
+    ``line_uv``); pixels and confidences are rounded to ``decimals``.
+    """
+
+    def rounded(values: Any) -> Any:
+        return np.round(np.asarray(values, dtype=np.float64), decimals).tolist()
+
+    frames = [
+        json.dumps(
+            {
+                "frame": int(f),
+                "kp_ids": [int(k) for k in d["kp_ids"]],
+                "kp_uv": rounded(np.reshape(d["kp_uv"], (-1, 2))),
+                "kp_conf": rounded(d["kp_conf"]),
+                "line_ids": [int(k) for k in d["line_ids"]],
+                "line_uv": rounded(np.reshape(d["line_uv"], (-1, 2, 2))),
+            },
+            allow_nan=False,
+        )
+        for f, d in sorted(dets.items())
+    ]
+    head = f'{{"format": {json.dumps(DETECTIONS_FORMAT)}, "model_version": {json.dumps(model_version)},'
+    return head + '\n "frames": [\n  ' + ",\n  ".join(frames) + "\n]}\n"
+
+
+def _array(values: Any, shape: tuple[int, ...], what: str, dtype: type = np.float64) -> NDArray[Any]:
+    try:
+        arr = np.asarray(values, dtype=dtype)
+    except (TypeError, ValueError) as err:
+        raise ValueError(f"{what}: {err}") from err
+    if arr.size == 0:
+        arr = arr.reshape((0, *shape[1:]))
+    if arr.ndim != len(shape) or any(s not in (-1, n) for s, n in zip(shape, arr.shape, strict=True)):
+        raise ValueError(f"{what} has shape {arr.shape}, expected {shape} (-1: any)")
+    if not np.all(np.isfinite(arr)):
+        raise ValueError(f"{what} must be finite")
+    return arr
+
+
+def load_detections(path: Path) -> tuple[dict[int, dict[str, Any]], str]:
+    """Read a ``predfoot-detections/1`` file: ({frame: cache-layout dict}, model version).
+
+    Raises ``ValueError`` on anything malformed: shapes, lengths, non-finite values, duplicate frames.
+    """
+    raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(raw, dict) or raw.get("format") != DETECTIONS_FORMAT:
+        raise ValueError(f"{path}: not a {DETECTIONS_FORMAT} file")
+    out: dict[int, dict[str, Any]] = {}
+    for entry in raw.get("frames", []):
+        frame = entry.get("frame") if isinstance(entry, dict) else None
+        if not isinstance(frame, int) or isinstance(frame, bool) or frame < 0 or frame in out:
+            raise ValueError(f"{path}: frame {frame!r} is not a new non-negative integer")
+        where = f"{path}: frame {frame}"
+        ids = _array(entry.get("kp_ids"), (-1,), f"{where} kp_ids", np.int64)
+        line_ids = _array(entry.get("line_ids"), (-1,), f"{where} line_ids", np.int64)
+        unknown = sorted(set(ids.tolist()) - set(pnlcalib_keypoints())) + sorted(
+            set(line_ids.tolist()) - set(pnlcalib_lines())
+        )
+        if unknown:
+            raise ValueError(f"{where}: unknown keypoint or line ids {unknown}")
+        det = {
+            "kp_ids": ids,
+            "kp_uv": _array(entry.get("kp_uv"), (len(ids), 2), f"{where} kp_uv"),
+            "kp_conf": _array(entry.get("kp_conf"), (len(ids),), f"{where} kp_conf"),
+            "line_ids": line_ids,
+            "line_uv": _array(entry.get("line_uv"), (len(line_ids), 2, 2), f"{where} line_uv"),
+        }
+        out[frame] = det
+    return out, str(raw.get("model_version", ""))
