@@ -234,3 +234,29 @@ def test_compare_labels_are_distinct(tmp_path):
     runs = [tmp_path / "run_a" / "players.parquet", tmp_path / "run_b" / "players.parquet"]
     assert error_process.camera_labels(runs) == ["run_a", "run_b"]
     assert error_process.camera_labels([tmp_path / "players.parquet"])[0]
+
+
+def test_robust_common_mode_steps_ignore_one_failed_frame():
+    """Common-mode errors alternating by ±0.1 m on both axes (every step 0.2 m) and one frame 50 m off: the
+    two steps around it dominate the pooled RMS, while the RMS without errors of 10 m or more and the median
+    absolute step stay at 0.2 m. Steps across a missing cached frame are not steps."""
+    n = 40
+    sign = (-1.0) ** np.arange(n)
+    ex, ey = 0.1 * sign, 0.1 * sign
+    ex[20] = 50.0
+    d = pl.DataFrame(
+        {
+            "clip": "c",
+            "frame": np.repeat(5 * np.arange(n), 3),
+            "track_id": np.tile([1, 2, 3], n),
+            "ex_sm": np.repeat(ex, 3),
+            "ey_sm": np.repeat(ey, 3),
+        }
+    )
+    assert eval_dev.common_steps(d).shape == (n - 1, 2)
+    assert eval_dev.common_steps(d, max_error_m=10.0).shape == (n - 3, 2)
+    rms, rms_robust, median = eval_dev.step_stats(d)
+    assert rms == pytest.approx(np.sqrt((37 * 2 * 0.04 + 2 * (50.1**2 + 0.04)) / 78), rel=1e-9)
+    assert rms > 30 * rms_robust  # 8.0 m against 0.2 m
+    assert rms_robust == pytest.approx(0.2, rel=1e-9)
+    assert median == pytest.approx(0.2, rel=1e-9)

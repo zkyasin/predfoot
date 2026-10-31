@@ -73,6 +73,7 @@ ALPHA = 0.1
 NATIVE_FPS = 25.0
 IMAGE_SIZE = (1920, 1080)
 FAIL_LINE_PX = 10.0
+STEP_MAX_ERROR_M = 10.0  # as scripts/error_process.py: larger errors are calibration failures (abstention)
 FLAGS = (
     "smoothed", "repaired", "filled", "bridged", "projected", "passthrough", "duplicate", "rejected",
     "unchecked",
@@ -700,23 +701,39 @@ def _err(d: pl.DataFrame, ref: str) -> np.ndarray:
     return np.hypot(d[f"ex_{ref}"].to_numpy(), d[f"ey_{ref}"].to_numpy())
 
 
-def common_steps(d: pl.DataFrame, ref: str = "sm") -> tuple[float, int]:
-    """Sum of squared lag-1 steps of the per-frame median error over consecutive cached frames, and count."""
-    total, count = 0.0, 0
+def common_steps(d: pl.DataFrame, ref: str = "sm", max_error_m: float | None = None) -> np.ndarray:
+    """Lag-1 steps (n, 2) of the per-frame median error over consecutive cached frames, pooled over clips.
+
+    With ``max_error_m``, player-frames whose error is at least that large are left out first, as in
+    scripts/error_process.py.
+    """
+    if max_error_m is not None:
+        d = d.filter((pl.col(f"ex_{ref}") ** 2 + pl.col(f"ey_{ref}") ** 2) < max_error_m**2)
+    parts = [np.zeros((0, 2))]
     for (_clip,), g in d.partition_by("clip", as_dict=True).items():
         c = g.group_by("frame").agg(pl.col(f"ex_{ref}").median(), pl.col(f"ey_{ref}").median()).sort("frame")
         f = c["frame"].to_numpy()
         e = c.select(f"ex_{ref}", f"ey_{ref}").to_numpy()
         step = np.diff(e, axis=0)[np.diff(f) == 5]
-        step = step[np.isfinite(step).all(axis=1)]
-        total += float(np.sum(step**2))
-        count += step.size
-    return total, count
+        parts.append(step[np.isfinite(step).all(axis=1)])
+    return np.concatenate(parts)
 
 
-def step_rms(d: pl.DataFrame, ref: str = "sm") -> float:
-    total, count = common_steps(d, ref)
-    return float(np.sqrt(total / count)) if count else float("nan")
+def step_rms(d: pl.DataFrame, ref: str = "sm", max_error_m: float | None = None) -> float:
+    """RMS per axis of the common-mode steps (see :func:`common_steps`)."""
+    s = common_steps(d, ref, max_error_m)
+    return float(np.sqrt(np.mean(s**2))) if s.size else float("nan")
+
+
+def step_median(d: pl.DataFrame, ref: str = "sm") -> float:
+    """Median absolute common-mode step per axis: a few huge steps (one failed frame) do not move it."""
+    s = common_steps(d, ref)
+    return float(np.median(np.abs(s))) if s.size else float("nan")
+
+
+def step_stats(d: pl.DataFrame, ref: str = "sm") -> tuple[float, float, float]:
+    """Common-mode step RMS, RMS without errors of ``STEP_MAX_ERROR_M`` or more, and median absolute step."""
+    return step_rms(d, ref), step_rms(d, ref, STEP_MAX_ERROR_M), step_median(d, ref)
 
 
 def temporal_section(
@@ -855,28 +872,40 @@ def temporal_section(
         " the common-mode error (per-frame median over players) against the smoothed labels:",
         "",
         "| Camera | Labels p50 | p90 | p99 | Line oracle p50 | p90 | p99 | Smoothed labels p50 | p90 | p99 |"
-        " Common-mode step RMS (m) |",
-        "|---|---|---|---|---|---|---|---|---|---|---|",
+        f" Common-mode step RMS (m) | RMS, errors < {STEP_MAX_ERROR_M:g} m | Median abs. step (m) |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     raw_view = joined.select(*keys, *[pl.col(f"{c}_raw").alias(c) for c in err_cols])
-    s_raw, s_out = step_rms(raw_view), step_rms(joined)
-    for name, view in (("per-frame", raw_view), (f"{smooth}", joined)):
+    s_raw, s_out = step_stats(raw_view), step_stats(joined)
+    for name, view, st in (("per-frame", raw_view, s_raw), (f"{smooth}", joined, s_out)):
         md.append(
             f"| {name} | {q3(_err(view, 'lab'))} | {q3(_err(view, 'or'))} | {q3(_err(view, 'sm'))} |"
-            f" {step_rms(view):.3f} |"
+            f" {st[0]:.3f} | {st[1]:.3f} | {st[2]:.3f} |"
         )
     ratios = []
     for (clip,), g in joined.partition_by("clip", as_dict=True).items():
-        rv = raw_view.filter(pl.col("clip") == clip)
-        ratios.append((clip, step_rms(rv), step_rms(g)))
+        a, b = step_stats(raw_view.filter(pl.col("clip") == clip)), step_stats(g)
+        ratios.append((clip, a, b))
+    per_clip = np.array([[b[i] / a[i] for i in range(3)] for _, a, b in ratios])
     md += [
         "",
-        f"Common-mode step RMS ratio {smooth} / per-frame: pooled {s_out / s_raw:.2f}; per clip median"
-        f" {np.median([b / a for _, a, b in ratios]):.2f}, worst {max(b / a for _, a, b in ratios):.2f}.",
+        f"Common-mode step ratio {smooth} / per-frame, pooled over clips: RMS {s_out[0] / s_raw[0]:.2f},"
+        f" RMS without errors of {STEP_MAX_ERROR_M:g} m or more {s_out[1] / s_raw[1]:.2f}, median absolute"
+        f" step {s_out[2] / s_raw[2]:.2f}; RMS ratio per clip: median {np.nanmedian(per_clip[:, 0]):.2f},"
+        f" worst {np.nanmax(per_clip[:, 0]):.2f}. One failed frame makes steps of tens of metres that"
+        " dominate the plain RMS: read the robust ratios.",
     ]
     if len(ratios) <= 10:
-        md += ["", "| Clip | Step RMS per-frame (m) | Step RMS output (m) | Ratio |", "|---|---|---|---|"]
-        md += [f"| {c} | {a:.3f} | {b:.3f} | {b / a:.2f} |" for c, a, b in sorted(ratios)]
+        md += [
+            "",
+            "| Clip | Step RMS per-frame (m) | Step RMS output (m) | Ratio |"
+            f" Ratio, errors < {STEP_MAX_ERROR_M:g} m | Median-step ratio |",
+            "|---|---|---|---|---|---|",
+        ]
+        md += [
+            f"| {c} | {a[0]:.3f} | {b[0]:.3f} | {b[0] / a[0]:.2f} | {b[1] / a[1]:.2f} | {b[2] / a[2]:.2f} |"
+            for c, a, b in sorted(ratios)
+        ]
     # filled frames
     filled = players.filter(pl.col("filled"))
     md += [
