@@ -178,6 +178,9 @@ class HttpRangeFetcher:
     offsets computed earlier would no longer be valid.
     """
 
+    #: Re-resolutions allowed within one :meth:`fetch` before a refusal is treated as permanent.
+    MAX_REFRESHES = 2
+
     def __init__(
         self,
         url: str,
@@ -237,10 +240,12 @@ class HttpRangeFetcher:
             return b""
         want = stop - start
         last: BaseException | None = None
+        refreshes = 0
         for attempt in range(self.max_retries + 1):
             url = self._current_url()
+            headers = {"Range": f"bytes={start}-{stop - 1}", **self._auth_headers(url)}
             try:
-                resp = self._request(url, {"Range": f"bytes={start}-{stop - 1}"}, max_body=want)
+                resp = self._request(url, headers, max_body=want)
             except _NETWORK_ERRORS as exc:
                 last = exc
                 self._backoff(attempt)
@@ -258,10 +263,12 @@ class HttpRangeFetcher:
             elif resp.status == 200 and start == 0 and stop == size and len(resp.body) == size:
                 return resp.body
             elif resp.status in _REFRESH or resp.status in _REDIRECTS:
-                last = RemoteError(f"HTTP {resp.status} on the resolved URL of {self.url}")
+                refreshes += 1
+                if refreshes > self.MAX_REFRESHES:  # a fresh URL is refused too: not an expiry
+                    raise RemoteError(f"HTTP {resp.status}: {self.url} refused even after resolving it again")
                 self._invalidate(url)
-                if attempt:  # the first refresh is immediate: an expired signature is the common case
-                    self._backoff(attempt - 1)
+                if refreshes > 1:  # the first refresh is immediate: an expired signature is the common case
+                    self._backoff(refreshes - 2)
             elif resp.status in _TRANSIENT:
                 last = RemoteError(f"HTTP {resp.status} for {self.url}")
                 self._backoff(attempt)
@@ -297,14 +304,17 @@ class HttpRangeFetcher:
             if self._final_url == url:
                 self._final_url = None
 
+    def _auth_headers(self, url: str) -> dict[str, str]:
+        """The token goes to the original host over HTTPS only, never to the hosts it redirects to."""
+        here, origin = urlsplit(url), urlsplit(self.url)
+        if self._token and here.scheme == "https" and here.netloc == origin.netloc:
+            return {"Authorization": f"Bearer {self._token}"}
+        return {}
+
     def _follow(self) -> tuple[HttpResponse, str]:
         url = self.url
-        origin = urlsplit(self.url)
         for _ in range(self.max_redirects + 1):
-            here = urlsplit(url)
-            headers = {"Range": "bytes=0-0"}
-            if self._token and (here.scheme, here.netloc) == ("https", origin.netloc):
-                headers["Authorization"] = f"Bearer {self._token}"
+            headers = {"Range": "bytes=0-0", **self._auth_headers(url)}
             resp = self._request(url, headers, max_body=1)
             if resp.status in _REDIRECTS and "location" in resp.headers:
                 url = urljoin(url, resp.headers["location"])

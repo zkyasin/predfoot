@@ -57,7 +57,10 @@ def test_invalid_selections_are_rejected(clips):
 
 @pytest.mark.data
 def test_spike_clips_match_the_index():
-    clips = pl.read_parquet(paths.index_dir() / "clips.parquet")
+    index = paths.index_dir() / "clips.parquet"
+    if not index.exists():
+        pytest.skip("SN-GSR index not built (scripts/build_index.py)")
+    clips = pl.read_parquet(index)
     for clip in load_clip_selection(SPIKE).clips:
         row = clips.filter(clip_id=clip.clip_id).row(0, named=True)
         assert (row["split"], row["game_id"], row["action_class"]) == (

@@ -418,3 +418,41 @@ def test_lists_a_real_sn_gsr_split():
     labels = [n for n in remote.namelist() if n.endswith("Labels-GameState.json")]
     assert len(labels) == 58
     assert remote.fetcher.size > 10e9
+
+
+class GatedOrigin:
+    """A gated repo serving a small (non-LFS) file directly from the origin: no redirect, token required."""
+
+    def __init__(self, data: bytes, token: str) -> None:
+        self.data, self.token = data, token
+        self.requests: list[dict[str, str]] = []
+
+    def __call__(self, method, url, headers, *, max_body, timeout):
+        self.requests.append(dict(headers))
+        if headers.get("Authorization") != f"Bearer {self.token}":
+            return HttpResponse(401, {}, b"Access to dataset is restricted")
+        first, last = map(int, re.fullmatch(r"bytes=(\d+)-(\d+)", headers["Range"]).groups())
+        last = min(last, len(self.data) - 1)
+        body = self.data[first : last + 1][:max_body]
+        return HttpResponse(206, {"content-range": f"bytes {first}-{last}/{len(self.data)}"}, body)
+
+
+def test_files_served_by_the_origin_itself_keep_the_token():
+    server = GatedOrigin(b"0123456789" * 10, token="hf_secret")
+    fetcher = HttpRangeFetcher(
+        "https://hub.test/f.json", token="hf_secret", transport=server, sleep=lambda s: None
+    )
+    assert fetcher.fetch(10, 20) == b"0123456789"
+    assert all(h.get("Authorization") == "Bearer hf_secret" for h in server.requests)
+
+
+def test_a_persistent_refusal_after_refreshing_fails_fast():
+    server, sleeps = FakeServer(bytes(range(100))), []
+    fetcher = make_fetcher(server, sleeps)
+    fetcher.size  # noqa: B018
+    server.failures = [lambda: HttpResponse(403, {}, b"denied")] * 20
+    server.requests.clear()
+    with pytest.raises(RemoteError, match=r"refused|403"):
+        fetcher.fetch(0, 10)
+    assert len(server.requests) <= 6
+    assert sleeps == []
