@@ -10,6 +10,9 @@ outlying keypoints on frames 2, 10 and 15, three keypoints and no line on frame 
 frame 8). The Mondrian conformal model is made up: its numbers were not fitted on any data, they only make
 the players of the clip fall into different bins, one of which falls back to the pooled quantile.
 
+``localize_request.json`` is the body of the Docker smoke test of ``POST /v1/localize``: the calibration of
+native frame 0, as ``/v1/calibrate`` would return it, its feet, and one foot above the horizon.
+
 ``tests/integration/test_golden_real.py`` runs calibration, conformal regions, localization and export on
 these inputs (:func:`run_golden`) and compares the outputs with ``expected/``: exact on structure, ids,
 flags and texts, within one unit of the last written decimal on numbers (macOS and Linux CI may round a few
@@ -34,7 +37,12 @@ from predfoot.paths import REPO_ROOT
 from predfoot.pipeline.clip import ClipFrame, load_clip
 from predfoot.pipeline.real import real_stages
 from predfoot.pipeline.run import RunConfig, RunResult, Stages, run_clip
-from predfoot.pipeline.synthetic import dumps_clip, make_broadcast_clip, synthetic_detections
+from predfoot.pipeline.synthetic import (
+    SPECTATOR_TRACK_ID,
+    dumps_clip,
+    make_broadcast_clip,
+    synthetic_detections,
+)
 from predfoot.uncertainty.conformal import MondrianConformal
 
 GOLDEN_DIR = REPO_ROOT / "tests" / "fixtures" / "golden"
@@ -91,6 +99,27 @@ def write_inputs(fixture_dir: Path) -> None:
     detections_json = dumps_detections(detections, MODEL_VERSION)
     (fixture_dir / "detections.json").write_text(detections_json, encoding="utf-8")
     (fixture_dir / "conformal.json").write_text(CONFORMAL.to_json() + "\n", encoding="utf-8")
+    body = localize_request(fixture_dir)
+    (fixture_dir / "localize_request.json").write_text(json.dumps(body, indent=1) + "\n", encoding="utf-8")
+
+
+def localize_request(fixture_dir: Path) -> dict[str, Any]:
+    """Body of ``POST /v1/localize`` for native frame 0 (fields as ``/v1/calibrate`` returns them)."""
+    stages, _ = golden_stages(fixture_dir)
+    calib = stages.calibrate(ClipFrame(frame=0))
+    if not calib.ok or calib.H is None or calib.cov_theta is None:
+        raise RuntimeError(f"frame 0 of the golden clip does not calibrate: {calib.status}")
+    frame = load_clip(fixture_dir / "clip.json").frames[0]
+    feet = [{"track_id": p.track_id, "u": p.u, "v": p.v} for p in frame.feet]
+    feet.append({"track_id": SPECTATOR_TRACK_ID, "u": 400.0, "v": 18.0})  # above the horizon: null position
+    cov = 0.5 * (calib.cov_theta + calib.cov_theta.T)
+    return {
+        "homography": calib.H.tolist(),
+        "cov_theta": cov.tolist(),
+        "dof": calib.dof,
+        "n_inliers": calib.n_inliers,
+        "feet": feet,
+    }
 
 
 def golden_stages(fixture_dir: Path) -> tuple[Stages, MondrianConformal]:

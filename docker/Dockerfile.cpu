@@ -1,48 +1,69 @@
 # syntax=docker/dockerfile:1.7
-# predfoot CPU image: core dependencies only (no torch). Build from the repository root:
+# predfoot CPU images, without torch. Two targets, built from the repository root:
 #
-#   docker build -f docker/Dockerfile.cpu --build-arg GIT_SHA="$(git rev-parse HEAD)" -t predfoot:cpu .
-#   mkdir -p out && chmod 0777 out    # the container runs as an unprivileged user
+# cli (the default): the command-line tools.
+#   docker build -f docker/Dockerfile.cpu --build-arg GIT_SHA="$(git rev-parse HEAD)" -t predfoot:cli .
+#   mkdir -p out && chmod 0777 out    # the container runs as an unprivileged user (uid 10001)
 #   docker run --rm -v "$PWD/tests/fixtures:/in:ro" -v "$PWD/out:/out" \
-#       predfoot:cpu run /in/synthetic_clip.json --out /out
-#   docker run --rm -v "$PWD/out:/out:ro" predfoot:cpu validate /out/tracking.jsonl --match /out/match.json
+#       predfoot:cli run /in/synthetic_clip.json --out /out
+#   docker run --rm -v "$PWD/out:/out:ro" predfoot:cli validate /out/tracking.jsonl --match /out/match.json
+#
+# serve: the HTTP API (extra "serve") on port 8000. /v1/calibrate answers 503: the keypoint networks need
+# torch, which this image leaves out; /v1/localize, /healthz and /metrics work.
+#   docker build -f docker/Dockerfile.cpu --target serve -t predfoot:serve .
+#   docker run --rm -p 8000:8000 predfoot:serve
+#   docker run --rm -p 8000:8000 -v "$PWD/conformal.json:/models/conformal.json:ro" predfoot:serve \
+#       serve --host 0.0.0.0 --port 8000 --conformal /models/conformal.json
 
 ARG PYTHON_VERSION=3.12
 
-# --- build stage: resolve the locked environment with uv ----------------------------------------
-FROM python:${PYTHON_VERSION}-slim-bookworm AS builder
+# --- build stages: one locked virtualenv per target, made with uv ---------------------------------------
+FROM python:${PYTHON_VERSION}-slim-bookworm AS build-base
 ARG PYTHON_VERSION
 COPY --from=ghcr.io/astral-sh/uv:0.11.19 /uv /uvx /bin/
-# Use the base image's interpreter (the runtime stage has the same one at the same path).
+# Use the base image's interpreter: the runtime stages have the same one at the same path.
 ENV UV_PYTHON=python${PYTHON_VERSION} \
     UV_PYTHON_DOWNLOADS=never \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_PROJECT_ENVIRONMENT=/opt/venv
 WORKDIR /src
-# Dependencies first, so this layer stays cached until uv.lock changes.
 COPY pyproject.toml uv.lock ./
+
+# Dependencies first, so that their layer stays cached until uv.lock changes; then the package itself, as a
+# regular (non-editable) install.
+FROM build-base AS build-cli
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-install-project
-# Then the package itself, installed as a regular (non-editable) wheel.
 COPY README.md LICENSE ./
 COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-editable
 
-# --- runtime stage: the virtualenv on a clean base, as a non-root user ---------------------------
+FROM build-base AS build-serve
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --locked --no-dev --no-install-project --extra serve
+COPY README.md LICENSE ./
+COPY src ./src
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --locked --no-dev --no-editable --extra serve
+
+# --- runtime base: a clean interpreter, no build tools, an unprivileged user ------------------------------
 FROM python:${PYTHON_VERSION}-slim-bookworm AS runtime
-ARG GIT_SHA=""
-LABEL org.opencontainers.image.title="predfoot" \
-      org.opencontainers.image.description="Calibrated position uncertainty for broadcast football tracking" \
-      org.opencontainers.image.licenses="Apache-2.0" \
-      org.opencontainers.image.revision="${GIT_SHA}"
 RUN groupadd --system --gid 10001 predfoot \
     && useradd --system --uid 10001 --gid predfoot --create-home --home-dir /home/predfoot predfoot \
     && mkdir -p /data /work \
     && chown predfoot:predfoot /data /work
-COPY --from=builder /opt/venv /opt/venv
 COPY LICENSE ATTRIBUTION.md /usr/share/doc/predfoot/
+# Declared after the RUN above, so that a new commit does not invalidate its cache.
+ARG GIT_SHA=""
+ARG VERSION=""
+LABEL org.opencontainers.image.title="predfoot" \
+      org.opencontainers.image.description="Calibrated position uncertainty for broadcast football tracking" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.source="https://github.com/zkyasin/predfoot" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${GIT_SHA}"
 ENV PATH="/opt/venv/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -50,9 +71,24 @@ ENV PATH="/opt/venv/bin:${PATH}" \
     MPLCONFIGDIR=/tmp/matplotlib \
     PREDFOOT_DATA_DIR=/data \
     PREDFOOT_GIT_SHA=${GIT_SHA}
-USER predfoot
 WORKDIR /work
-# A CLI image has no server to probe; this checks that the installed package imports and runs.
-HEALTHCHECK --interval=60s --timeout=20s --retries=1 CMD ["predfoot", "version"]
+# Numeric, so that Kubernetes' runAsNonRoot can check it.
+USER 10001:10001
 ENTRYPOINT ["predfoot"]
+
+# --- serve: the HTTP API ----------------------------------------------------------------------------------
+FROM runtime AS serve
+COPY --from=build-serve /opt/venv /opt/venv
+EXPOSE 8000
+# Python's urllib, so that the image needs no curl. It probes the default port: a server started on another
+# port needs its own --health-cmd.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 \
+    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=4)"]
+CMD ["serve", "--host", "0.0.0.0", "--port", "8000"]
+
+# --- cli: the command-line tools; the last stage, hence the default target --------------------------------
+FROM runtime AS cli
+COPY --from=build-cli /opt/venv /opt/venv
+# A CLI image has no server to probe: this checks that the installed package imports and runs.
+HEALTHCHECK --interval=60s --timeout=20s --retries=1 CMD ["predfoot", "version"]
 CMD ["--help"]

@@ -1,7 +1,7 @@
 name: docker
 
-# Builds the CPU image and runs the tracer bullet inside it. Nothing is pushed: the repository is private and
-# GHCR storage is limited; publishing images is the release workflow's job (T5.3).
+# Builds both CPU images (targets cli and serve) and smoke-tests them. Nothing is pushed here: publishing is
+# the job of release.yml, on version tags.
 on:
   pull_request:
     paths:
@@ -11,6 +11,7 @@ on:
       - "pyproject.toml"
       - "uv.lock"
       - "tests/fixtures/synthetic_clip.json"
+      - "tests/fixtures/golden/localize_request.json"
       - ".github/workflows/docker.yml"
   push:
     branches: [main]
@@ -24,49 +25,147 @@ permissions:
   contents: read
 
 jobs:
-  build-and-smoke-test:
+  cli:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
       - uses: docker/setup-buildx-action@v3
 
-      - name: Build the CPU image (loaded locally, not pushed)
+      - name: Build the cli image (default target; loaded locally, not pushed)
         uses: docker/build-push-action@v6
         with:
           context: .
           file: docker/Dockerfile.cpu
-          tags: predfoot:ci
+          tags: predfoot:cli
           load: true
           push: false
           build-args: GIT_SHA=${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=cli
+          cache-to: type=gha,mode=max,scope=cli
 
       - name: Runs as a non-root user
-        run: test "$(docker run --rm --entrypoint id predfoot:ci -u)" != "0"
+        run: test "$(docker run --rm --entrypoint id predfoot:cli -u)" != "0"
 
       - name: predfoot run on the synthetic clip
         run: |
           mkdir -p out
           chmod 0777 out  # the container user (uid 10001) writes here
           docker run --rm -v "$PWD/tests/fixtures:/in:ro" -v "$PWD/out:/out" \
-            predfoot:ci run /in/synthetic_clip.json --out /out --fps 10
+            predfoot:cli run /in/synthetic_clip.json --out /out --fps 10
 
       - name: predfoot validate on the result
         run: |
           docker run --rm -v "$PWD/out:/out:ro" \
-            predfoot:ci validate /out/tracking.jsonl --match /out/match.json
+            predfoot:cli validate /out/tracking.jsonl --match /out/match.json
           test -s out/minimap.png
           jq -e '.frames.exported == 30 and .frames.abstained == 4' out/metrics.json
           jq -e --arg sha "$GITHUB_SHA" '.git_sha == $sha' out/meta.json
 
+      - name: The QA report is self-contained and predfoot qa rebuilds it
+        run: |
+          test -s out/qa_report.html
+          if grep -Eiq 'https?://|<script' out/qa_report.html; then
+            echo "qa_report.html references a URL or holds a script"
+            exit 1
+          fi
+          cp out/qa_report.html first-report.html
+          docker run --rm -v "$PWD/out:/out" predfoot:cli qa /out
+          cmp out/qa_report.html first-report.html  # the same bytes from the run outputs alone
+
       - name: Image size
-        run: docker image ls predfoot:ci
+        run: docker image ls predfoot:cli
 
       - uses: actions/upload-artifact@v4
         with:
           name: tracer-bullet-output
           path: out/
           retention-days: 7
+
+  serve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build the serve image (loaded locally, not pushed)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.cpu
+          target: serve
+          tags: predfoot:serve
+          load: true
+          push: false
+          build-args: GIT_SHA=${{ github.sha }}
+          cache-from: type=gha,scope=serve
+          cache-to: type=gha,mode=max,scope=serve
+
+      - name: Runs as a non-root user
+        run: test "$(docker run --rm --entrypoint id predfoot:serve -u)" != "0"
+
+      - name: Start the server; its HEALTHCHECK turns healthy
+        run: |
+          docker run -d --name predfoot-serve -p 8000:8000 predfoot:serve
+          status=starting
+          for _ in $(seq 1 45); do
+            status="$(docker inspect --format '{{.State.Health.Status}}' predfoot-serve)"
+            if [ "$status" = healthy ]; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "health status after 90 s: $status"
+          exit 1
+
+      - name: GET /healthz
+        run: |
+          curl -sf http://127.0.0.1:8000/healthz | tee healthz.json
+          echo
+          jq -e '.status == "ok" and .models == {}' healthz.json
+
+      - name: POST /v1/localize answers 200 with finite values
+        run: |
+          code="$(curl -s -o localize.json -w '%{http_code}' -H 'content-type: application/json' \
+            --data @tests/fixtures/golden/localize_request.json http://127.0.0.1:8000/v1/localize)"
+          cat localize.json
+          echo
+          test "$code" = 200
+          jq -e '
+            [.positions[] | select(.x != null)] as $located
+            | ($located | length) == ((.positions | length) - 1)
+            and .positions[-1].x == null
+            and ([$located[] | .x, .y, .p90_radius_m, .quantile, (.pos_cov_m2 | flatten | .[])]
+                 | all(type == "number" and (isinfinite | not) and (isnan | not)))
+          ' localize.json
+
+      - name: POST /v1/calibrate answers 503 (no torch in this image)
+        run: |
+          docker run --rm --entrypoint python predfoot:serve -c \
+            "import io, sys; from PIL import Image; b = io.BytesIO(); Image.new('RGB', (64, 36)).save(b, 'PNG'); sys.stdout.buffer.write(b.getvalue())" \
+            > frame.png
+          code="$(curl -s -o calibrate.json -w '%{http_code}' -F 'image=@frame.png;type=image/png' \
+            http://127.0.0.1:8000/v1/calibrate)"
+          cat calibrate.json
+          echo
+          test "$code" = 503
+          jq -e '.detail | test("torch")' calibrate.json
+
+      - name: GET /metrics counts the requests
+        run: |
+          curl -sf -o metrics.txt http://127.0.0.1:8000/metrics
+          grep -q '^predfoot_http_requests_total' metrics.txt
+
+      - name: Image size
+        run: docker image ls predfoot:serve
+
+      - name: Server log
+        if: always()
+        run: docker logs predfoot-serve || true
+
+      - name: Stop the server
+        if: always()
+        run: docker rm -f predfoot-serve || true
