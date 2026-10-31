@@ -621,12 +621,20 @@ def _sym(a: FloatArray) -> FloatArray:
     return np.asarray(0.5 * (a + np.swapaxes(a, -1, -2)), dtype=np.float64)
 
 
-def forward(batch: Batch, params: NoiseParams, cfg: SmootherConfig, store: bool = False) -> Forward:
+def forward(
+    batch: Batch,
+    params: NoiseParams,
+    cfg: SmootherConfig,
+    store: bool = False,
+    nll_gate: float | None = None,
+) -> Forward:
     """Vectorised constant-velocity Kalman filter over every segment of a batch.
 
     A segment starts at its first used measurement s with m0 = (z_s, 0) and P0 = blkdiag(R_s, diag(v0²)).
     Updates use the Joseph form; there is no online gating (robustness comes from :func:`smooth_clip`). The
-    NLL sums ½ [log det S_k + min(NIS_k, gate)] over used measurements after the first two of each segment.
+    NLL sums ½ [log det S_k + NIS_k] over used measurements after the first two of each segment (constants
+    dropped). With ``nll_gate``, NIS_k is truncated at that value: that robust variant is unbounded below
+    (as S shrinks every term saturates while log det S → −∞), so :func:`fit_noise` does not use it.
     """
     b_n, length = batch.has.shape
     nis = np.full((b_n, length), np.nan)
@@ -634,7 +642,6 @@ def forward(batch: Batch, params: NoiseParams, cfg: SmootherConfig, store: bool 
         empty = np.zeros((0, length, N_STATE))
         e2 = np.zeros((0, length, N_STATE, N_STATE))
         return Forward(0.0, 0, nis, empty, e2, empty, e2) if store else Forward(0.0, 0, nis)
-    gate = cfg.gate
     qc = np.array([params.q_pan, params.q_tilt, cfg.q_roll, params.q_logf])
     r_all = params.kappa2 * batch.sigma + batch.floor
     f_all = _transition(batch.dt)
@@ -672,7 +679,8 @@ def forward(batch: Batch, params: NoiseParams, cfg: SmootherConfig, store: bool 
             t = batch.term[:, k]
             if t.any():
                 logdet = 2.0 * np.log(np.diagonal(chol, axis1=-2, axis2=-1)).sum(axis=1)
-                nll += 0.5 * float(np.sum(logdet[t] + np.minimum(nis_k[t], gate)))
+                nis_t = nis_k[t] if nll_gate is None else np.minimum(nis_k[t], nll_gate)
+                nll += 0.5 * float(np.sum(logdet[t] + nis_t))
         else:
             m, p = mp, pp
         if store:
@@ -837,7 +845,8 @@ def smooth_clip(
     Each pass flags the largest deletion statistic above the gate in every run of consecutive unflagged
     measurements, and lets a flagged measurement back in once its prediction statistic falls below the gate,
     so a spike cannot flag its neighbours. Runs of ``split_run`` or more flagged measurements are then split
-    into their own segment instead of being rejected. Segments with fewer than ``min_segment`` used
+    into their own segment instead of being rejected, and flagged measurements whose prediction statistic is
+    back below the gate are released (one last pass). Segments with fewer than ``min_segment`` used
     measurements are marked short.
     """
     n = len(meas)
@@ -878,11 +887,14 @@ def smooth_clip(
             if after < len(order):
                 forced.add(int(order[after]))
             flags[r] = False
-        state = run(flags)
-        dropped = flags & ~still_bad(state.deletion)
-        current = not dropped.any()
-        flags &= ~dropped
+        current = False
     if not current:
+        state = run(flags)
+    # A flagged measurement whose prediction statistic is now below the gate comes back (after a split, or
+    # when the passes ran out before converging); no new flags are added at this stage.
+    dropped = flags & ~still_bad(state.deletion)
+    if dropped.any():
+        flags &= ~dropped
         state = run(flags)
     seg, mask = state.seg, state.mask
     counts = np.bincount(seg[mask], minlength=int(seg.max()) + 1) if mask.any() else np.zeros(1, dtype=int)
@@ -906,50 +918,72 @@ def smooth_clip(
 
 
 def fit_noise(
-    clips: Sequence[ClipMeasurements], cfg: SmootherConfig, init: NoiseParams | None = None
+    clips: Sequence[ClipMeasurements], cfg: SmootherConfig, init: NoiseParams | None = None, rounds: int = 2
 ) -> tuple[NoiseParams, dict[str, Any]]:
     """Label-free maximum-likelihood fit of (κ², q_pan, q_tilt, q_logf) on the innovations of ``clips``.
 
-    Segments are computed once with R(init) and held fixed; every accepted measurement is used (the NLL is
-    truncated at the gate, which bounds the pull of any single outlier on κ²). Nelder-Mead in log units from
-    the simplex h0 + I.
+    Each round cleans every clip with the smoother itself (:func:`smooth_clip` with the current parameters:
+    deletion test, run splitting), then minimises the Gaussian innovation NLL of the remaining measurements,
+    segments held fixed, by Nelder-Mead in log units from the simplex h + I. The next round re-cleans with the
+    fitted parameters (skipped when the cleaned measurements do not change).
+
+    Why not the gate-truncated NLL on every accepted measurement: it bounds the pull of an outlier, but it is
+    unbounded below, and on two dev clips Nelder-Mead ran off to κ² ≈ 1e-13, q ≈ 1e-31. Deleting outliers
+    first (exact leave-one-out χ²₄ test at ``gate_level``) keeps the robustness with a proper likelihood.
     """
-    p0 = init or NoiseParams()
-    masks = [np.asarray(c.accepted, dtype=bool) for c in clips]
-    segs = [segments(c, measurement_cov(c, p0, cfg), m, cfg) for c, m in zip(clips, masks, strict=True)]
-    batch = stack_clips(clips, masks, segs, cfg)
-    h0 = p0.log_vector()
-    if not batch.term.any():
-        fwd = forward(batch, p0, cfg)
-        return p0, {"nll": fwd.nll, "nfev": 0, "converged": False, "n_terms": 0, "mean_nis": float("nan")}
+    params = init or NoiseParams()
+    diag: dict[str, Any] = {"rounds": 0, "nfev": 0}
+    prev: list[BoolArray] | None = None
+    for _ in range(max(rounds, 1)):
+        tracks = [smooth_clip(c, params, cfg) for c in clips]
+        masks = [t.used for t in tracks]
+        if prev is not None and all(np.array_equal(a, b) for a, b in zip(prev, masks, strict=True)):
+            break
+        prev = masks
+        batch = stack_clips(clips, masks, [t.segment for t in tracks], cfg)
+        if not batch.term.any():
+            diag |= {"converged": False, "n_terms": 0}
+            break
+        h0 = params.log_vector()
 
-    def objective(h: FloatArray) -> float:
-        return forward(batch, NoiseParams.from_log_vector(h), cfg).nll
+        def objective(h: FloatArray, batch: Batch = batch) -> float:
+            try:
+                with np.errstate(all="ignore"):
+                    nll = forward(batch, NoiseParams.from_log_vector(h), cfg).nll
+            except np.linalg.LinAlgError:
+                return float("inf")
+            return nll if np.isfinite(nll) else float("inf")
 
-    sol = minimize(
-        objective,
-        h0,
-        method="Nelder-Mead",
-        options={
-            "initial_simplex": np.vstack([h0, h0 + np.eye(len(h0))]),
-            "xatol": 0.02,
-            "fatol": 0.5,
-            "maxfev": 400,
-        },
-    )
-    params = NoiseParams.from_log_vector(sol.x)
-    fwd = forward(batch, params, cfg)
-    nis = fwd.nis[np.isfinite(fwd.nis)]
-    return params, {
-        "nll": float(fwd.nll),
-        "nfev": int(sol.nfev),
-        "converged": bool(sol.success),
-        "n_terms": fwd.n_terms,
-        "mean_nis": fwd.mean_nis,  # outliers included: the fit uses every accepted measurement
-        "mean_nis_truncated": float(np.minimum(nis, cfg.gate).mean()),
-        "median_nis": float(np.median(nis)),
-        "n_segments": batch.size,
-    }
+        sol = minimize(
+            objective,
+            h0,
+            method="Nelder-Mead",
+            options={
+                "initial_simplex": np.vstack([h0, h0 + np.eye(len(h0))]),
+                "xatol": 0.02,
+                "fatol": 0.5,
+                "maxfev": 400,
+            },
+        )
+        params = NoiseParams.from_log_vector(sol.x)
+        diag["rounds"] += 1
+        diag["nfev"] += int(sol.nfev)
+        diag["converged"] = bool(sol.success)
+        diag["deleted"] = int(sum(int(t.rejected.sum()) for t in tracks))
+        diag["n_segments"] = batch.size
+        fwd = forward(batch, params, cfg)
+        nis = fwd.nis[np.isfinite(fwd.nis)]
+        diag |= {
+            "nll": float(fwd.nll),
+            "n_terms": fwd.n_terms,
+            "mean_nis": fwd.mean_nis,
+            "mean_nis_truncated": float(np.minimum(nis, cfg.gate).mean()),
+            "median_nis": float(np.median(nis)),
+        }
+    diag.setdefault("converged", False)
+    diag.setdefault("n_terms", 0)
+    diag.setdefault("nll", float("nan"))
+    return params, diag
 
 
 # --- outputs ------------------------------------------------------------------------------------------

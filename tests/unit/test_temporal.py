@@ -476,6 +476,40 @@ def test_noise_fit_recovers_the_true_parameters(rng):
     np.testing.assert_allclose(fitted.log_vector(), true.log_vector(), atol=np.log(1.25))
 
 
+def test_truncated_likelihood_is_unbounded_below(rng):
+    """Why fit_noise does not minimise the gate-truncated NLL: shrinking every variance keeps lowering it."""
+    true = tm.NoiseParams(kappa2=1.8, q_pan=2e-3, q_tilt=2e-4, q_logf=4e-3)
+    clips, _ = cv_clips(rng, 2, 150, true, CFG)
+    masks = [c.accepted for c in clips]
+    segs = [
+        tm.segments(c, tm.measurement_cov(c, true, CFG), m, CFG) for c, m in zip(clips, masks, strict=True)
+    ]
+    batch = tm.stack_clips(clips, masks, segs, CFG)
+    shrink = (1.0, 1e-4, 1e-8)
+
+    def scaled(s):
+        return tm.NoiseParams.from_log_vector(true.log_vector() + np.log(s))
+
+    truncated = [tm.forward(batch, scaled(s), CFG, nll_gate=tm.GATE4).nll for s in shrink]
+    gaussian = [tm.forward(batch, scaled(s), CFG).nll for s in shrink]
+    assert truncated[0] > truncated[1] > truncated[2]
+    assert gaussian[0] < gaussian[1] < gaussian[2]
+
+
+def test_noise_fit_is_robust_to_gross_outliers(rng):
+    true = tm.NoiseParams(kappa2=1.8, q_pan=2e-3, q_tilt=2e-4, q_logf=4e-3)
+    clips, _ = cv_clips(rng, 10, 150, true, CFG)
+    dirty = []
+    for c in clips:
+        z = c.z.copy()
+        bad = rng.choice(np.arange(3, 147), size=8, replace=False)  # 5 % of the frames
+        z[bad, 0] += 30 * np.sqrt(true.kappa2) * 1.5e-3 * rng.choice([-1.0, 1.0], size=len(bad))
+        dirty.append(tm.ClipMeasurements(**{**c.__dict__, "z": z}))
+    fitted, diag = tm.fit_noise(dirty, CFG)
+    assert diag["deleted"] >= 70
+    np.testing.assert_allclose(fitted.log_vector()[:2], true.log_vector()[:2], atol=np.log(1.3))
+
+
 def test_smoothed_state_covers_the_truth_at_the_nominal_level(rng):
     true = tm.NoiseParams(kappa2=1.8, q_pan=2e-3, q_tilt=2e-4, q_logf=4e-3)
     clips, truths = cv_clips(rng, 20, 150, true, CFG)
