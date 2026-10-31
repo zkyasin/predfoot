@@ -19,12 +19,13 @@ Camera (``--smooth``):
   smoothed with every fold's parameters, fold g's quantiles are fitted on the other games' rows of fold g and
   game g is only scored. ``--fit-scope all`` fits one label-free set on all games (exchangeability check).
 Frames whose raw calibration failed but which the smoother fills are kept out of the headline coverage and
-reported separately. Calibrations are saved to ``runs/<run>/calib.npz``; ``--calib-from`` reuses them, so
-variants differ only by the camera.
+reported separately. With smoothing, the covariances of smoothed, PTZ-projected and passed-through frames
+come from different models, so Mondrian bins are formed within each source. Calibrations are saved to
+``runs/<run>/calib.npz``; ``--calib-from`` reuses them, so variants differ only by the camera.
 
 Usage:
-    uv run python scripts/eval_dev.py --out runs/m4_none.md
-    uv run python scripts/eval_dev.py --smooth ptz --calib-from runs/<run>/calib.npz --out runs/ptz.md
+    uv run python scripts/eval_dev.py                  # full per-frame run, writes reports/m2_logo_dev.md
+    uv run python scripts/eval_dev.py --smooth ptz --calib-from runs/<run>/calib.npz   # runs/<run>/report.md
 Needs the index (scripts/build_index.py) and the detection cache (scripts/cache_keypoints.py).
 """
 
@@ -71,7 +72,8 @@ ALPHA = 0.1
 NATIVE_FPS = 25.0
 IMAGE_SIZE = (1920, 1080)
 FAIL_LINE_PX = 10.0
-FLAGS = ("smoothed", "repaired", "filled", "projected", "passthrough", "duplicate")
+FLAGS = ("smoothed", "repaired", "filled", "projected", "passthrough", "duplicate", "rejected")
+DEFAULT_REPORT = Path("reports/m2_logo_dev.md")
 
 
 class Smooth(StrEnum):
@@ -197,11 +199,32 @@ def _flag_arrays(flags: tm.FrameFlags | None, n: int) -> dict[str, np.ndarray]:
     return {name: np.asarray(getattr(flags, name), dtype=bool) for name in FLAGS}
 
 
+def cov_sources(flags: tm.FrameFlags | None, n: int) -> np.ndarray:
+    """Model behind each output covariance: "smoother" (smoothed, repaired, filled: pooled over a segment),
+    "projected" (one frame on the PTZ manifold) or "frame" (per-frame calibration, raw or passed through).
+
+    Their scales differ by an order of magnitude, so each gets its own Mondrian bins. A duplicate takes the
+    source of the frame it copies.
+    """
+    out = np.full(n, "frame", dtype=object)
+    if flags is None:
+        return out
+    for k in range(n):
+        if k and flags.duplicate[k]:
+            out[k] = out[k - 1]
+        elif flags.smoothed[k] or flags.repaired[k] or flags.filled[k]:
+            out[k] = "smoother"
+        elif flags.projected[k]:
+            out[k] = "projected"
+    return out
+
+
 def player_rows(
     cc: ClipCalib, results: Sequence[CalibResult], flags: tm.FrameFlags | None, fold: int | None
 ) -> pl.DataFrame:
     """Per-player rows (errors against the three references, covariances) of one clip's output cameras."""
     fl = _flag_arrays(flags, len(cc.frames))
+    source = cov_sources(flags, len(cc.frames))
     speed = camera_speed_px_s(cc.frames, results)
     blocks: dict[str, list[np.ndarray]] = {}
 
@@ -244,6 +267,7 @@ def player_rows(
         add("fold", np.full(m, -1 if fold is None else fold, dtype=np.int64))
         for name in FLAGS:
             add(name, np.full(m, bool(fl[name][i])))
+        add("cov_source", np.full(m, source[i], dtype=object))
         add("x_pred", pred[v, 0])
         add("y_pred", pred[v, 1])
         add("ex_sm", pred[v, 0] - sm[v, 0])
@@ -252,7 +276,7 @@ def player_rows(
     if not blocks:
         return pl.DataFrame()
     df = pl.DataFrame({name: np.concatenate(parts) for name, parts in blocks.items()})
-    df = df.with_columns(pl.col("clip").cast(pl.String))
+    df = df.with_columns(pl.col("clip").cast(pl.String), pl.col("cov_source").cast(pl.String))
     return df.with_columns(pl.when(pl.col("fold") >= 0).then(pl.col("fold")).otherwise(None).alias("fold"))
 
 
@@ -379,6 +403,7 @@ class SmoothingInfo:
     fits: dict[str, dict[str, Any]] = field(default_factory=dict)
     own: dict[str, tm.CentreEstimate | None] = field(default_factory=dict)
     chosen: dict[str, tm.CentreEstimate | None] = field(default_factory=dict)
+    refused: dict[str, bool] = field(default_factory=dict)  # the game centre did not explain the clip
     game: dict[int, tm.CentreEstimate | None] = field(default_factory=dict)
     meas: dict[str, tm.ClipMeasurements] = field(default_factory=dict)
     seconds: dict[str, float] = field(default_factory=dict)
@@ -412,10 +437,10 @@ def smooth_outputs(
     for g in sorted({cc.game for cc in ccs}):
         info.game[g] = tm.game_centre([info.own[cc.clip_id] for cc in ccs if cc.game == g])
     for cc in ccs:
-        info.chosen[cc.clip_id] = tm.choose_centre(info.own[cc.clip_id], info.game[cc.game])
-        info.meas[cc.clip_id] = tm.measure_clip(
-            cc.clip_id, cc.frames, cc.results, cc.duplicate, info.chosen[cc.clip_id], cfg
+        meas, refused = tm.measure_at_centre(
+            cc.clip_id, cc.frames, cc.results, cc.duplicate, info.own[cc.clip_id], info.game[cc.game], cfg
         )
+        info.meas[cc.clip_id], info.chosen[cc.clip_id], info.refused[cc.clip_id] = meas, meas.centre, refused
     info.seconds["centres_and_measurements"] = time.perf_counter() - t0
     if smooth is Smooth.proj:
         for cc in ccs:
@@ -478,6 +503,7 @@ def _scores(d: pl.DataFrame, ref: str) -> dict[str, np.ndarray]:
         "mpp": d["mpp"].to_numpy(),
         "n_inliers": d["n_inliers"].to_numpy().astype(float),
         "dof": d["dof"].cast(pl.Float64).fill_null(np.nan).to_numpy(),
+        "source": d["cov_source"].to_numpy() if "cov_source" in d.columns else np.full(d.height, "frame"),
     }
 
 
@@ -495,11 +521,14 @@ def logo(
     with quantiles fitted on the other games), including coverage by distance tercile, the held-out rows with
     their hits, and ``extra`` rows (e.g. filled frames) scored with the same fold models. With ``fold_col``,
     fold g calibrates on rows (fold == g) & (game != g) and tests on rows (fold == g) & (game == g).
+    Mondrian bins are formed within each covariance source (column ``cov_source``, see :func:`cov_sources`);
+    the pooled quantile and the constant circle ignore it.
     """
     d = df.filter(pl.col(f"ex_{ref}").is_not_nan())
     s = _scores(d, ref)
     score, norm, groups, games, cov = s["score"], s["norm"], s["groups"], s["games"], s["cov"]
     feats = {"mpp": s["mpp"], "n_inliers": s["n_inliers"]}
+    source = s["source"]
     raw_q = np.array([region_quantile(2, 1 - ALPHA, v) for v in s["dof"]])
     folds = d[fold_col].to_numpy() if fold_col else None
     hit_mond, hit_const = np.zeros(len(d), bool), np.zeros(len(d), bool)
@@ -508,7 +537,7 @@ def logo(
     x = extra.filter(pl.col(f"ex_{ref}").is_not_nan()) if extra is not None else None
     xs = _scores(x, ref) if x is not None and x.height else None
     x_mond = np.zeros(x.height if x is not None else 0, bool)
-    x_const, x_held = x_mond.copy(), x_mond.copy()
+    x_const, x_held, x_area = x_mond.copy(), x_mond.copy(), np.zeros(len(x_mond))
     rows = []
     for g in np.unique(games):
         if folds is None:
@@ -520,14 +549,13 @@ def logo(
             continue
         held |= tst
         q_pool = grouped_quantile(score[cal], groups[cal], ALPHA)
-        mond = MondrianConformal.fit(
-            score[cal],
-            groups[cal],
-            {k: v[cal] for k, v in feats.items()},
-            {"mpp": 3, "n_inliers": 2},
-            alpha=ALPHA,
-        )
-        q_mond = mond.quantile_for({k: v[tst] for k, v in feats.items()})
+        models = _mondrian_by_source(score, groups, feats, source, cal)
+        q_mond = np.full(len(d), np.nan)
+        for src in np.unique(source[tst]):
+            sel = tst & (source == src)
+            model = models.get(str(src), models[None])
+            q_mond[sel] = model.quantile_for({k: v[sel] for k, v in feats.items()})
+        q_mond = q_mond[tst]
         r_const = grouped_quantile(norm[cal], groups[cal], ALPHA)
         hit_mond[tst] = score[tst] <= q_mond
         hit_const[tst] = norm[tst] <= r_const
@@ -537,8 +565,11 @@ def logo(
         if xs is not None:
             xt = (xs["games"] == g) & ((x[fold_col].to_numpy() == g) if fold_col and x is not None else True)
             if xt.any():
-                qx = mond.quantile_for({"mpp": xs["mpp"][xt], "n_inliers": xs["n_inliers"][xt]})
+                # extra rows are filled frames: their covariance comes from the smoother
+                model = models.get("smoother", models[None])
+                qx = model.quantile_for({"mpp": xs["mpp"][xt], "n_inliers": xs["n_inliers"][xt]})
                 x_mond[xt], x_const[xt], x_held[xt] = xs["score"][xt] <= qx, xs["norm"][xt] <= r_const, True
+                x_area[xt] = np.pi * qx * np.sqrt(np.clip(np.linalg.det(xs["cov"][xt]), 0, None))
         rows.append(
             {
                 "game": int(g),
@@ -580,10 +611,39 @@ def logo(
     ).filter(pl.Series(held))
     extra_df = None
     if x is not None and xs is not None:
-        extra_df = x.with_columns(pl.Series("hit_mond", x_mond), pl.Series("hit_const", x_const)).filter(
-            pl.Series(x_held)
-        )
+        extra_df = x.with_columns(
+            pl.Series("hit_mond", x_mond), pl.Series("hit_const", x_const), pl.Series("area_mond", x_area)
+        ).filter(pl.Series(x_held))
     return rows, summary, held_df, extra_df
+
+
+def _mondrian_by_source(
+    score: np.ndarray,
+    groups: np.ndarray,
+    feats: dict[str, np.ndarray],
+    source: np.ndarray,
+    cal: np.ndarray,
+) -> dict[str | None, MondrianConformal]:
+    """Mondrian models fitted on the calibration rows of each covariance source, plus one on all of them
+    (key None) for a source that has no calibration rows. With a single source the two are the same fit."""
+
+    def fit(sel: np.ndarray) -> MondrianConformal:
+        return MondrianConformal.fit(
+            score[sel],
+            groups[sel],
+            {k: v[sel] for k, v in feats.items()},
+            {"mpp": 3, "n_inliers": 2},
+            alpha=ALPHA,
+        )
+
+    present = np.unique(source[cal])
+    if len(present) == 1:
+        model = fit(cal)
+        return {None: model, str(present[0]): model}
+    models: dict[str | None, MondrianConformal] = {None: fit(cal)}
+    for src in present:
+        models[str(src)] = fit(cal & (source == src))
+    return models
 
 
 # --- report ------------------------------------------------------------------------------------------------
@@ -677,9 +737,11 @@ def temporal_section(
     md += [
         "",
         "Projection centres per game (own estimate reliable when its largest sd ≤"
-        f" {cfg.centre_max_sd_m:g} m with ≥ {cfg.centre_min_frames} PTZ inliers):",
+        f" {cfg.centre_max_sd_m:g} m with ≥ {cfg.centre_min_frames} PTZ inliers; otherwise the game centre,"
+        f" refused when the clip's misfit scale at it exceeds {cfg.max_misfit_ratio:g}× the reference;"
+        " without a centre the clip passes through):",
         "",
-        "| Game | Reliable / clips | Median centre (m) | MAD (m) | Game centre used | Own unreliable used |"
+        "| Game | Reliable / clips | Median centre (m) | MAD (m) | Game centre used | Game centre refused |"
         " None |",
         "|---|---|---|---|---|---|---|",
     ]
@@ -691,11 +753,11 @@ def temporal_section(
         mad = np.median(np.abs(cs - med), axis=0)
         src = [info.chosen[c] for c in ids]
         n_game = sum(1 for c in src if c is not None and c.source == "game")
-        n_unrel = sum(1 for c in src if c is not None and not c.reliable)
+        n_refused = sum(1 for c in ids if info.refused.get(c, False))
         n_none = sum(1 for c in src if c is None)
         md.append(
             f"| {g} | {len(rel)} / {len(ids)} | ({med[0]:.1f}, {med[1]:.1f}, {med[2]:.1f}) |"
-            f" ({mad[0]:.1f}, {mad[1]:.1f}, {mad[2]:.1f}) | {n_game} | {n_unrel} | {n_none} |"
+            f" ({mad[0]:.1f}, {mad[1]:.1f}, {mad[2]:.1f}) | {n_game} | {n_refused} | {n_none} |"
         )
     # frame outcomes over every cached frame of the held-out outputs
     counts = dict.fromkeys((*FLAGS, "abstain"), 0)
@@ -713,9 +775,10 @@ def temporal_section(
                 "segments": len(np.unique(o.track.segment[o.track.segment >= 0]))
                 if o.track is not None
                 else 0,
-                "rejected": int(o.track.rejected.sum()) if o.track is not None else 0,
+                "deleted": int(o.track.rejected.sum()) if o.track is not None else 0,
                 "misfit_share": float(meas.misfit[base].mean()) if base.any() else float("nan"),
                 "short": int(o.track.short.sum()) if o.track is not None else 0,
+                "manoeuvre": int(o.track.manoeuvre.sum()) if o.track is not None else 0,
             }
         )
     total = sum(counts.values())
@@ -732,9 +795,10 @@ def temporal_section(
         md += [
             "",
             "Per clip (median / max): segments"
-            f" {pc['segments'].median():.0f} / {pc['segments'].max()}, rejected measurements"
-            f" {pc['rejected'].median():.0f} / {pc['rejected'].max()}, frames in short segments"
-            f" {pc['short'].median():.0f} / {pc['short'].max()}, misfit share"
+            f" {pc['segments'].median():.0f} / {pc['segments'].max()}, deleted measurements"
+            f" {pc['deleted'].median():.0f} / {pc['deleted'].max()}, frames in short segments"
+            f" {pc['short'].median():.0f} / {pc['short'].max()}, frames in manoeuvre segments"
+            f" {pc['manoeuvre'].median():.0f} / {pc['manoeuvre'].max()}, misfit share"
             f" {pc['misfit_share'].median():.1%} / {pc['misfit_share'].max():.1%}.",
         ]
     # errors against three references, per-frame camera vs output camera, same player-frames
@@ -789,6 +853,25 @@ def temporal_section(
                 )
     else:
         md[-1] += "."
+    # coverage per output type (Mondrian bins are formed within each covariance source)
+    md += [
+        "",
+        "Coverage per output type (Mondrian bins within each covariance source: smoother, PTZ projection,"
+        " per-frame), Mondrian ellipses / constant circle, and median Mondrian area:",
+        "",
+        "| Reference | Type | Player-frames | Mondrian | Constant circle | Median area (m²) |",
+        "|---|---|---|---|---|---|",
+    ]
+    for ref, (_, held, extra) in logo_extra.items():
+        parts = [(name, held.filter(pl.col(name))) for name in FLAGS if name != "filled"]
+        if extra is not None:
+            parts.append(("filled", extra))
+        for name, part in parts:
+            if part.height:
+                md.append(
+                    f"| {ref} | {name} | {part.height} | {part['hit_mond'].mean():.1%} |"
+                    f" {part['hit_const'].mean():.1%} | {part['area_mond'].median():.2f} |"
+                )
     # coverage per camera-speed tercile
     md += ["", "Coverage per camera-speed tercile (image motion of a ground grid between output frames),"
            " Mondrian ellipses / constant circle:", "",
@@ -824,13 +907,15 @@ def temporal_section(
 
 def track_stats(track: tm.SmoothedTrack | None) -> dict[str, Any]:
     if track is None:
-        return {"segments": 0, "rejected": 0, "short": 0, "mean_nis": None}
+        return {"segments": 0, "deleted": 0, "short": 0, "manoeuvre": 0, "mean_nis": None, "passes": 0}
     nis = track.nis[np.isfinite(track.nis)]
     return {
         "segments": len(np.unique(track.segment[track.segment >= 0])),
-        "rejected": int(track.rejected.sum()),
+        "deleted": int(track.rejected.sum()),  # measurements deleted (repaired or rejected frames)
         "short": int(track.short.sum()),
+        "manoeuvre": int(track.manoeuvre.sum()),
         "mean_nis": float(nis.mean()) if nis.size else None,
+        "passes": track.n_iter,
     }
 
 
@@ -865,6 +950,7 @@ def smoothing_json(
             "own_centre": own.centre.tolist() if own is not None else None,
             "own_sd_m": own.sd_m if own is not None else None,
             "own_reliable": own.reliable if own is not None else None,
+            "game_centre_refused": info.refused.get(cid, False),
             "kappa2_clip": meas.kappa2_clip if meas is not None else None,
             "misfit_share": float(meas.misfit[base].mean()) if meas is not None and base.any() else None,
             **track_stats(o.track),
@@ -924,7 +1010,10 @@ def git_sha() -> str:
 
 @app.command()
 def main(
-    out: Path | None = typer.Option(None, help="Report path (default runs/<run>/report.md)."),  # noqa: B008
+    out: Path | None = typer.Option(  # noqa: B008
+        None,
+        help=f"Report path (default: {DEFAULT_REPORT} for a full per-frame run, else runs/<run>/report.md)",
+    ),
     max_clips: int = 0,
     smooth: Smooth = typer.Option(Smooth.none, help="Camera: per-frame, PTZ projection or PTZ smoother."),  # noqa: B008
     clips: str = typer.Option("", help="Comma-separated dev clip ids (default: every cached dev clip)."),
@@ -976,6 +1065,9 @@ def main(
         if o.fold is None or o.fold == o.cc.game:
             frame_rows.extend(frame_rows_out(o.cc, o.results, o.flags, o.diag, o.fold))
             held_outputs.append(o)
+    if not any(t.height for t in tables):
+        typer.echo("No player rows: no labelled frame of the selected clips has a calibrated camera.")
+        raise typer.Exit(1)
     all_players = pl.concat([t for t in tables if t.height], how="vertical")
     fold_col = "fold" if smooth is Smooth.ptz and fit_scope is FitScope.fold else None
     players = all_players.filter(pl.col("fold") == pl.col("game")) if fold_col else all_players
@@ -1062,8 +1154,9 @@ def main(
         "",
         "Notes. Exploratory dev numbers, not the preregistered test. Frames are subsampled at 5 fps and",
         "remain correlated within a clip, hence clip-level bootstrap intervals. Mondrian bins: metres per",
-        "pixel at the feet (3 bins) × number of RANSAC inliers (2 bins); small bins use the pooled",
-        "quantile.",
+        "pixel at the feet (3 bins) × number of RANSAC inliers (2 bins), formed within each covariance",
+        "source when the camera is smoothed (smoother, PTZ projection, per-frame); small bins use the",
+        "pooled quantile of their source.",
     ]
     if smooth is not Smooth.none:
         raw_players = pl.concat(
@@ -1081,7 +1174,8 @@ def main(
             "",
             f"Runtime: {time.perf_counter() - t_start:.0f} s (calibration or loading {t_calib:.0f} s).",
         ]
-    report = out or run_dir / "report.md"
+    full_none = smooth is Smooth.none and not clips and not max_clips
+    report = out or (DEFAULT_REPORT if full_none else run_dir / "report.md")
     report.parent.mkdir(parents=True, exist_ok=True)
     report.write_text("\n".join(md) + "\n")
     typer.echo("\n".join(md))

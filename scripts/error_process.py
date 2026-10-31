@@ -186,6 +186,15 @@ def _restrict(a: pl.DataFrame, b: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFr
     return a.join(both, on=KEYS), b.join(both, on=KEYS)
 
 
+def camera_labels(paths: list[Path]) -> list[str]:
+    """Distinct table labels: the folder name, else folder/stem, else the full path."""
+    for label in (lambda p: p.parent.name or str(p), lambda p: f"{p.parent.name}/{p.stem}", str):
+        names = [label(p) for p in paths]
+        if len(set(names)) == len(names):
+            return names
+    return [f"{p} ({i + 1})" for i, p in enumerate(paths)]
+
+
 def git_sha() -> str:
     return subprocess.run(
         ["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True
@@ -199,11 +208,12 @@ def main(
     include_filled: bool = typer.Option(False, help="Keep frames whose raw calibration failed (filled)."),
     out: Path = Path("reports/error_process_dev.md"),
 ) -> None:
-    tables = {players_path.parent.name or str(players_path): _load(players_path, include_filled)}
+    main_t = _load(players_path, include_filled)
+    tables = {camera_labels([players_path])[0]: main_t}
     if compare is not None:
-        other = _load(compare, include_filled)
-        main_t, other_t = _restrict(next(iter(tables.values())), other)
-        tables = {compare.parent.name or str(compare): other_t, players_path.parent.name: main_t}
+        main_t, other_t = _restrict(main_t, _load(compare, include_filled))
+        name_other, name_main = camera_labels([compare, players_path])
+        tables = {name_other: other_t, name_main: main_t}
     cmd = f"uv run python scripts/error_process.py {players_path}"
     cmd += f" --compare {compare}" if compare is not None else ""
     cmd += " --include-filled" if include_filled else ""
