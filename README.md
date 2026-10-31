@@ -9,7 +9,9 @@ each broadcast frame from the pitch markings and adds three things to the positi
   from every fitting step;
 - a **calibration health score** that flags frames whose camera is probably wrong, so they can abstain
   (evaluated on the development games, not yet wired into `predfoot run`);
-- an **error budget for physical KPIs** (distance, high-speed running, sprints, PSV-99).
+- an **error budget for physical KPIs** (distance, high-speed running, sprints, PSV-99), measured on the
+  development games with a model-free 5 fps proxy and simulated on IDSSE tracking, by scripts (`predfoot run`
+  computes no KPI yet).
 
 Outputs follow the SkillCorner open-data JSONL schema at 10 fps, with the uncertainty as extra fields
 (`p90_radius_m`, `pos_cov_m2`, `calib_health`, `abstain`).
@@ -23,10 +25,13 @@ Outputs follow the SkillCorner open-data JSONL schema at 10 fps, with the uncert
 One SN-GSR dev clip (SNGS-081, game 5), 15 s at 5 fps, with the labelled player boxes as input. Left: the
 camera calibrated frame by frame; right: the same calibrations smoothed over time. Each shaded ellipse is a
 player's calibrated 90 % region, with quantiles fitted on the five other dev games; black dots are the labelled
-positions; a grey panel publishes no position. The clip was picked by a stated rule to show the smoothing and
-is not typical: its frame-to-frame jitter of the common-mode error falls from 0.52 m to 0.11 m (ratio 0.21,
-median over the dev clips 0.35; [`reports/minimap_demo.md`](reports/minimap_demo.md)). SoccerNet frames cannot
-be redistributed, so SoccerNet results appear only as metrics, plots and minimaps.
+positions. A grey panel publishes no position. A hatched panel did publish positions, but SN-GSR has no
+position labels on that frame, so nothing checks them: on one of the two such frames, both cameras miss the
+annotated lines by 534.9 px. The clip and the window were picked on the labels, by a stated rule, to show the
+smoothing, and are not typical: over the clip the frame-to-frame jitter of the common-mode error falls from
+0.52 m to 0.11 m (ratio 0.21, median over the dev clips 0.35), and the window is the clip's most jittery 15 s
+for the per-frame camera (0.73 m against 0.12 m; [`reports/minimap_demo.md`](reports/minimap_demo.md)).
+SoccerNet frames cannot be redistributed, so SoccerNet results appear only as metrics, plots and minimaps.
 
 ## Development results
 
@@ -37,8 +42,10 @@ clips, since frames within a clip are correlated.
 | | Per-frame camera | PTZ-smoothed camera |
 |---|---|---|
 | Coverage of the 90 % regions, raw labels as reference [95 % CI] | 90.4 % [88.8, 91.8] | 90.6 % [89.0, 92.1] |
+| ... each clip weighted equally | 90.5 % [88.8, 92.0] | 90.8 % [89.0, 92.2] |
 | ... per held-out game | 85.6 to 93.3 % | 84.0 to 95.6 % |
-| ... trusted line oracle as reference [95 % CI] | 94.4 % [92.7, 96.0] | 94.4 % [92.9, 96.0] |
+| Coverage of 90 % regions calibrated on the trusted line oracle, against it [95 % CI] | 94.4 % [92.7, 96.0] | 94.4 % [92.9, 96.0] |
+| ... each clip weighted equally | 91.6 % [89.1, 94.0] | 91.3 % [88.5, 94.0] |
 | Median region area; constant circle at the same nominal level | 6.21 m²; 14.56 m² | 5.37 m²; 7.44 m² |
 | Position error against the raw labels, p50 / p90 / p99 | 0.59 / 2.02 / 5.64 m | 0.46 / 1.46 / 3.99 m |
 | Line reprojection p90; frames above 10 px (9950 frames with self-consistent line annotations) | 10.4 px; 10.7 % | 4.9 px; 1.0 % |
@@ -46,21 +53,28 @@ clips, since frames within a clip are correlated.
 | Frames with published positions | 95.5 % | 95.1 % |
 
 Sources: [`m2_logo_dev.md`](reports/m2_logo_dev.md), [`m2_temporal_dev.md`](reports/m2_temporal_dev.md),
-[`error_process_temporal_dev.md`](reports/error_process_temporal_dev.md). The constant circle covers 90.9 % and
-90.5 %. Before the conformal step, the Laplace ellipses cover only 17.9 % (per-frame) and 7.2 % (smoothed) at
-the same level. The KPI proxy compares 5 fps tracks with the smoothed labels, whose raw counterparts have
-their own bias of +17.9 % / +43.1 % against them.
+[`error_process_temporal_dev.md`](reports/error_process_temporal_dev.md), and
+[`dev_figures.md`](reports/dev_figures.md) for the rows with each clip weighted equally (for the smoothed
+camera, an approximation of the fold-wise fit explained there). Coverage pools the held-out player-frames
+unless a row says otherwise. The constant circle covers 90.9 % and 90.5 %. Before the conformal step, the
+Laplace ellipses cover only 17.9 % (per-frame) and 7.2 % (smoothed) at the same level. The KPI proxy compares
+5 fps tracks with the smoothed labels, whose raw counterparts have their own bias of +17.9 % / +43.1 % against
+them. It leaves out player-frames 10 m or more from the labels, as calibration failures for abstention to
+catch, which `predfoot run` cannot do yet.
 
 Failure detection, per-frame camera ([`m3_health_dev.md`](reports/m3_health_dev.md)): a frame fails when the
 annotated lines sit more than 10 px from the projected pitch (11.0 % of 10024 frames). Scored out-of-game, the
 AUROC is 0.89 for gradient boosting, 0.79 for logistic regression and 0.73 for the best single feature;
 abstaining on the riskiest 10 % of frames removes 50 %, 32 % and 29 % of the failures.
 
-![Coverage against the nominal level, both cameras, against the raw labels and the trusted line oracle](reports/figures/reliability.png)
+![Coverage minus the nominal level for both cameras, with player-frames pooled and with clips weighted equally, against the raw labels and against the trusted line oracle](reports/figures/reliability.png)
 
 At the 50, 80, 90 and 95 % levels the regions cover 49.5, 80.0, 90.4 and 95.7 % of the labelled positions
-(per-frame camera; smoothed: 49.7, 80.0, 90.6 and 95.7 %), and over-cover at every level against the line
-oracle. Region size against the constant circle, coverage by distance and the KPI proxy:
+(per-frame camera; smoothed: 49.7, 80.0, 90.6 and 95.7 %); weighting each clip equally moves these by at most
+0.4 points. Regions calibrated on the line oracle instead cover more than nominal at every level when
+player-frames are pooled, but only 0.8 to 2.4 points more, every interval containing nominal, when each clip
+weighs the same, as the conformal quantile weighs its calibration clips (see the evidence below). Region size
+against the constant circle, coverage by distance and by clip size, and the KPI proxy:
 [`reports/dev_figures.md`](reports/dev_figures.md).
 
 ## How it works
@@ -100,10 +114,11 @@ flowchart LR
    modules compute distance, high-speed running, sprints and PSV-99 at 10 fps and how position errors bias
    them.
 
-**What `predfoot run` does today:** steps 1, 3 and 5, from cached network detections. The PTZ smoother is
-implemented and used by the dev evaluation, and the real pipeline stages accept it, but the command line does
-not expose it yet. The health classifier is evaluated on dev only (`scripts/eval_health.py`): in
-`predfoot run`, `calib_health` is null and a frame abstains when its calibration fails. Details:
+**What `predfoot run` does today:** steps 1 and 3 and the export of step 5, from cached network detections.
+The PTZ smoother is implemented and used by the dev evaluation, and the real pipeline stages accept it, but the
+command line does not expose it yet. The health classifier is evaluated on dev only
+(`scripts/eval_health.py`): in `predfoot run`, `calib_health` is null and a frame abstains when its
+calibration fails. The KPI modules run only in the evaluation scripts; a run's outputs hold no KPI. Details:
 [ARCHITECTURE.md](ARCHITECTURE.md), conventions in [ADR-0001](docs/adr/0001-conventions.md).
 
 ## What the evidence shows, and what it does not
@@ -115,10 +130,18 @@ not expose it yet. The health classifier is evaluated on dev only (`scripts/eval
 - **Neither reference is the truth.** The SN-GSR labels are the annotators' camera applied to the boxes; that
   camera sits 3.9 px (median) from the annotated lines ([`spike_s0.md`](reports/spike_s0.md)). The trusted line
   oracle is a homography fitted to the annotated lines of each frame, kept where it fits them within 3 px.
-  Against it the regions over-cover (94.4 % at 90 %, intervals above 92 %), and since it is fitted frame by
-  frame it penalises a smooth camera: smoothing doubles the median region area needed against it (12.58 to
-  26.16 m²). The draft preregistration makes this oracle its primary reference; on dev, its coverage
-  criterion (a 95 % interval containing 90 %) would fail as the method stands.
+  Since it is fitted frame by frame, it penalises a smooth camera: regions calibrated on its errors double in
+  median area with smoothing (12.58 to 26.16 m²).
+- **Against the line oracle, the weighting of coverage matters.** Regions calibrated on oracle errors cover
+  94.4 % of the held-out player-frames at 90 %, for both cameras. The conformal quantile weighs every
+  calibration clip equally, while that coverage weighs player-frames, and against the oracle a clip's coverage
+  rises with its number of trusted player-frames: 84.6 % in the smallest third of the clips, 96.6 % in the
+  largest (per-frame camera). Weighting each clip equally gives 91.6 % [89.1, 94.0] for the per-frame camera
+  and 91.3 % [88.5, 94.0] for the smoothed one; against the labels the two weightings agree (90.4 and 90.5 %,
+  per-frame camera). The draft preregistration makes the oracle
+  its primary reference and the clip its unit of analysis, but does not say how player-frames are weighted:
+  on dev, its coverage criterion (a 95 % interval containing 90 %) would fail with pooled player-frames and
+  pass with clips weighted equally. That choice has to be made, and argued, before the file is frozen.
 - **Inputs are labelled boxes.** Detection and tracking errors are not part of these numbers.
 - **SoccerTrack v2 supplies demo pixels only.** Its released calibration misses its own annotated keypoints by
   8 to 23 px (median), metres on the far half of the pitch, so it cannot referee predfoot. On its virtual

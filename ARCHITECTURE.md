@@ -68,7 +68,7 @@ command, commit and run folder.
 | `eval_health.py` | Out-of-game failure detection from the health features | `m3_health_dev.md` |
 | `error_process.py` | Common and individual error processes, model-free KPI proxy | `error_process_temporal_dev.md` |
 | `kpi_spectral.py`, `kpi_card.py` | KPI budget and cards on IDSSE with simulated errors | `kpi_budget_spectral.md`, `kpi_card.md` |
-| `make_figures.py` | Coverage at four levels, region size, distance terciles, KPI proxy | `dev_figures.md` |
+| `make_figures.py` | Coverage at four levels, pooled and with every clip weighted equally; region size, coverage by distance and by clip size, KPI proxy | `dev_figures.md` |
 | `render_minimap_demo.py` | The README animation (minimaps only) | `minimap_demo.md` |
 
 ## Outputs of a run
