@@ -21,7 +21,7 @@ import re
 import shutil
 import subprocess
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -94,6 +94,10 @@ class Stages:
     detect: Callable[[ClipFrame], list[FootObs]]
     localize: Callable[[CalibResult, Sequence[FootObs]], list[Localization]]
     health: Callable[[CalibResult], tuple[float | None, bool]]
+    #: What each stage does (calibration, detection, localization, health), for meta.json. None: the stubs.
+    description: Mapping[str, str] | None = None
+    #: Provenance of the conformal model behind the regions, for meta.json; None without one.
+    conformal: Mapping[str, Any] | None = None
 
 
 def stub_stages(config: RunConfig) -> Stages:
@@ -281,7 +285,7 @@ def run_clip(
         team_of=clip.teams,
         title=clip.clip_id,
     )
-    write_json(out_dir / "meta.json", _meta(clip, input_path, input_sha, settings, config_hash, sha))
+    write_json(out_dir / "meta.json", _meta(clip, input_path, input_sha, settings, config_hash, sha, stages))
     n_abstained = sum(summary.abstain)
     write_json(
         out_dir / "metrics.json",
@@ -346,8 +350,11 @@ def _meta(
     settings: dict[str, Any],
     config_hash: str,
     sha: str | None,
+    stages: Stages | None = None,
 ) -> dict[str, Any]:
     """Provenance of a run. No timestamps, so that a resumed run writes the same bytes."""
+    described = stages.description if stages is not None else None
+    description = dict(described) if described is not None else _stub_description(settings)
     return {
         "schema_version": SCHEMA_VERSION,
         "predfoot_version": __version__,
@@ -361,14 +368,18 @@ def _meta(
         "image_size": list(clip.image_size),
         "pitch": {"length": clip.pitch.length, "width": clip.pitch.width},
         "time_resampling": "linear interpolation between the two native frames around each export instant",
-        "stages": {
-            "calibration": "stub: homography read from the input",
-            "detection": "stub: foot points read from the input",
-            "localization": (
-                "inverse homography; placeholder uncertainty: constant "
-                f"{settings['placeholder_radius_m']:g} m radius, isotropic covariance"
-            ),
-            "health": "none: calib_health is null; a frame abstains when its calibration failed",
-        },
-        "conformal": None,
+        "stages": description,
+        "conformal": None if stages is None or stages.conformal is None else dict(stages.conformal),
+    }
+
+
+def _stub_description(settings: dict[str, Any]) -> dict[str, str]:
+    return {
+        "calibration": "stub: homography read from the input",
+        "detection": "stub: foot points read from the input",
+        "localization": (
+            "inverse homography; placeholder uncertainty: constant "
+            f"{settings['placeholder_radius_m']:g} m radius, isotropic covariance"
+        ),
+        "health": "none: calib_health is null; a frame abstains when its calibration failed",
     }

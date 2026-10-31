@@ -7,6 +7,7 @@ region {e : eᵀ Σp⁻¹ e ≤ q̂}, and ``p90_radius_m`` = √(q̂ · λmax(Σ
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -71,5 +72,39 @@ def real_stages(
         return out
 
     return Stages(
-        version=version, calibrate=calibrate, detect=stub.detect, localize=localize, health=stub.health
+        version=version,
+        calibrate=calibrate,
+        detect=stub.detect,
+        localize=localize,
+        health=stub.health,
+        description=_description(conformal),
+        conformal=None if conformal is None else conformal_provenance(conformal),
     )
+
+
+def conformal_provenance(model: MondrianConformal) -> dict[str, Any]:
+    """What meta.json records about a conformal model: enough to recognise it and to recompute every q̂."""
+    return {
+        "kind": "mondrian",
+        "sha256": hashlib.sha256(model.to_json().encode("utf-8")).hexdigest(),
+        "alpha": model.alpha,
+        "pooled": model.pooled,
+        "edges": model.edges,
+        "quantiles": model.quantiles,
+    }
+
+
+def _description(conformal: MondrianConformal | None) -> dict[str, str]:
+    regions = (
+        "scaled by the Mondrian conformal quantile of each player's bin (metres per pixel at the feet, "
+        "RANSAC inliers)"
+        if conformal is not None
+        else "uncalibrated Laplace regions (q = χ²₂(0.90))"
+    )
+    return {
+        "calibration": "RANSAC + soft-L1 Levenberg-Marquardt on the cached keypoint and line detections; "
+        "Laplace covariance of the 8 homography parameters",
+        "detection": "foot points read from the input",
+        "localization": f"inverse homography; delta-method covariance from the calibration, {regions}",
+        "health": "none: calib_health is null; a frame abstains when its calibration failed",
+    }

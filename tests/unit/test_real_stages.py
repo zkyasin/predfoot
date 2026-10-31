@@ -1,3 +1,5 @@
+import hashlib
+
 import numpy as np
 
 from predfoot.contracts import FootObs
@@ -62,3 +64,22 @@ def test_missing_detections_abstain():
     assert not calib.ok
     assert stages.health(calib) == (None, True)
     assert stages.localize(calib, [FootObs(track_id=1, uv=np.array([10.0, 10.0]))])[0].xy is None
+
+
+def test_real_stages_describe_themselves_for_meta_json():
+    laplace = real_stages({}, conformal=None, version="test")
+    assert laplace.conformal is None
+    assert laplace.description is not None
+    assert "uncalibrated Laplace" in laplace.description["localization"]
+    model = MondrianConformal(alpha=0.1, edges={"mpp": [0.05]}, quantiles={"0": 6.0}, pooled=7.0)
+    stages = real_stages({}, conformal=model, version="test")
+    assert stages.description is not None
+    assert "Mondrian" in stages.description["localization"]
+    assert stages.conformal == {
+        "kind": "mondrian",
+        "sha256": hashlib.sha256(model.to_json().encode("utf-8")).hexdigest(),
+        "alpha": 0.1,
+        "pooled": 7.0,
+        "edges": {"mpp": [0.05]},
+        "quantiles": {"0": 6.0},
+    }
