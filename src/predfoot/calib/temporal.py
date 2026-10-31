@@ -13,7 +13,8 @@ Per clip, without labels:
    it does not explain the clip (:func:`measure_at_centre`).
 2. :func:`measure_clip`: each OK homography is projected onto the PTZ manifold at C with the shape of its
    Laplace covariance (:func:`project_to_ptz`). Frames the model cannot explain (another camera, a wrong
-   RANSAC basin) are flagged ``misfit`` and pass through unchanged.
+   RANSAC basin) are flagged ``misfit``: a short run of them inside a segment is a calibration failure and
+   gets the smoothed state (:func:`bridged_frames`), a longer one may be another camera and passes through.
 3. :func:`smooth_clip`: constant-velocity Kalman filter and RTS smoother on φ inside shot segments
    (:func:`segments`), with deletion of outlying measurements to a fixed point.
 4. :func:`to_calib_results`: H and cov_theta rebuilt as :class:`~predfoot.contracts.CalibResult`, so position
@@ -76,6 +77,13 @@ class SmootherConfig:
     floor_px: float = 0.0  # fixed pixel floor added to the measurement covariance; off in v1
     v0: tuple[float, float, float, float] = (1.0, 0.3, 0.05, 0.5)  # prior sd of the rates at a segment start
     min_segment: int = 3  # fewer used measurements: the segment is "short" (projection only)
+    # A run of off-model frames (misfit or not projected) strictly inside a segment that lasts at most this
+    # long (from its first frame to the frame after its last) gets the smoothed state; a longer one passes
+    # through. A priori: a cut-away to another camera and back (replay, close-up, crowd) lasts seconds, and a
+    # live director does not cut a shot shorter than half a second, so a shorter run between frames of the
+    # main camera is a calibration failure. Half the gap limit (max_gap_s) also keeps the main camera seen for
+    # at least half of every bridged second. At 5 fps: runs of 1-2 frames are bridged, of 3-4 passed through.
+    max_misfit_run_s: float = 0.5
     split_run: int = 3  # this many consecutive flagged measurements are tried as their own segment
     # A single-step manoeuvre must lower the innovation NLL of the other measurements by more than this. At 0
     # it is a likelihood comparison of two fixed models on the same data, the log det of the freed step being
@@ -212,6 +220,7 @@ class FrameFlags:
     smoothed: BoolArray
     repaired: BoolArray  # rejected measurement replaced by the smoothed state
     filled: BoolArray  # failed raw calibration inside a segment
+    bridged: BoolArray  # off-model frame in a short run inside a segment, replaced by the smoothed state
     projected: BoolArray  # PTZ projection only (short segment, or the projection ablation)
     passthrough: BoolArray  # raw homography, covariance scaled by κ²
     duplicate: BoolArray  # same detections as the previous frame: output copied
@@ -227,6 +236,7 @@ class FrameFlags:
             smoothed=z(),
             repaired=z(),
             filled=z(),
+            bridged=z(),
             projected=z(),
             passthrough=z(),
             duplicate=z(),
@@ -1268,6 +1278,28 @@ def _ptz_result(
     )
 
 
+def bridged_frames(meas: ClipMeasurements, track: SmoothedTrack, cfg: SmootherConfig) -> BoolArray:
+    """Off-model frames (raw OK, misfit or not projected) to replace by the smoothed state.
+
+    They are the maximal runs of consecutive off-model frames strictly inside one segment that is not short
+    (so used measurements of that segment, at most ``max_gap_s`` apart, bracket the run) and that last at most
+    ``max_misfit_run_s`` from the run's first frame to the frame after its last. A duplicate of an off-model
+    frame is off-model too, so it lengthens the run. Longer runs may be a cut to another camera and pass
+    through.
+    """
+    n = len(meas)
+    out = np.zeros(n, dtype=bool)
+    seg = track.segment
+    off = np.asarray(meas.raw_ok & (meas.misfit | ~meas.projected), dtype=bool)
+    inside = (seg >= 0) & ~track.short & np.isfinite(track.mean[:, 0])
+    for run in _runs(np.arange(n), off & inside, seg):
+        first, after = int(run[0]), int(run[-1]) + 1
+        strict = first > 0 and after < n and seg[first - 1] == seg[first] == seg[after]
+        if strict and meas.times[after] - meas.times[first] <= cfg.max_misfit_run_s + 1e-9:
+            out[run] = True
+    return out
+
+
 def to_calib_results(
     raw: Sequence[CalibResult],
     meas: ClipMeasurements,
@@ -1278,8 +1310,9 @@ def to_calib_results(
     """Per-frame outputs, rules applied in order:
 
     1. duplicate detections (k > 0): copy of output k − 1;
-    2. inside a segment that is not short (and not a misfit or failed projection): smoothed state,
-       cov_theta = A (P|T + β R_k [used]) Aᵀ with A = ∂θ/∂φ, dof None; flag smoothed / repaired / filled;
+    2. inside a segment that is not short: smoothed state, cov_theta = A (P|T + β R_k [used]) Aᵀ with
+       A = ∂θ/∂φ, dof None, for used (flag smoothed), deleted (repaired) and failed frames (filled), and for
+       off-model frames (misfit or failed projection) in a short run (:func:`bridged_frames`, flag bridged);
     3. used frame of a short segment: PTZ projection, cov_theta = A R_k Aᵀ; flag projected;
     4. measurement deleted by the robust passes with no smoothed state to replace it (outside every segment,
        or in a short one): abstains (status UNHEALTHY), since its raw camera was judged an outlier; flag
@@ -1293,6 +1326,7 @@ def to_calib_results(
     flags = FrameFlags.empty(n)
     out: list[CalibResult] = []
     centre = meas.centre.centre if meas.centre is not None else None
+    bridge = bridged_frames(meas, track, cfg)
     for k in range(n):
         r = raw[k]
         if k > 0 and meas.duplicate[k]:
@@ -1310,6 +1344,8 @@ def to_calib_results(
             if smooth and track.rejected[k]
             else flags.filled
             if smooth and not raw_ok
+            else flags.bridged
+            if bridge[k]
             else None
         )
         if centre is not None and flag is not None:

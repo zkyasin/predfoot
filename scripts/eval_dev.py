@@ -73,7 +73,7 @@ ALPHA = 0.1
 NATIVE_FPS = 25.0
 IMAGE_SIZE = (1920, 1080)
 FAIL_LINE_PX = 10.0
-FLAGS = ("smoothed", "repaired", "filled", "projected", "passthrough", "duplicate", "rejected")
+FLAGS = ("smoothed", "repaired", "filled", "bridged", "projected", "passthrough", "duplicate", "rejected")
 DEFAULT_REPORT = Path("reports/m2_logo_dev.md")
 #: Mondrian bins of a covariance source; the sources in POOLED_SOURCES (few rows) get one pooled quantile.
 MONDRIAN_BINS = {"mpp": 3, "n_inliers": 2}
@@ -211,8 +211,9 @@ def cov_sources(flags: tm.FrameFlags | None, n: int) -> np.ndarray:
     """Model behind each output covariance, so that each gets its own conformal quantiles:
 
     - "smoother": smoothed and repaired frames, the RTS state pooled over a segment;
-    - "gap": filled frames, the state across a gap without a measurement, whose steps carry the gap factor λ:
-      relative to its error, that covariance is about two orders of magnitude wider than a smoothed frame's;
+    - "gap": filled and bridged frames, the state across a gap without a measurement, whose steps carry the
+      gap factor λ: relative to its error, that covariance is about two orders of magnitude wider than a
+      smoothed frame's;
     - "frame": one frame's own calibration, passed through or per-frame, or projected on the PTZ manifold in
       the projection ablation (κ² Σθ and A κ² Σφ Aᵀ, Σφ being Σθ projected on the manifold: the same
       single-frame information and scale).
@@ -227,7 +228,7 @@ def cov_sources(flags: tm.FrameFlags | None, n: int) -> np.ndarray:
             out[k] = out[k - 1]
         elif flags.smoothed[k] or flags.repaired[k]:
             out[k] = "smoother"
-        elif flags.filled[k]:
+        elif flags.filled[k] or flags.bridged[k]:
             out[k] = "gap"
     return out
 
@@ -889,12 +890,26 @@ def temporal_section(
                 )
     else:
         md[-1] += "."
+    bridged = joined.filter(pl.col("bridged"))
+    md += [
+        "",
+        f"Bridged frames (run of off-model frames of at most {cfg.max_misfit_run_s:g} s inside a segment, raw"
+        f" camera replaced by the smoothed state): {bridged.height} player-frames",
+    ]
+    if bridged.height:
+        raw_bridged = bridged.select(*keys, *[pl.col(f"{c}_raw").alias(c) for c in err_cols])
+        md[-1] += (
+            f" on {bridged.select('clip', 'frame').n_unique()} frames; error p50 | p90 | p99 against labels"
+            f" {q3(_err(raw_bridged, 'lab'))} m per-frame, {q3(_err(bridged, 'lab'))} m output."
+        )
+    else:
+        md[-1] += "."
     # coverage per output type (quantiles are fitted within each covariance source)
     md += [
         "",
         "Coverage per output type (quantiles fitted within each covariance source: smoother for smoothed and"
-        " repaired frames, gap for filled frames, single frame for the others), Mondrian ellipses / constant"
-        " circle, and median Mondrian area:",
+        " repaired frames, gap for filled and bridged frames, single frame for the others), Mondrian ellipses"
+        " / constant circle, and median Mondrian area:",
         "",
         "| Reference | Type | Player-frames | Mondrian | Constant circle | Median area (m²) |",
         "|---|---|---|---|---|---|",

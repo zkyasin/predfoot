@@ -1,4 +1,5 @@
 import time
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -477,6 +478,64 @@ def test_an_outlier_at_a_segment_edge_is_never_published_raw(rng):
         if flags.rejected[k]:
             assert res[k].status is CalibStatus.UNHEALTHY
             assert res[k].H is None
+
+
+def test_a_short_misfit_run_inside_a_segment_gets_the_smoothed_state(rng):
+    """Frames of another camera (calibrated, but off the clip's PTZ model): one frame (30) and two (100-101)
+    strictly inside a segment are calibration failures and get the smoothed state, close to the truth; three
+    (120-122, 0.6 s) may be a cut-away and pass through, as do misfits at the clip edges (0 and n - 1), which
+    no smoothed state brackets."""
+    _, phi = ptz_path()
+    n = len(phi)
+    bridged, kept = [30, 100, 101], [0, 120, 121, 122, n - 1]
+    calibs = gaussian_calibs(phi, CENTRE, rng, other_camera=(bridged + kept, C2))
+    assert all(calibs[k].ok for k in bridged + kept)
+    meas = measure(calibs)
+    assert meas.misfit[bridged + kept].all()
+    track = tm.smooth_clip(meas, PARAMS, CFG)
+    res, flags = tm.to_calib_results(calibs, meas, track, PARAMS, CFG)
+    assert flags.bridged.tolist() == [k in bridged for k in range(n)]
+    assert flags.passthrough[kept].all()
+    names = ("smoothed", "repaired", "filled", "bridged", "projected", "passthrough", "duplicate", "rejected")
+    np.testing.assert_array_equal(np.sum([getattr(flags, f) for f in names], 0), 1)
+    for k, used_before in zip(bridged, (29, 99, 99), strict=True):
+        np.testing.assert_allclose(res[k].H, ptz.homography(track.mean[k, :4], CENTRE))
+        assert res[k].n_inliers == calibs[k].n_inliers
+        assert track.used[used_before]
+        assert np.trace(track.cov[k, :4, :4]) > np.trace(track.cov[used_before, :4, :4])  # no measurement
+    e_out = norms(probe_errors([r.H for r in res], h_true(phi)))
+    e_raw = norms(probe_errors([c.H for c in calibs], h_true(phi)))
+    assert np.nanmax(e_out[bridged]) < 0.5
+    assert np.nanmedian(e_raw[bridged]) > 5.0
+    for k in kept:
+        np.testing.assert_array_equal(res[k].H, calibs[k].H)
+
+
+def test_the_misfit_run_limit_is_a_duration(rng):
+    """``max_misfit_run_s`` = 0.5 s from the run's first frame to the frame after its last: at 5 fps (one
+    native frame in five) runs of up to two frames are bridged, at 25 fps runs of up to twelve. A run that
+    touches the edge of its segment, or lies in a short segment, is never bridged."""
+    n = 60
+    for step, longest in ((5, 2), (1, 12)):
+        frames = step * np.arange(n)
+        meas = toy_clip(rng, n)
+        fits, too_long = list(range(10, 10 + longest)), list(range(30, 31 + longest))
+        misfit = np.zeros(n, bool)
+        misfit[fits + too_long] = True
+        meas = tm.ClipMeasurements(
+            **{**meas.__dict__, "frames": frames, "times": frames / CFG.fps, "misfit": misfit,
+               "accepted": meas.accepted & ~misfit}
+        )  # fmt: skip
+        track = replace(
+            tm.empty_track(meas, PARAMS, CFG), segment=np.zeros(n, np.int64), mean=np.zeros((n, 8))
+        )
+        assert tm.bridged_frames(meas, track, CFG).tolist() == [k in fits for k in range(n)]
+        edge = track.segment.copy()
+        edge[: fits[0]] = -1  # the run now starts its segment
+        assert not tm.bridged_frames(meas, replace(track, segment=edge), CFG).any()
+        short = np.zeros(n, bool)
+        short[fits] = True
+        assert not tm.bridged_frames(meas, replace(track, short=short), CFG)[fits].any()
 
 
 def test_a_nominal_one_second_gap_is_bridged_wherever_it_falls(rng):
