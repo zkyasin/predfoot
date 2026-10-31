@@ -126,7 +126,7 @@ def real_stages(
         detect=stub.detect,
         localize=localize,
         health=stub.health,
-        description=_description(conformal),
+        description=_description(conformal, smoothed=temporal is not None),
         conformal=None if conformal is None else conformal_provenance(conformal),
         check_clip=lambda clip: check_detection_frames(detections, clip),
     )
@@ -177,7 +177,7 @@ def conformal_provenance(model: MondrianConformal) -> dict[str, Any]:
     }
 
 
-def _description(conformal: MondrianConformal | None) -> dict[str, str]:
+def _description(conformal: MondrianConformal | None, smoothed: bool = False) -> dict[str, str]:
     regions = (
         "scaled by the Mondrian conformal quantile of each player's bin (metres per pixel at the feet, "
         "RANSAC inliers)"
@@ -186,7 +186,12 @@ def _description(conformal: MondrianConformal | None) -> dict[str, str]:
     )
     return {
         "calibration": "RANSAC + soft-L1 Levenberg-Marquardt on the cached keypoint and line detections; "
-        "Laplace covariance of the 8 homography parameters",
+        "Laplace covariance of the 8 homography parameters"
+        + (
+            "; then fixed-centre pan-tilt-zoom Kalman/RTS smoothing over the clip (predfoot.calib.temporal)"
+            if smoothed
+            else ""
+        ),
         "detection": "foot points read from the input",
         "localization": f"inverse homography; delta-method covariance from the calibration, {regions}",
         "health": "none: calib_health is null; a frame abstains when its calibration failed",
