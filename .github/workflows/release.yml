@@ -86,6 +86,13 @@ jobs:
             predfoot:release run /in/synthetic_clip.json --out /out
           docker run --rm --entrypoint predfoot -v "$PWD/out:/out:ro" \
             predfoot:release validate /out/tracking.jsonl --match /out/match.json
+          mkdir -p golden-out
+          chmod 0777 golden-out
+          docker run --rm --entrypoint predfoot -v "$PWD/tests/fixtures/golden:/golden:ro" \
+            -v "$PWD/golden-out:/out" predfoot:release run /golden/clip.json \
+            --detections /golden/detections.json --conformal /golden/conformal.json --out /out
+          docker run --rm --entrypoint python -v "$PWD/tests/fixtures/golden:/golden:ro" \
+            -v "$PWD/golden-out:/out:ro" predfoot:release -m predfoot.io.compare /out /golden/expected
 
       - uses: docker/login-action@v3
         with:

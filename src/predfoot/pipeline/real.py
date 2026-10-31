@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -18,6 +19,7 @@ from predfoot.calib.solver import SolverConfig
 from predfoot.calib.solver import calibrate as solve
 from predfoot.contracts import CalibResult, CalibStatus, FootObs, Localization
 from predfoot.geometry import homography as hg
+from predfoot.keypoints.cache import load_detections
 from predfoot.pipeline import stub
 from predfoot.pipeline.clip import ClipFrame
 from predfoot.pipeline.run import Stages
@@ -108,3 +110,22 @@ def _description(conformal: MondrianConformal | None) -> dict[str, str]:
         "localization": f"inverse homography; delta-method covariance from the calibration, {regions}",
         "health": "none: calib_health is null; a frame abstains when its calibration failed",
     }
+
+
+def stages_from_files(
+    detections: Path, conformal: MondrianConformal | None = None, solver: SolverConfig | None = None
+) -> Stages:
+    """Real stages over a detections file (``predfoot-detections/1``, keyed by the clip's frame index).
+
+    The version names the detection model, a hash of the file and the conformal model, so that a resumed run
+    never reuses blocks computed from other detections or other quantiles.
+    """
+    path = Path(detections)
+    dets, model_version = load_detections(path)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()[:12]
+    tag = (
+        "laplace"
+        if conformal is None
+        else f"mondrian@{hashlib.sha256(conformal.to_json().encode('utf-8')).hexdigest()[:12]}"
+    )
+    return real_stages(dets, conformal, f"real+{model_version or 'unknown'}+det@{digest}+{tag}", solver)

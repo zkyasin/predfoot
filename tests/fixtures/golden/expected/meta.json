@@ -1,12 +1,12 @@
 {
   "schema_version": "1.0",
-  "config_hash": "dd46306269174f72d3cdd538aee82bf6bd62018b3831eb5ca320b46ab0080a15",
+  "config_hash": "f35adb10ad02e6c08b7c8be1f07706fb6a97c8d413816468773c1f74b1d1dcd7",
   "config": {
     "export_fps": 10.0,
     "placeholder_radius_m": 1.0,
     "n_panels": 6,
     "schema_version": "1.0",
-    "stages": "golden-1+synthetic-detections-1"
+    "stages": "real+synthetic-detections-1+det@76ecf51e278e+mondrian@892b11963c54"
   },
   "input": {
     "file": "clip.json",

@@ -11,7 +11,7 @@ on:
       - "pyproject.toml"
       - "uv.lock"
       - "tests/fixtures/synthetic_clip.json"
-      - "tests/fixtures/golden/localize_request.json"
+      - "tests/fixtures/golden/**"
       - ".github/workflows/docker.yml"
   push:
     branches: [main]
@@ -73,6 +73,16 @@ jobs:
           cp out/qa_report.html first-report.html
           docker run --rm -v "$PWD/out:/out" predfoot:cli qa /out
           cmp out/qa_report.html first-report.html  # the same bytes from the run outputs alone
+
+      - name: The real stages reproduce the golden outputs in the image
+        run: |
+          mkdir -p golden-out
+          chmod 0777 golden-out
+          docker run --rm -v "$PWD/tests/fixtures/golden:/golden:ro" -v "$PWD/golden-out:/out" \
+            predfoot:cli run /golden/clip.json --detections /golden/detections.json \
+            --conformal /golden/conformal.json --out /out
+          docker run --rm --entrypoint python -v "$PWD/tests/fixtures/golden:/golden:ro" \
+            -v "$PWD/golden-out:/out:ro" predfoot:cli -m predfoot.io.compare /out /golden/expected
 
       - name: Image size
         run: docker image ls predfoot:cli

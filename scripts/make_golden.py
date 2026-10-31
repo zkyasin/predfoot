@@ -14,10 +14,11 @@ the players of the clip fall into different bins, one of which falls back to the
 native frame 0, as ``/v1/calibrate`` would return it, its feet, and one foot above the horizon.
 
 ``tests/integration/test_golden_real.py`` runs calibration, conformal regions, localization and export on
-these inputs (:func:`run_golden`) and compares the outputs with ``expected/``: exact on structure, ids,
-flags and texts, within one unit of the last written decimal on numbers (macOS and Linux CI may round a few
-values differently). Only ``--update`` rewrites ``expected/``: use it when a change of the outputs is
-intended, and review the diff.
+these inputs (:func:`run_golden`, the stages of ``predfoot run --detections --conformal``) and compares the
+outputs with ``expected/`` (:func:`predfoot.io.compare.compare_runs`): exact on structure, ids, flags and
+texts, within one unit of the last written decimal on numbers (macOS and Linux CI may round a few values
+differently). The Docker workflow runs the same comparison on the outputs of the cli image. Only
+``--update`` rewrites ``expected/``: use it when a change of the outputs is intended, and review the diff.
 """
 
 from __future__ import annotations
@@ -32,10 +33,11 @@ from typing import Any
 import numpy as np
 
 from predfoot.geometry import homography as hg
-from predfoot.keypoints.cache import dumps_detections, load_detections
+from predfoot.io.compare import normalised_meta, normalised_metrics
+from predfoot.keypoints.cache import dumps_detections
 from predfoot.paths import REPO_ROOT
 from predfoot.pipeline.clip import ClipFrame, load_clip
-from predfoot.pipeline.real import real_stages
+from predfoot.pipeline.real import stages_from_files
 from predfoot.pipeline.run import RunConfig, RunResult, Stages, run_clip
 from predfoot.pipeline.synthetic import (
     SPECTATOR_TRACK_ID,
@@ -43,6 +45,7 @@ from predfoot.pipeline.synthetic import (
     make_broadcast_clip,
     synthetic_detections,
 )
+from predfoot.serve.localize import load_conformal
 from predfoot.uncertainty.conformal import MondrianConformal
 
 GOLDEN_DIR = REPO_ROOT / "tests" / "fixtures" / "golden"
@@ -54,7 +57,6 @@ OUTLIERS = {2: 1, 10: 2, 15: 1}
 SPARSE_FRAMES = (7,)  # three keypoints and no line: too few to calibrate
 MISSING_FRAMES = (8,)  # no detection at all
 MODEL_VERSION = "synthetic-detections-1"
-STAGES_VERSION = "golden-1"
 BLOCK_SIZE = 3  # several resumable blocks, as in a real run
 CONFORMAL = MondrianConformal(
     alpha=0.1,
@@ -65,9 +67,6 @@ CONFORMAL = MondrianConformal(
 )
 #: A player closer than this (relative) to an mpp edge could change bin on another platform.
 MIN_EDGE_MARGIN = 0.02
-EXPECTED_FILES = ("tracking.jsonl", "match.json", "meta.json", "metrics.json")
-#: meta.json fields that change with every commit or release, left out of the comparison.
-VOLATILE_META = ("git_sha", "predfoot_version")
 
 
 def build_inputs() -> tuple[dict[str, Any], dict[int, dict[str, Any]]]:
@@ -123,24 +122,15 @@ def localize_request(fixture_dir: Path) -> dict[str, Any]:
 
 
 def golden_stages(fixture_dir: Path) -> tuple[Stages, MondrianConformal]:
-    detections, model_version = load_detections(fixture_dir / "detections.json")
-    conformal = MondrianConformal.from_json((fixture_dir / "conformal.json").read_text(encoding="utf-8"))
-    return real_stages(detections, conformal, f"{STAGES_VERSION}+{model_version}"), conformal
+    """The stages of ``predfoot run --detections detections.json --conformal conformal.json``."""
+    conformal = load_conformal(fixture_dir / "conformal.json")
+    return stages_from_files(fixture_dir / "detections.json", conformal), conformal
 
 
 def run_golden(fixture_dir: Path, out_dir: Path) -> RunResult:
     """The real stages on the golden inputs, through ``run_clip`` as ``predfoot run`` uses it."""
     stages, _ = golden_stages(fixture_dir)
     return run_clip(fixture_dir / "clip.json", out_dir, RunConfig(block_size=BLOCK_SIZE), stages)
-
-
-def normalised_meta(meta: dict[str, Any]) -> dict[str, Any]:
-    return {k: v for k, v in meta.items() if k not in VOLATILE_META}
-
-
-def normalised_metrics(metrics: dict[str, Any]) -> dict[str, Any]:
-    """The deterministic part of metrics.json (no timings, no block counts)."""
-    return {k: metrics[k] for k in ("clip_id", "frames", "players")}
 
 
 def player_bins(fixture_dir: Path) -> list[tuple[int, int, str, float]]:

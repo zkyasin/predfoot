@@ -38,22 +38,62 @@ def run(
     out: Annotated[Path, typer.Option(file_okay=False, help="Output folder (created if needed).")],
     fps: Annotated[float, typer.Option(help="Export frame rate.")] = 10.0,
     block_size: Annotated[int, typer.Option(help="Export frames per block: the resume granularity.")] = 100,
+    detections: Annotated[
+        Path | None,
+        typer.Option(
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="Keypoint and line detections of the clip's frames (JSON, predfoot-detections/1): run the "
+            "real stages, which calibrate every frame from them (the clip's homographies are then ignored).",
+        ),
+    ] = None,
+    conformal: Annotated[
+        Path | None,
+        typer.Option(
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="Mondrian conformal model (JSON, from scripts/fit_conformal.py) for the 90 % regions of the "
+            "real stages; needs --detections.",
+        ),
+    ] = None,
 ) -> None:
     """Run the pipeline on a clip: tracking.jsonl, match.json, meta.json, metrics.json, minimap.png and
     qa_report.html.
 
-    Re-running after a crash reuses the finished blocks and gives byte-identical outputs.
+    Without --detections, the stub stages read the homographies and foot points of the clip; with it, the real
+    stages calibrate each frame (RANSAC, robust least squares, Laplace covariance) and give delta-method
+    regions, scaled by --conformal when given. Re-running after a crash reuses the finished blocks and gives
+    byte-identical outputs.
     """
     from pydantic import ValidationError
 
-    from predfoot.pipeline.run import RunConfig, run_clip
+    from predfoot.pipeline.run import RunConfig, Stages, run_clip
 
     if fps <= 0:
         raise typer.BadParameter("must be positive", param_hint="--fps")
     if block_size < 1:
         raise typer.BadParameter("must be at least 1", param_hint="--block-size")
+    if conformal is not None and detections is None:
+        raise typer.BadParameter(
+            "needs --detections: the stub stages have no calibrated regions", param_hint="--conformal"
+        )
+    stages: Stages | None = None
+    if detections is not None:
+        from predfoot.pipeline.real import stages_from_files
+        from predfoot.serve.localize import load_conformal
+
+        try:
+            model = None if conformal is None else load_conformal(conformal)
+        except ValueError as err:
+            raise typer.BadParameter(str(err), param_hint="--conformal") from err
+        try:
+            stages = stages_from_files(detections, model)
+        except ValueError as err:
+            raise typer.BadParameter(str(err), param_hint="--detections") from err
     try:
-        result = run_clip(clip, out, RunConfig(export_fps=fps, block_size=block_size))
+        result = run_clip(clip, out, RunConfig(export_fps=fps, block_size=block_size), stages)
     except ValidationError as err:
         typer.echo(f"invalid clip file {clip}:\n{err}", err=True)
         raise typer.Exit(code=2) from err
