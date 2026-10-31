@@ -64,11 +64,48 @@ comes from `scripts/make_synthetic_clip.py`; the frame schema is `src/predfoot/i
 docker build -f docker/Dockerfile.cpu -t predfoot:cpu .   # CPU image, no torch
 ```
 
+## Serving
+
+```bash
+uv sync --extra serve --extra vision      # vision (torch) is only needed by /v1/calibrate
+uv run predfoot serve --port 8000         # OpenAPI docs at http://127.0.0.1:8000/docs
+```
+
+| Endpoint | In → out |
+|---|---|
+| `GET /healthz` | Status, package version, versions of the loaded models (the networks load on first use, or with `--preload`) |
+| `POST /v1/calibrate` | Multipart `image` (JPEG or PNG, at most 20 MiB) → PnLCalib keypoints and lines → `status`, `homography`, `cov_theta`, `dof`, `rms_px`, `n_inliers`, `image_corners_projection`. 503 when torch or the weights are missing |
+| `POST /v1/localize` | `homography` (pitch → image, H[2][2] = 1), `cov_theta` (8 × 8), optional `dof`, `feet` [{`track_id`, `u`, `v`, optional `cov_uv`}], optional `conformal_quantile` → per foot `x`, `y`, `pos_cov_m2`, `p90_radius_m`, all null above the horizon |
+| `GET /metrics` | Request counters and latency histograms (Prometheus text format) |
+
+```bash
+curl -s -F "image=@frame.jpg;type=image/jpeg" localhost:8000/v1/calibrate > calib.json
+jq '{homography, cov_theta, dof, feet: [{track_id: 7, u: 960, v: 800}]}' calib.json \
+  | curl -s -H "content-type: application/json" -d @- localhost:8000/v1/localize
+```
+
+`/v1/localize` uses the definitions of the pipeline: the calibrated covariance is (q / 4.605) · Σp and the
+radius √(q · λmax(Σp)). Without `conformal_quantile`, q is the uncalibrated Laplace threshold, which covers
+only about 18 % of the errors on the dev games: pass the conformal quantile of a calibration run. predfoot
+never saves uploaded images (Starlette spools uploads above 1 MiB to an anonymous temporary file that goes
+away with the request).
+
+The keypoint networks also export to ONNX (opset 18, parity with PyTorch within 0.5 px on decoded keypoints)
+and run on ONNX Runtime. [`reports/latency_m4.md`](reports/latency_m4.md) times both networks per frame on an
+M4 Pro: 0.46 s with ONNX Runtime CoreML, 0.56 s with PyTorch MPS, 1.8-1.9 s on the CPU (3-frame smoke run).
+
+```bash
+uv sync --extra vision --extra export
+uv run python scripts/export_onnx.py      # → $PREDFOOT_DATA_DIR/models/onnx/, never git
+uv run python scripts/bench_latency.py --frames 3 --out reports/latency_m4.md
+```
+
 ## Development
 
 ```bash
 uv sync                      # core + dev tools
 uv sync --extra vision       # + torch, for the keypoint model
+uv sync --extra serve        # + FastAPI, for the HTTP API and its tests (CI installs it)
 uv run pre-commit install
 uv run pytest
 ```
