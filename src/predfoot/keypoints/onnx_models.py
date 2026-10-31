@@ -39,24 +39,41 @@ def onnx_dir() -> Path:
 
 def export_network(net: Any, path: Path, opset: int = OPSET) -> None:
     """Export one network for batch-1 inputs at 960 × 540 with torch's default exporter (torch.export), check
-    the file with the ONNX checker, then move it into place."""
+    the file with the ONNX checker and its opset, then move it into place.
+
+    Raises RuntimeError when the file does not have the requested opset: the exporter builds opset 18, and
+    when converting to another one fails it only logs a warning and keeps the model as it was.
+    """
     import onnx
     import torch
 
     x = torch.zeros(1, 3, INPUT_SIZE[1], INPUT_SIZE[0])
     tmp = path.with_name(f".{path.name}.tmp")
-    torch.onnx.export(
-        net.eval(),
-        (x,),
-        str(tmp),
-        input_names=[INPUT_NAME],
-        output_names=[OUTPUT_NAME],
-        opset_version=opset,
-        dynamo=True,
-        external_data=False,
-    )
-    onnx.checker.check_model(str(tmp))
-    tmp.replace(path)
+    try:
+        torch.onnx.export(
+            net.eval(),
+            (x,),
+            str(tmp),
+            input_names=[INPUT_NAME],
+            output_names=[OUTPUT_NAME],
+            opset_version=opset,
+            dynamo=True,
+            external_data=False,
+        )
+        model = onnx.load(str(tmp))
+        onnx.checker.check_model(model)
+        if model_opset(model) != opset:
+            raise RuntimeError(
+                f"the exported graph has opset {model_opset(model)}, not the {opset} requested"
+            )
+        tmp.replace(path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def model_opset(model: Any) -> int:
+    """Opset of the default ONNX domain of a loaded model."""
+    return int(next(o.version for o in model.opset_import if o.domain in ("", "ai.onnx")))
 
 
 class OnnxPnLCalib:

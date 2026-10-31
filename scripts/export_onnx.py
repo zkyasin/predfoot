@@ -5,7 +5,9 @@ Usage:
     uv run python scripts/export_onnx.py --frames 3
 
 Writes PREDFOOT_DATA_DIR/models/onnx/pnlcalib-sv-{kp,lines}.onnx (derived from the CC BY 4.0 weights, so
-never in git) and export.json (versions, opset, hashes, parity). Parity: PyTorch and ONNX Runtime both run
+never in git) and export.json (versions, opset, hashes, parity). The models are exported to a staging folder
+and replace the installed ones only once they pass the parity check; a failed export leaves the installed
+models as they were and writes its parity record to export-failed.json. Parity: PyTorch and ONNX Runtime run
 on the CPU, batch 1, on frames of a dev clip; the export fails (exit code 1) when the heatmaps differ by more
 than 1e-4, when a detection is found by one runtime only or none is found, or when a decoded keypoint or line
 end moves by more than 0.5 px between the two.
@@ -13,6 +15,7 @@ end moves by more than 0.5 px between the two.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import time
 from datetime import UTC, datetime
@@ -64,42 +67,56 @@ def main(
         raise typer.BadParameter("the test split stays locked", param_hint="--clip-dir")
     out = out_dir or onnx_dir()
     out.mkdir(parents=True, exist_ok=True)
+    staging = out / ".staging"  # same file system as out: each file then moves into place at once
+    shutil.rmtree(staging, ignore_errors=True)
+    staging.mkdir()
+    try:
+        export_and_check(clip, frames, opset, staging, out)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
+def export_and_check(clip: Path, frames: int, opset: int, staging: Path, out: Path) -> None:
+    """Export both networks into ``staging``, compare them with PyTorch, and install them in ``out`` only if
+    they pass."""
     weights = data_dir() / "weights" / "pnlcalib"
     nets = PnLCalibNetworks(weights / "SV_kp", weights / "SV_lines", device="cpu")
     for name, net in (("kp", nets.kp), ("lines", nets.lines)):
         start = time.perf_counter()
-        export_network(net, out / MODEL_FILES[name], opset)
-        size_mb = (out / MODEL_FILES[name]).stat().st_size / 1e6
+        export_network(net, staging / MODEL_FILES[name], opset)  # checks the opset of the file
+        size_mb = (staging / MODEL_FILES[name]).stat().st_size / 1e6
         typer.echo(f"{MODEL_FILES[name]}: {size_mb:.0f} MB, exported in {time.perf_counter() - start:.0f} s")
 
     paths = spread_frames(clip, frames)
     rgb = read_frames(paths)
     x = preprocess(rgb)
     reference = per_frame(nets.heatmaps_from_input, x)
-    other = per_frame(OnnxPnLCalib(out).heatmaps_from_input, x.numpy())
+    other = per_frame(OnnxPnLCalib(staging).heatmaps_from_input, x.numpy())
     result = parity(reference, other, (rgb.shape[2], rgb.shape[1]))
-    write_json(
-        out / "export.json",
-        {
-            "created": datetime.now(UTC).isoformat(timespec="seconds"),
-            "git_commit": git_commit(),
-            "model_version": nets.version,
-            "opset": opset,
-            "input": {"name": INPUT_NAME, "shape": [1, 3, INPUT_SIZE[1], INPUT_SIZE[0]], "dtype": "float32"},
-            "output": {"name": OUTPUT_NAME, "note": "raw heatmaps at stride 2, background channel last"},
-            "files": {f: sha256_file(out / f) for f in MODEL_FILES.values()},
-            "versions": {p: version(p) for p in ("torch", "onnx", "onnxruntime", "onnxscript")},
-            "parity": result.as_dict() | {"frames": [f"{p.parent.parent.name}/{p.name}" for p in paths]},
-        },
-    )
+    record = {
+        "created": datetime.now(UTC).isoformat(timespec="seconds"),
+        "git_commit": git_commit(),
+        "model_version": nets.version,
+        "opset": opset,
+        "input": {"name": INPUT_NAME, "shape": [1, 3, INPUT_SIZE[1], INPUT_SIZE[0]], "dtype": "float32"},
+        "output": {"name": OUTPUT_NAME, "note": "raw heatmaps at stride 2, background channel last"},
+        "files": {f: sha256_file(staging / f) for f in MODEL_FILES.values()},
+        "versions": {p: version(p) for p in ("torch", "onnx", "onnxruntime", "onnxscript")},
+        "parity": result.as_dict() | {"frames": [f"{p.parent.parent.name}/{p.name}" for p in paths]},
+    }
     typer.echo(
         f"Parity on {result.n_frames} frames ({result.n_points} points, PyTorch CPU vs ONNX Runtime CPU): "
         f"max |Δheatmap| {result.max_abs_heatmap:.2e}, keypoints {result.max_keypoint_px:.4f} px, "
         f"line ends {result.max_line_end_px:.4f} px, detections in one runtime only {result.n_flips}"
     )
     if not result.ok:
-        typer.echo("FAILED: " + "; ".join(result.problems()), err=True)
+        write_json(out / "export-failed.json", record)
+        typer.echo(f"FAILED: {'; '.join(result.problems())}. The installed models are unchanged.", err=True)
         raise typer.Exit(code=1)
+    for f in MODEL_FILES.values():
+        (staging / f).replace(out / f)
+    write_json(out / "export.json", record)
+    (out / "export-failed.json").unlink(missing_ok=True)
     typer.echo(f"OK → {out}")
 
 

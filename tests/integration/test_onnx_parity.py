@@ -1,7 +1,10 @@
 """ONNX Runtime against PyTorch on one SN-GSR dev frame (local only: weights, frames and exported models)."""
 
+import json
+
 import pytest
 
+from predfoot.io.files import sha256_file
 from predfoot.keypoints.onnx_models import (
     MODEL_FILES,
     OnnxPnLCalib,
@@ -27,6 +30,12 @@ def test_onnx_runtime_matches_pytorch_on_a_dev_frame():
     from predfoot.keypoints.pnlcalib import PnLCalibNetworks, preprocess
 
     nets = PnLCalibNetworks(weights / "SV_kp", weights / "SV_lines", device="cpu")
+    # the installed files are those export.json records, exported from these weights
+    record = json.loads((onnx_dir() / "export.json").read_text(encoding="utf-8"))
+    assert record["model_version"] == nets.version, "stale ONNX models: re-run scripts/export_onnx.py"
+    assert record["parity"]["ok"]
+    for file, digest in record["files"].items():
+        assert sha256_file(onnx_dir() / file) == digest, f"{file} is not the file export.json records"
     rgb = read_frames(spread_frames(clip_dir, 1))
     x = preprocess(rgb)
     result = parity(nets.heatmaps_from_input(x), OnnxPnLCalib().heatmaps_from_input(x.numpy()), (1920, 1080))
