@@ -4,26 +4,37 @@
     uv run python scripts/run_test_once.py --stage b    # one stage
     uv run python scripts/run_test_once.py --dry-run --calib-from runs/<per-frame dev run>/calib.npz
 
-Before every stage the lock must match (:func:`predfoot.eval.prereg.verify_lock`): the preregistration and the
-frozen artifacts have their locked SHA-256, nothing under src/, scripts/ or configs/ changed since the lock
-commit, and the working tree is clean.
+Before every stage the lock must match (:func:`predfoot.eval.prereg.verify_lock` and
+:func:`~predfoot.eval.prereg.verify_environment`): the preregistration and the frozen artifacts have their
+locked SHA-256, the lock is anchored in its freeze commit, nothing under the protected paths changed since the
+lock commit, the working tree is clean, and the interpreter and packages are those of the freeze. The clips
+must be the pinned list (count and digest in the lock).
 
-- A, label-free preparation: test frames at 5 fps (``scripts/download_data.py sn-gsr-frames --allow-locked``),
-  keypoint and line networks into a separate detection cache (``cache/kp-test/``). Reads only the clip list
-  (clip id, game) of ``index/clips.parquet``. Resumable: downloads and per-clip caches are idempotent.
+Every output of a freeze lives under ``runs/test_once/lock-<lock SHA-256>/`` and its detections under
+``cache/kp-test/lock-<lock SHA-256>/``, and every record (``stage_a.json``, ``stage_b.json``, each clip's
+part file, both saved camera files) carries the lock's SHA-256: a re-freeze starts from nothing, and an output
+of another lock is never reused or evaluated.
+
+- A, label-free preparation: test frames at 5 fps (``scripts/download_data.py sn-gsr-frames --allow-locked``,
+  run with this interpreter), the network weights checked against the lock, keypoint and line networks into
+  the lock's detection cache; every cache must carry the detection model version the artifacts were fitted
+  on. Reads only the clip list (clip id, game) of ``index/clips.parquet``. Resumable.
 - B, camera, label-free: per-frame calibration of every cached test frame (seeded like dev, saved per clip,
-  resumable), then PTZ smoothing with the frozen noise parameters.
-- C, evaluation, the only stage that reads test labels (``index/test/``), exactly once: the markers
-  (``PREDFOOT_DATA_DIR/test_once/`` and ``runs/test_once/``) are written before any label is read, so a second
-  C is refused even after a crash. Every endpoint for both cameras and both references, the success criteria
-  evaluated as written, into ``reports/test_run.md`` (aggregate numbers) and ``runs/test_once/`` (local).
+  resumable), then PTZ smoothing with the frozen noise parameters. The detection caches must still have the
+  SHA-256 recorded by stage A.
+- C, evaluation, the only stage that reads test labels (``index/test/``), exactly once. Every label-free input
+  is checked and loaded first (stage records, caches, saved cameras, clip lists, frame counts); then the
+  markers (``PREDFOOT_DATA_DIR/test_once/`` and ``runs/test_once/``) are written before any label is read, so
+  a second C is refused even after a crash. Every endpoint for both cameras and both references, the success
+  criteria evaluated as written, into ``reports/test_run.md`` (aggregate numbers) and the lock's run folder
+  (local). A crash after the markers still writes ``reports/test_run.md``, naming the failure.
 
 ``--dry-run`` exercises the same chain on dev clips standing in for test clips (``--dry-clips``, default three
 clips of game 4), in a scratch folder: a scratch freeze on a few clips of the five other dev games
-(``--dry-train-per-game`` each) with its own scratch lock, the stand-ins' cached detections copied into a
-scratch detection cache, the keypoint networks on at most ``--smoke-frames`` (≤ 10) frames compared with that
-cache, stages B and C as above (C reads the dev labels), then a second C, which must be refused. It never
-reads, writes or checks the real lock, markers or test files.
+(``--dry-train-per-game`` each) with its own scratch lock that pins the stand-ins, the stand-ins' cached
+detections copied into a scratch detection cache, the keypoint networks on at most ``--smoke-frames`` (≤ 10)
+frames compared with that cache, stages B and C as above (C reads the dev labels), then a second C, which must
+be refused. It never reads, writes or checks the real lock, markers, test clip list or test files.
 """
 
 from __future__ import annotations
@@ -35,6 +46,7 @@ import subprocess
 import sys
 import time
 import traceback
+import zipfile
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -45,6 +57,7 @@ import polars as pl
 import typer
 
 from predfoot.calib import temporal as tm
+from predfoot.contracts import CalibResult
 from predfoot.eval import frozen as fz
 from predfoot.eval import positions as ps
 from predfoot.eval import prereg as pr
@@ -55,6 +68,7 @@ from predfoot.paths import REPO_ROOT, cache_dir, data_dir, index_dir
 
 app = typer.Typer(add_completion=False)
 MAX_SMOKE_FRAMES = 10
+SMOKE_MAX_PX = 0.01  # the networks must reproduce the cached detections (exact on the dev runs)
 DRY_CLIPS = ("SNGS-073", "SNGS-074", "SNGS-077")  # game 4, clips with failures in the per-frame dev run
 
 
@@ -76,21 +90,32 @@ class Context:
 
     dry: bool
     root: Path  # repository root (real) or scratch folder holding the scratch lock (dry)
-    run_dir: Path
+    run_dir: Path  # holds a marker; each lock's outputs go to run_dir / lock-<sha>/ (work_dir)
     markers: list[Path]
-    cache_root: Path
+    cache_root: Path  # each lock's detections go to cache_root / lock-<sha>/ (det_root)
     report: Path
     persons_path: Path
     lines_path: Path
     lock_path: Path = pr.LOCK_PATH
     clips: list[tuple[str, str, int]] = field(default_factory=list)  # (clip id, split, game)
     lock: pr.Lock | None = None
+    lock_sha: str = ""
     log_lines: list[str] = field(default_factory=list)
 
     def log(self, msg: str) -> None:
         line = f"[{datetime.now(UTC):%H:%M:%S}] {msg}"
         self.log_lines.append(line)
         typer.echo(line)
+
+    @property
+    def work_dir(self) -> Path:
+        assert self.lock_sha, "guard() reads the lock first"
+        return self.run_dir / f"lock-{self.lock_sha[:16]}"
+
+    @property
+    def det_root(self) -> Path:
+        assert self.lock_sha, "guard() reads the lock first"
+        return self.cache_root / f"lock-{self.lock_sha[:16]}"
 
 
 def real_context() -> Context:
@@ -108,13 +133,15 @@ def real_context() -> Context:
 
 
 def guard(ctx: Context) -> pr.Lock:
-    """The lock checks run before every stage; the dry run checks its scratch lock's hashes only."""
+    """The lock checks run before every stage; the dry run checks its scratch lock's hashes only (it has no
+    git history of its own). Both check the environment."""
     if ctx.dry:
         lock = pr.read_lock(ctx.root, ctx.lock_path)
         pr.verify_hashes(ctx.root, lock)
     else:
         lock = pr.verify_lock(ctx.root, ctx.lock_path)
-    ctx.lock = lock
+    pr.verify_environment(lock)
+    ctx.lock, ctx.lock_sha = lock, pr.lock_sha256(ctx.root, ctx.lock_path)
     return lock
 
 
@@ -125,16 +152,32 @@ def artifacts(ctx: Context) -> fz.Artifacts:
 
 def test_clips() -> list[tuple[str, str, int]]:
     """The locked split's clip list (clip id, game) from the clip index: no label is read."""
-    clips = pl.read_parquet(index_dir() / "clips.parquet").filter(pl.col("split") == "test").sort("clip_id")
-    games = sorted(int(g) for g in clips["game_id"].unique())
-    if games != list(fz.TEST_GAMES):
-        raise pr.PreregError(f"test games {games}, preregistered {list(fz.TEST_GAMES)}")
-    return [(c, "test", int(g)) for c, g in clips.select("clip_id", "game_id").iter_rows()]
+    try:
+        return [(c, "test", g) for c, g in fz.locked_clip_list(index_dir() / "clips.parquet")]
+    except ValueError as err:
+        raise pr.PreregError(str(err)) from err
 
 
 def ensure_clips(ctx: Context) -> None:
-    if not ctx.clips:
-        ctx.clips = test_clips()
+    if ctx.clips:
+        return
+    if ctx.dry:  # the dry run never falls back to the locked split
+        raise pr.PreregError("the dry run has no stand-in clips")
+    ctx.clips = test_clips()
+
+
+def check_clips(ctx: Context) -> None:
+    """The clips are exactly the list pinned by the lock (count and digest of the (clip id, game) pairs)."""
+    assert ctx.lock is not None
+    ensure_clips(ctx)
+    pinned = ctx.lock.test_split
+    pairs = [(c, g) for c, _, g in ctx.clips]
+    got = fz.clip_list_digest(pairs)
+    if len(pairs) != pinned.get("clips") or got != pinned.get("clip_ids_sha256"):
+        raise pr.PreregError(
+            f"the clip list ({len(pairs)} clips, digest {got[:12]}) is not the frozen one"
+            f" ({pinned.get('clips')} clips, digest {str(pinned.get('clip_ids_sha256'))[:12]})"
+        )
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -144,23 +187,52 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
     tmp.replace(path)
 
 
+def read_stage(ctx: Context, name: str) -> dict[str, Any]:
+    """A stage record of this lock's run folder; refuses a record of another lock or of other clips."""
+    path = ctx.work_dir / name
+    if not path.exists():
+        raise RuntimeError(f"{name} is missing: run the earlier stage first")
+    info: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+    if info.get("lock_sha256") != ctx.lock_sha:
+        raise pr.PreregError(f"{path} was written under another lock")
+    if [tuple(c) for c in info.get("clips", [])] != ctx.clips:
+        raise pr.PreregError(f"{path} holds another clip list")
+    return info
+
+
 def clip_dir(split: str, clip_id: str) -> Path:
     return data_dir() / "sn-gsr" / split / clip_id
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 # --- stage A ---------------------------------------------------------------------------------------------
 
 
+def verify_weights(lock: pr.Lock) -> None:
+    """The network weights on disk are those whose SHA-256 the freeze recorded."""
+    frozen = lock.inputs.get("weights") or {}
+    if not frozen:
+        raise pr.PreregError("the lock records no network weights")
+    folder = data_dir() / "weights" / "pnlcalib"
+    for name, sha in sorted(frozen.items()):
+        path = folder / name
+        if not path.is_file() or sha256_file(path) != sha:
+            raise pr.PreregError(f"weights/pnlcalib/{name} is not the frozen file")
+
+
 def smoke_inference(ctx: Context, clip_id: str, split: str, n_frames: int) -> dict[str, Any]:
     """Run the networks on the first ``n_frames`` (≤ 10) frames of a clip and compare with the cache."""
-    n_frames = min(n_frames, MAX_SMOKE_FRAMES)
+    n_frames = max(0, min(n_frames, MAX_SMOKE_FRAMES))
     try:
         from predfoot.keypoints.cache import _read_rgb
         from predfoot.keypoints.pnlcalib import PnLCalibNetworks
     except ImportError as err:  # torch missing: the smoke check is skipped, not failed
         return {"skipped": f"torch unavailable ({err})"}
     files = sorted((clip_dir(split, clip_id) / "img1").glob("*.jpg"))[:n_frames]
-    cached, _, _ = cached_detections(clip_dir(split, clip_id), clip_id, root=ctx.cache_root)
+    cached, _, _ = cached_detections(clip_dir(split, clip_id), clip_id, root=ctx.det_root)
     weights = data_dir() / "weights" / "pnlcalib"
     nets = PnLCalibNetworks(weights / "SV_kp", weights / "SV_lines")
     kp_diff, line_diff, same_ids, t0 = 0.0, 0.0, 0, time.perf_counter()
@@ -184,16 +256,33 @@ def smoke_inference(ctx: Context, clip_id: str, split: str, n_frames: int) -> di
     }
 
 
-def stage_a(ctx: Context, smoke_frames: int = 0) -> None:
-    guard(ctx)
-    ensure_clips(ctx)
-    done = ctx.run_dir / "stage_a.json"
-    if done.exists():
-        ctx.log("stage A already done, skipped")
+def check_smoke(smoke: dict[str, Any], expected_model: str) -> None:
+    """The networks reproduce the cache: same ids on every frame, same pixels, same model version."""
+    if "skipped" in smoke:
         return
-    ctx.log(f"stage A: {len(ctx.clips)} clips, detections into {ctx.cache_root}")
+    if (
+        smoke["frames_with_same_ids"] != smoke["frames"]
+        or max(smoke["max_kp_px_diff"], smoke["max_line_px_diff"]) > SMOKE_MAX_PX
+        or smoke["model_version"] != expected_model
+    ):
+        raise RuntimeError(f"the networks do not reproduce the cached detections: {smoke}")
+
+
+def stage_a(ctx: Context, smoke_frames: int = 0) -> None:
+    lock = guard(ctx)
+    check_clips(ctx)
+    done = ctx.work_dir / "stage_a.json"
+    if done.exists():
+        read_stage(ctx, "stage_a.json")
+        ctx.log("stage A already done for this lock, skipped")
+        return
+    expected_model = str(lock.config_digests.get("detection_model") or "")
+    if not expected_model:
+        raise pr.PreregError("the lock records no detection model version")
+    ctx.log(f"stage A: {len(ctx.clips)} clips, detections into {ctx.det_root}")
     if not ctx.dry:
-        cmd = ["uv", "run", "python", str(REPO_ROOT / "scripts" / "download_data.py"), "sn-gsr-frames",
+        verify_weights(lock)
+        cmd = [sys.executable, str(REPO_ROOT / "scripts" / "download_data.py"), "sn-gsr-frames",
                "--every", "5", "--allow-locked", "--clips", *[c for c, _, _ in ctx.clips]]  # fmt: skip
         if subprocess.run(cmd, cwd=REPO_ROOT).returncode != 0:
             raise RuntimeError("frame download failed; rerun stage A (it resumes)")
@@ -201,12 +290,21 @@ def stage_a(ctx: Context, smoke_frames: int = 0) -> None:
     cache = {}
     for clip_id, split, _ in ctx.clips:
         n = ps.clip_frame_count(clip_id, split)
-        target = cache_path(clip_id, n, root=ctx.cache_root)
+        target = cache_path(clip_id, n, root=ctx.det_root)
         if ctx.dry and not target.exists():  # stand-ins: the dev cache is copied, never written
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(cache_path(clip_id, n), target)
-        dets, seconds, version = cached_detections(clip_dir(split, clip_id), clip_id, root=ctx.cache_root)
-        cache[clip_id] = {"frames": len(dets), "sha256": sha256_file(target), "model_version": version}
+        dets, seconds, version = cached_detections(clip_dir(split, clip_id), clip_id, root=ctx.det_root)
+        if version != expected_model:
+            raise pr.PreregError(
+                f"{clip_id}: detections of model {version}, the artifacts were fitted on {expected_model}"
+            )
+        cache[clip_id] = {
+            "frames": len(dets),
+            "image_files": n,
+            "sha256": sha256_file(target),
+            "model_version": version,
+        }
         ctx.log(
             f"  {clip_id}: {len(dets)} frames cached (inference time recorded in the cache: {seconds:.0f} s)"
         )
@@ -214,69 +312,117 @@ def stage_a(ctx: Context, smoke_frames: int = 0) -> None:
         clip_id, split, _ = ctx.clips[0]
         smoke = smoke_inference(ctx, clip_id, split, smoke_frames)
         ctx.log(f"  smoke check of the networks: {smoke}")
-    write_json(done, {"clips": ctx.clips, "cache": cache, "smoke": smoke, "finished_utc": _now()})
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat(timespec="seconds")
+        check_smoke(smoke, expected_model)
+    write_json(
+        done,
+        {
+            "lock_sha256": ctx.lock_sha,
+            "code_commit": lock.code_commit,
+            "clips": ctx.clips,
+            "cache": cache,
+            "smoke": smoke,
+            "finished_utc": _now(),
+        },
+    )
 
 
 # --- stage B ---------------------------------------------------------------------------------------------
 
 
 def _clip_dets(ctx: Context, clip_id: str, split: str) -> dict[int, dict[str, Any]]:
-    dets = ps.clip_detections(clip_id, split, ctx.cache_root)
+    dets = ps.clip_detections(clip_id, split, ctx.det_root)
     if dets is None:
-        raise RuntimeError(f"{clip_id} has no detection cache under {ctx.cache_root}: run stage A")
+        raise RuntimeError(f"{clip_id} has no detection cache under {ctx.det_root}: run stage A")
     return dets
+
+
+def verify_caches(ctx: Context, stage_a_info: dict[str, Any]) -> None:
+    """Every clip's detection cache is still the file stage A recorded (same frames on disk, same SHA-256)."""
+    for clip_id, split, _ in ctx.clips:
+        rec = stage_a_info["cache"].get(clip_id)
+        path = cache_path(clip_id, ps.clip_frame_count(clip_id, split), root=ctx.det_root)
+        if rec is None or not path.exists() or sha256_file(path) != rec["sha256"]:
+            raise pr.PreregError(f"the detection cache of {clip_id} changed since stage A ({path})")
+
+
+def check_stage_b(ctx: Context, info: dict[str, Any], art: fz.Artifacts) -> None:
+    """Stage B smoothed with the frozen parameters and its two camera files are unchanged."""
+    if (
+        info.get("params_digest") != art.params.digest()
+        or info.get("smoother_config_digest") != art.smoother_config_digest
+    ):
+        raise pr.PreregError("stage B used other noise parameters or another smoother configuration")
+    for name, sha in info["sha256"].items():
+        if sha256_file(ctx.work_dir / name) != sha:
+            raise pr.PreregError(f"{name} changed since stage B")
+
+
+def _load_part(ctx: Context, part: Path, clip_id: str) -> list[CalibResult] | None:
+    """A clip's saved per-frame calibrations, if readable and made under this lock; else None (recompute)."""
+    if not part.exists():
+        return None
+    try:
+        saved, meta = ps.load_calib(part)
+    except (OSError, ValueError, KeyError, EOFError, zipfile.BadZipFile) as err:
+        ctx.log(f"  {clip_id}: unreadable part file ({type(err).__name__}), recomputed")
+        return None
+    if meta.get("lock_sha256") != ctx.lock_sha or clip_id not in saved:
+        ctx.log(f"  {clip_id}: part file of another lock, recomputed")
+        return None
+    return saved[clip_id]
 
 
 def stage_b(ctx: Context) -> None:
     guard(ctx)
-    ensure_clips(ctx)
-    if not (ctx.run_dir / "stage_a.json").exists():
-        raise RuntimeError("stage A has not finished")
-    done = ctx.run_dir / "stage_b.json"
-    if done.exists():
-        ctx.log("stage B already done, skipped")
-        return
+    check_clips(ctx)
+    a = read_stage(ctx, "stage_a.json")
+    verify_caches(ctx, a)
     art = artifacts(ctx)
+    done = ctx.work_dir / "stage_b.json"
+    if done.exists():
+        check_stage_b(ctx, read_stage(ctx, "stage_b.json"), art)
+        ctx.log("stage B already done for this lock, skipped")
+        return
     ctx.log(f"stage B: per-frame calibration of {len(ctx.clips)} clips, then smoothing (frozen noise)")
     ccs = []
     for clip_id, split, game in ctx.clips:
-        part = ctx.run_dir / "stage_b" / f"{clip_id}.npz"
+        part = ctx.work_dir / "stage_b" / f"{clip_id}.npz"
         dets = _clip_dets(ctx, clip_id, split)
-        if part.exists():
-            saved, _ = ps.load_calib(part)
-            cc = ps.calibrate_detections(clip_id, split, game, dets, saved[clip_id])
+        saved = _load_part(ctx, part, clip_id)
+        if saved is not None:
+            cc = ps.calibrate_detections(clip_id, split, game, dets, saved)
         else:
             t0 = time.perf_counter()
             cc = ps.calibrate_detections(clip_id, split, game, dets)
-            ps.save_calib(part, [cc], {"clip": clip_id})
+            ps.save_calib(part, [cc], {"clip": clip_id, "lock_sha256": ctx.lock_sha})
             rate = np.mean([r.ok for r in cc.results])
             seconds = time.perf_counter() - t0
             ctx.log(f"  {clip_id}: {len(cc.frames)} frames, {rate:.0%} calibrated ({seconds:.0f} s)")
         ccs.append(cc)
     meta = {
         "stage": "B",
+        "lock_sha256": ctx.lock_sha,
         "smoother_config_digest": art.smoother_config_digest,
         "params": art.params.to_dict(),
+        "params_digest": art.params.digest(),
     }
-    ps.save_calib(ctx.run_dir / "calib_perframe.npz", ccs, meta)
+    ps.save_calib(ctx.work_dir / "calib_perframe.npz", ccs, meta)
     cfg = tm.SmootherConfig()
     info = ps.SmoothingInfo()
     outputs = list(ps.smooth_outputs(ccs, ps.Smooth.ptz, ps.FitScope.all, cfg, info, params=art.params))
-    fz.save_outputs(ctx.run_dir / "calib_ptz.npz", outputs, meta)
+    fz.save_outputs(ctx.work_dir / "calib_ptz.npz", outputs, meta)
     write_json(
         done,
         {
-            "clips": len(ccs),
+            "lock_sha256": ctx.lock_sha,
+            "clips": ctx.clips,
             "frames": int(sum(len(cc.frames) for cc in ccs)),
             "perframe_ok": float(np.mean([r.ok for cc in ccs for r in cc.results])),
             "ptz_ok": float(np.mean([r.ok for o in outputs for r in o.results])),
             "params_digest": art.params.digest(),
+            "smoother_config_digest": art.smoother_config_digest,
             "sha256": {
-                name: sha256_file(ctx.run_dir / name) for name in ("calib_perframe.npz", "calib_ptz.npz")
+                name: sha256_file(ctx.work_dir / name) for name in ("calib_perframe.npz", "calib_ptz.npz")
             },
             "finished_utc": _now(),
         },
@@ -287,66 +433,57 @@ def stage_b(ctx: Context) -> None:
 # --- stage C ---------------------------------------------------------------------------------------------
 
 
-def stage_c(ctx: Context) -> dict[str, Any]:
-    lock = guard(ctx)  # nothing below runs without a matching lock
-    if ctx.report.exists():  # a committed result, e.g. from another clone with its own data folder
-        raise pr.PreregError(f"{ctx.report} exists: the test evaluation already ran, a second one is refused")
-    ensure_clips(ctx)
-    b = ctx.run_dir / "stage_b.json"
-    if not b.exists():
-        raise RuntimeError("stage B has not finished")
-    stage_b_info = json.loads(b.read_text())
-    for name, sha in stage_b_info["sha256"].items():
-        if sha256_file(ctx.run_dir / name) != sha:
-            raise RuntimeError(f"{name} changed since stage B")
+@dataclass
+class Prepared:
+    """Every label-free input of stage C, checked and loaded before the claim."""
+
+    art: fz.Artifacts
+    dets: dict[str, dict[int, dict[str, Any]]]
+    ccs: list[ps.ClipCalib]  # per-frame calibrations of stage B, no label attached yet
+    smoothed: dict[str, fz.SavedOutput]
+
+
+def prepare_c(ctx: Context) -> Prepared:
+    """Check and load everything stage C needs except the labels, so that nothing label-free can fail after
+    the claim: the clip list, both stage records, the detection caches, the frozen artifacts, the two camera
+    files (lock, parameters, clips) and every clip's frame count."""
+    check_clips(ctx)
+    verify_caches(ctx, read_stage(ctx, "stage_a.json"))
     art = artifacts(ctx)
-    payload = {
-        "started_utc": _now(),
-        "lock_sha256": sha256_file(ctx.root / ctx.lock_path),
-        "code_commit": lock.code_commit,
-        "head": pr.head_commit(REPO_ROOT),
-        "dry_run": ctx.dry,
-    }
-    pr.claim_once(ctx.markers, payload)  # written before any label is read
-    ctx.log(f"stage C started, markers written: {', '.join(str(m) for m in ctx.markers)}")
-    try:
-        return _evaluate(ctx, art, lock, payload)
-    finally:
-        (ctx.run_dir / "stage_c.log").write_text("\n".join(ctx.log_lines) + "\n", encoding="utf-8")
-
-
-def _evaluate(ctx: Context, art: fz.Artifacts, lock: pr.Lock, payload: dict[str, Any]) -> dict[str, Any]:
+    check_stage_b(ctx, read_stage(ctx, "stage_b.json"), art)
+    perframe, meta_p = ps.load_calib(ctx.work_dir / "calib_perframe.npz")
+    smoothed, meta_s = fz.load_outputs(ctx.work_dir / "calib_ptz.npz")
     ids = [c for c, _, _ in ctx.clips]
-    persons = pl.read_parquet(ctx.persons_path).filter(pl.col("clip_id").is_in(ids))
-    lines = pl.read_parquet(ctx.lines_path).filter(pl.col("clip_id").is_in(ids))
-    ctx.log(f"labels read: {persons.height} person rows, {lines.height} line points")
-    perframe, _ = ps.load_calib(ctx.run_dir / "calib_perframe.npz")
-    smoothed, _ = fz.load_outputs(ctx.run_dir / "calib_ptz.npz")
-    ccs, outputs = [], []
+    for name, meta in (("calib_perframe.npz", meta_p), ("calib_ptz.npz", meta_s)):
+        if (
+            meta.get("lock_sha256") != ctx.lock_sha
+            or meta.get("params_digest") != art.params.digest()
+            or meta.get("clips") != ids
+        ):
+            raise pr.PreregError(f"{name} was not made by stage B of this lock for these clips")
+    dets: dict[str, dict[int, dict[str, Any]]] = {}
+    ccs = []
     for clip_id, split, game in ctx.clips:
-        dets = _clip_dets(ctx, clip_id, split)
-        cc = ps.calibrate_detections(clip_id, split, game, dets, perframe[clip_id])
-        ps.attach_labels(
-            cc, dets, persons.filter(pl.col("clip_id") == clip_id), lines.filter(pl.col("clip_id") == clip_id)
-        )
+        dets[clip_id] = _clip_dets(ctx, clip_id, split)
+        try:
+            cc = ps.calibrate_detections(clip_id, split, game, dets[clip_id], perframe[clip_id])
+        except ValueError as err:
+            raise pr.PreregError(str(err)) from err
+        res, flags, _ = smoothed[clip_id]
+        if len(res) != len(cc.frames) or len(flags.smoothed) != len(cc.frames):
+            raise pr.PreregError(f"{clip_id}: {len(res)} smoothed cameras for {len(cc.frames)} cached frames")
         ccs.append(cc)
-        res, flags, diag = smoothed[clip_id]
-        outputs.append(ps.Output(cc, None, res, flags, diag))
-    tables = {"perframe": fz.perframe_tables(ccs), "ptz": fz.output_tables(outputs)}
-    for name, t in tables.items():
-        if t.players.height:
-            t.players.write_parquet(ctx.run_dir / f"players_{name}.parquet")
-        t.frames.write_parquet(ctx.run_dir / f"frames_{name}.parquet")
-    res = fz.evaluate(tables, art)
-    res["provenance"] = {**payload, "lock_code_commit": lock.code_commit, "artifacts": lock.artifacts}
-    write_json(ctx.run_dir / "results.json", res)
+    return Prepared(art, dets, ccs, smoothed)
+
+
+def report_header(ctx: Context, lock: pr.Lock, started_utc: str) -> list[str]:
     title = "Dry run of the test-run tooling on dev clips" if ctx.dry else "Preregistered test run"
     header = [
         f"# {title}",
         "",
         f"`uv run python scripts/run_test_once.py{' --dry-run' if ctx.dry else ''}` · lock code commit"
         f" `{lock.code_commit[:12]}` · preregistration SHA-256 `{lock.preregistration['sha256'][:16]}…` ·"
-        f" stage C started {payload['started_utc']}.",
+        f" lock SHA-256 `{ctx.lock_sha[:16]}…` · stage C started {started_utc}.",
     ]
     if ctx.dry:
         header += [
@@ -360,9 +497,79 @@ def _evaluate(ctx: Context, art: fz.Artifacts, lock: pr.Lock, payload: dict[str,
             "Run once, as preregistered in `docs/preregistration.md`; every result is published, failed"
             " criteria included. Local outputs in `runs/test_once/` (not in git).",
         ]
+    return header
+
+
+def stage_c(ctx: Context) -> dict[str, Any]:
+    lock = guard(ctx)  # nothing below runs without a matching lock
+    if ctx.report.exists():  # a committed result, e.g. from another clone with its own data folder
+        raise pr.PreregError(f"{ctx.report} exists: the test evaluation already ran, a second one is refused")
+    prepared = prepare_c(ctx)  # label-free: a failure here leaves the evaluation unclaimed
+    payload = {
+        "started_utc": _now(),
+        "lock_sha256": ctx.lock_sha,
+        "code_commit": lock.code_commit,
+        "freeze_commit": None if ctx.dry else pr.freeze_commit(ctx.root, ctx.lock_path),
+        "head": pr.head_commit(REPO_ROOT),
+        "dry_run": ctx.dry,
+    }
+    pr.claim_once(ctx.markers, payload)  # written before any label is read
+    ctx.log(f"stage C started, markers written: {', '.join(str(m) for m in ctx.markers)}")
+    try:
+        return _evaluate(ctx, prepared, lock, payload)
+    except Exception as err:
+        _failure_report(ctx, lock, payload, err)
+        raise
+    finally:
+        (ctx.work_dir / "stage_c.log").write_text("\n".join(ctx.log_lines) + "\n", encoding="utf-8")
+
+
+def _failure_report(ctx: Context, lock: pr.Lock, payload: dict[str, Any], err: BaseException) -> None:
+    """The claim is spent: a crash after it still leaves the report, which names the failure (a deviation)."""
+    if ctx.report.exists():
+        return
+    md = [
+        *report_header(ctx, lock, payload["started_utc"]),
+        "",
+        "## Stage C failed",
+        "",
+        f"Stage C stopped after its markers were written: `{type(err).__name__}: {err}`. No result is"
+        " reported. As preregistered, the evaluation is not run a second time; this failure is a deviation"
+        " from the preregistration.",
+    ]
     ctx.report.parent.mkdir(parents=True, exist_ok=True)
-    ctx.report.write_text(fz.render_report(res, header), encoding="utf-8")
-    write_json(ctx.run_dir / "stage_c.json", {"finished_utc": _now(), "report": str(ctx.report)})
+    ctx.report.write_text("\n".join(md) + "\n", encoding="utf-8")
+    ctx.log(f"stage C failed after the claim ({type(err).__name__}); failure report {ctx.report}")
+
+
+def _evaluate(ctx: Context, prepared: Prepared, lock: pr.Lock, payload: dict[str, Any]) -> dict[str, Any]:
+    ids = [c for c, _, _ in ctx.clips]
+    persons = pl.read_parquet(ctx.persons_path).filter(pl.col("clip_id").is_in(ids))
+    lines = pl.read_parquet(ctx.lines_path).filter(pl.col("clip_id").is_in(ids))
+    ctx.log(f"labels read: {persons.height} person rows, {lines.height} line points")
+    outputs = []
+    for cc in prepared.ccs:
+        ps.attach_labels(
+            cc,
+            prepared.dets[cc.clip_id],
+            persons.filter(pl.col("clip_id") == cc.clip_id),
+            lines.filter(pl.col("clip_id") == cc.clip_id),
+        )
+        res, flags, diag = prepared.smoothed[cc.clip_id]
+        outputs.append(ps.Output(cc, None, res, flags, diag))
+    tables = {"perframe": fz.perframe_tables(prepared.ccs), "ptz": fz.output_tables(outputs)}
+    for name, t in tables.items():
+        if t.players.height:
+            t.players.write_parquet(ctx.work_dir / f"players_{name}.parquet")
+        t.frames.write_parquet(ctx.work_dir / f"frames_{name}.parquet")
+    res = fz.evaluate(tables, prepared.art)
+    res["provenance"] = {**payload, "lock_code_commit": lock.code_commit, "artifacts": lock.artifacts}
+    write_json(ctx.work_dir / "results.json", res)
+    ctx.report.parent.mkdir(parents=True, exist_ok=True)
+    ctx.report.write_text(
+        fz.render_report(res, report_header(ctx, lock, payload["started_utc"])), encoding="utf-8"
+    )
+    write_json(ctx.work_dir / "stage_c.json", {"finished_utc": _now(), "report": str(ctx.report)})
     ctx.log(f"stage C done: report {ctx.report}")
     return res
 
@@ -371,14 +578,17 @@ def _evaluate(ctx: Context, art: fz.Artifacts, lock: pr.Lock, payload: dict[str,
 
 
 def dry_context(scratch: Path, clips: list[str], train_per_game: int, calib_from: Path | None) -> Context:
-    """Scratch freeze (own artifacts and lock under ``scratch``) and a context that never touches the real
-    lock, markers, cache or test files."""
+    """Scratch freeze (own artifacts and lock under ``scratch``, pinning the stand-ins) and a context that
+    never touches the real lock, markers, cache, test clip list or test files."""
+    if not clips:
+        raise typer.BadParameter("--dry-clips needs at least one dev clip")
     dev = pl.read_parquet(index_dir() / "clips.parquet").filter(pl.col("split").is_in(list(DEV_SPLITS)))
     dev = dev.sort("clip_id")
     unknown = sorted(set(clips) - set(dev["clip_id"].to_list()))
     if unknown:
         raise typer.BadParameter(f"--dry-clips must be dev clips: {unknown}")
     stand_in = dev.filter(pl.col("clip_id").is_in(clips))
+    stand_in_rows = [(r["clip_id"], r["split"], int(r["game_id"])) for r in stand_in.iter_rows(named=True)]
     held_games = set(stand_in["game_id"].to_list())
     train = (
         dev.filter(~pl.col("game_id").is_in(list(held_games)))
@@ -405,6 +615,8 @@ def dry_context(scratch: Path, clips: list[str], train_per_game: int, calib_from
             ccs,
             code_commit=pr.head_commit(REPO_ROOT),
             inputs={"dry_run": True, "train_clips": train, "stand_in_clips": clips},
+            test_clips=[(c, g) for c, _, g in stand_in_rows],
+            detection_model=freeze.detection_model(ccs),
         )
         typer.echo(f"scratch freeze: {len(lock.artifacts)} artifacts in {time.perf_counter() - t0:.0f} s")
     run_dir = scratch / "run"
@@ -417,7 +629,7 @@ def dry_context(scratch: Path, clips: list[str], train_per_game: int, calib_from
         report=scratch / "test_run.md",
         persons_path=index_dir() / "persons.parquet",
         lines_path=index_dir() / "lines.parquet",
-        clips=[(r["clip_id"], r["split"], int(r["game_id"])) for r in stand_in.iter_rows(named=True)],
+        clips=stand_in_rows,
     )
 
 
@@ -425,9 +637,11 @@ def compare_with_dev(ctx: Context, calib_from: Path) -> None:
     """Stage B recalibrated the stand-ins from their detections: they must equal the dev calibrations."""
     freeze = _load_freeze_module()
     saved, _ = ps.load_calib(calib_from)
-    mine, _ = ps.load_calib(ctx.run_dir / "calib_perframe.npz")
+    mine, _ = ps.load_calib(ctx.work_dir / "calib_perframe.npz")
     same = {c: freeze.same_results(mine[c], saved[c]) for c in mine}
     ctx.log(f"stage B per-frame calibrations equal to {calib_from.name}: {same}")
+    if not all(same.values()):
+        raise RuntimeError(f"stage B does not reproduce the dev calibrations of {calib_from}: {same}")
 
 
 @app.command()
@@ -453,8 +667,8 @@ def main(
 ) -> None:
     if stage not in ("a", "b", "c", "all"):
         raise typer.BadParameter("--stage is a, b, c or all")
-    if smoke_frames > MAX_SMOKE_FRAMES:
-        raise typer.BadParameter(f"--smoke-frames is at most {MAX_SMOKE_FRAMES}")
+    if not 0 <= smoke_frames <= MAX_SMOKE_FRAMES:
+        raise typer.BadParameter(f"--smoke-frames is between 0 and {MAX_SMOKE_FRAMES}")
     try:
         if dry_run:
             folder = scratch or REPO_ROOT / "runs" / "test_once_dry" / f"{datetime.now(UTC):%Y%m%d-%H%M%S}"

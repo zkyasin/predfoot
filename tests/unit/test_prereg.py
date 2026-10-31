@@ -8,6 +8,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import polars as pl
@@ -21,11 +22,13 @@ from predfoot.eval import positions as ps
 from predfoot.eval import prereg as pr
 from predfoot.health import detector as hd
 from predfoot.health.features import FEATURES
+from predfoot.keypoints.cache import cache_path, load_detections, save_detections
 from predfoot.paths import REPO_ROOT
 
 FINAL_TEXT = "# Preregistration of the test run\n\n- Version: 1\n- Status: approved by the owner.\n"
 CLIP = ("SNGS-999", "test", 7)  # the one fake test clip pinned by the throw-away locks
 MODEL = "pnlcalib-sv@fake"
+GOLDEN = REPO_ROOT / "tests" / "fixtures" / "golden" / "detections.json"
 
 
 def _load(name):
@@ -364,6 +367,189 @@ def test_stages_a_and_b_refuse_without_the_lock(repo, tmp_path):
     for stage in (run_test_once.stage_a, run_test_once.stage_b):
         with pytest.raises(pr.PreregError, match="no lock"):
             stage(ctx)
+
+
+# --- stages on a fake data folder -------------------------------------------------------------------------
+
+
+def _golden_by_image():
+    dets, _ = load_detections(GOLDEN)
+    return {1 + 5 * i: d for i, d in dets.items()}  # image numbers of frames downloaded one in five
+
+
+def _put_detections(ctx, repo, version=MODEL):
+    """The fake clip's detections in the test cache of the current lock (what stage A's networks write)."""
+    dets = _golden_by_image()
+    root = ctx.cache_root / f"lock-{pr.lock_sha256(repo)[:16]}"
+    save_detections(cache_path(CLIP[0], len(dets), root=root), dets, 0.0, version)
+
+
+@pytest.fixture
+def world(repo, tmp_path, monkeypatch):
+    """Stages A, B and C on the throw-away repository with a valid lock: one fake test clip (empty frame
+    files, the golden synthetic detections already in the lock's test cache), default noise parameters as
+    the frozen artifacts, no download and no weights. Nothing reads real data."""
+    data = tmp_path / "data"
+    monkeypatch.setenv("PREDFOOT_DATA_DIR", str(data))
+    img = data / "sn-gsr" / "test" / CLIP[0] / "img1"
+    img.mkdir(parents=True)
+    for f in _golden_by_image():
+        (img / f"{f:06d}.jpg").write_bytes(b"")
+    ctx = _context(repo, tmp_path)
+    _put_detections(ctx, repo)
+    art = fz.Artifacts(tm.NoiseParams(), tm.SmootherConfig().digest(), {}, None, {})  # type: ignore[arg-type]
+    monkeypatch.setattr(run_test_once, "artifacts", lambda ctx: art)
+    monkeypatch.setattr(run_test_once, "verify_weights", lambda lock: None)
+    fake = SimpleNamespace(run=lambda *a, **k: subprocess.CompletedProcess(a, 0))
+    monkeypatch.setattr(run_test_once, "subprocess", fake)
+    return ctx
+
+
+def _fresh(ctx):
+    """A new invocation: same folders, nothing in memory."""
+    return run_test_once.Context(**{**ctx.__dict__, "lock": None, "lock_sha": "", "log_lines": []})
+
+
+def test_stages_a_and_b_record_the_lock_and_resume(world):
+    run_test_once.stage_a(world)
+    run_test_once.stage_b(world)
+    a = json.loads((world.work_dir / "stage_a.json").read_text())
+    b = json.loads((world.work_dir / "stage_b.json").read_text())
+    assert a["lock_sha256"] == b["lock_sha256"] == world.lock_sha
+    assert a["cache"][CLIP[0]]["model_version"] == MODEL
+    _, meta = ps.load_calib(world.work_dir / "stage_b" / f"{CLIP[0]}.npz")
+    assert meta["lock_sha256"] == world.lock_sha
+    _, meta = fz.load_outputs(world.work_dir / "calib_ptz.npz")
+    assert meta["lock_sha256"] == world.lock_sha
+    assert meta["params_digest"] == tm.NoiseParams().digest()
+    again = _fresh(world)
+    run_test_once.stage_b(again)
+    assert any("already done for this lock" in line for line in again.log_lines)
+
+
+def test_a_re_freeze_reuses_nothing_from_the_old_lock(world, repo):
+    run_test_once.stage_a(world)
+    run_test_once.stage_b(world)
+    old = world.work_dir
+    (repo / pr.LOCK_PATH).unlink()
+    commit_all(repo, "drop the lock")
+    write_lock(repo, frozen_at="2026-11-03T00:00:00+00:00")
+    commit_all(repo, "re-freeze")
+    ctx = _fresh(world)
+    with pytest.raises(RuntimeError, match=r"stage_a\.json is missing"):
+        run_test_once.stage_b(ctx)  # the new lock's run folder is empty: stage B cannot reuse the old one
+    assert ctx.work_dir != old
+    with pytest.raises(RuntimeError, match=r"stage_a\.json is missing"):
+        run_test_once.stage_c(_fresh(world))
+    assert not any(m.exists() for m in world.markers)
+    # outputs of the old lock copied into the new lock's folder are refused, not evaluated
+    for name in ("stage_a.json", "stage_b.json", "calib_perframe.npz", "calib_ptz.npz"):
+        ctx.work_dir.mkdir(parents=True, exist_ok=True)
+        (ctx.work_dir / name).write_bytes((old / name).read_bytes())
+    _put_detections(ctx, repo)
+    with pytest.raises(pr.PreregError, match="another lock"):
+        run_test_once.stage_c(_fresh(world))
+    assert not any(m.exists() for m in world.markers)
+
+
+def test_a_truncated_part_file_is_recomputed(world):
+    run_test_once.stage_a(world)
+    run_test_once.stage_b(world)
+    part = world.work_dir / "stage_b" / f"{CLIP[0]}.npz"
+    expected, _ = ps.load_calib(part)
+    part.write_bytes(part.read_bytes()[:100])
+    (world.work_dir / "stage_b.json").unlink()
+    ctx = _fresh(world)
+    run_test_once.stage_b(ctx)
+    assert any("unreadable part file" in line for line in ctx.log_lines)
+    got, _ = ps.load_calib(part)
+    assert freeze_prereg.same_results(got[CLIP[0]], expected[CLIP[0]])
+
+
+@pytest.mark.parametrize("change", ["cache", "extra frame", "params", "clip list", "camera file"])
+def test_stage_c_checks_every_label_free_input_before_the_claim(world, monkeypatch, change):
+    run_test_once.stage_a(world)
+    run_test_once.stage_b(world)
+    ctx = _fresh(world)
+    if change == "cache":
+        _put_detections(ctx, world.root, version="pnlcalib-sv@other")
+    elif change == "extra frame":
+        img = Path(run_test_once.data_dir()) / "sn-gsr" / "test" / CLIP[0] / "img1"
+        (img / f"{max(_golden_by_image()) + 5:06d}.jpg").write_bytes(b"")
+    elif change == "params":
+        b = json.loads((world.work_dir / "stage_b.json").read_text())
+        (world.work_dir / "stage_b.json").write_text(json.dumps(b | {"params_digest": "OLD"}))
+    elif change == "clip list":
+        ctx.clips = [CLIP, ("SNGS-998", "test", 8)]
+    else:
+        (world.work_dir / "calib_ptz.npz").write_bytes(b"not the stage B file")
+
+    def no_labels(*args, **kwargs):
+        pytest.fail("a table was read before every label-free input was checked")
+
+    monkeypatch.setattr(run_test_once.pl, "read_parquet", no_labels)
+    with pytest.raises(pr.PreregError):
+        run_test_once.stage_c(ctx)
+    assert not any(m.exists() for m in world.markers)
+
+
+def test_stage_a_refuses_detections_of_another_model(world, repo):
+    _put_detections(world, repo, version="pnlcalib-sv@other")
+    with pytest.raises(pr.PreregError, match="fitted on"):
+        run_test_once.stage_a(world)
+
+
+def test_stage_a_refuses_another_clip_list(world):
+    world.clips = [("SNGS-998", "test", 7)]
+    with pytest.raises(pr.PreregError, match="not the frozen one"):
+        run_test_once.stage_a(world)
+
+
+def test_stage_c_claims_before_reading_labels_and_a_crash_still_leaves_a_report(world, monkeypatch):
+    run_test_once.stage_a(world)
+    run_test_once.stage_b(world)
+
+    def read_after_claim(*args, **kwargs):
+        assert all(m.exists() for m in world.markers), "labels read before the markers were written"
+        raise OSError("disk unplugged")
+
+    monkeypatch.setattr(run_test_once.pl, "read_parquet", read_after_claim)
+    ctx = _fresh(world)
+    with pytest.raises(OSError, match="disk unplugged"):
+        run_test_once.stage_c(ctx)
+    marker = json.loads(world.markers[0].read_text())
+    assert marker["lock_sha256"] == ctx.lock_sha
+    assert marker["freeze_commit"] == pr.freeze_commit(world.root)
+    report = world.report.read_text()
+    assert "Stage C failed" in report
+    assert "OSError: disk unplugged" in report
+    with pytest.raises(pr.PreregError, match="already ran"):
+        run_test_once.stage_c(_fresh(world))
+    world.report.unlink()
+    with pytest.raises(pr.PreregError, match="second evaluation"):
+        run_test_once.stage_c(_fresh(world))
+
+
+def test_the_dry_run_never_falls_back_to_the_test_clip_list(tmp_path, monkeypatch):
+    monkeypatch.setattr(run_test_once, "test_clips", lambda: pytest.fail("the test clip list was read"))
+    ctx = _context(tmp_path, tmp_path)
+    ctx.dry, ctx.clips = True, []
+    with pytest.raises(pr.PreregError, match="no stand-in clips"):
+        run_test_once.ensure_clips(ctx)
+    with pytest.raises(typer.BadParameter):
+        run_test_once.dry_context(tmp_path / "scratch", [], 3, None)
+
+
+def test_the_smoke_check_fails_on_any_difference():
+    ok = {"frames": 10, "frames_with_same_ids": 10, "max_kp_px_diff": 0.0, "max_line_px_diff": 0.0}
+    run_test_once.check_smoke(ok | {"model_version": MODEL}, MODEL)
+    run_test_once.check_smoke({"skipped": "torch unavailable"}, MODEL)
+    for bad in ({"frames_with_same_ids": 9}, {"max_kp_px_diff": 0.5}, {"model_version": "other"}):
+        with pytest.raises(RuntimeError, match="do not reproduce"):
+            run_test_once.check_smoke(ok | {"model_version": MODEL} | bad, MODEL)
+    for frames in (-1, 11):
+        with pytest.raises(typer.BadParameter):
+            run_test_once.main(stage="a", smoke_frames=frames)
 
 
 # --- frozen artifacts -------------------------------------------------------------------------------------
