@@ -119,6 +119,15 @@ def clip_detections(
     return dets
 
 
+def clip_model_version(clip_id: str, split: str, cache_root: Path | None = None) -> str | None:
+    """Model version recorded in a clip's detection cache, or None when the clip is not cached."""
+    path = cache_path(clip_id, clip_frame_count(clip_id, split), root=cache_root)
+    if not path.exists():
+        return None
+    with np.load(path, allow_pickle=True) as z:
+        return str(z["version"])
+
+
 def calibration_seed(clip_id: str, frame: int) -> int:
     """RANSAC seed of a frame (ADR-0001: seeds derive from the clip and the frame)."""
     return frame * 7919 + int(clip_id.split("-")[1])
@@ -404,6 +413,15 @@ def _result_arrays(
     return arrays
 
 
+def savez_atomic(path: Path, arrays: Mapping[str, np.ndarray]) -> None:
+    """``np.savez_compressed`` to a temporary file renamed over ``path``: a killed write never leaves a
+    truncated archive behind."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp.npz")
+    np.savez_compressed(tmp, **arrays)  # type: ignore[arg-type]
+    tmp.replace(path)
+
+
 def save_calib(path: Path, ccs: Sequence[ClipCalib], meta: dict[str, Any]) -> None:
     """Every clip's per-frame calibrations, exactly (None fields are stored with a mask)."""
     arrays: dict[str, np.ndarray] = {
@@ -411,8 +429,7 @@ def save_calib(path: Path, ccs: Sequence[ClipCalib], meta: dict[str, Any]) -> No
     }
     for cc in ccs:
         arrays |= _result_arrays(cc.clip_id, cc.frames, cc.duplicate, cc.results)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(path, **arrays)  # type: ignore[arg-type]
+    savez_atomic(path, arrays)
 
 
 def _load_results(z: Any, clip_id: str) -> list[CalibResult]:
