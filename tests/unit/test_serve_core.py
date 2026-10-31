@@ -123,12 +123,17 @@ def test_served_conformal_models_give_90_percent_regions_from_known_features(tmp
         check_conformal(dataclasses.replace(mondrian_model(), alpha=0.2))
     with pytest.raises(ValueError, match="zoom"):
         check_conformal(dataclasses.replace(mondrian_model(), edges={"zoom": [1.5]}))
+    with pytest.raises(ValueError, match="sorted"):
+        check_conformal(dataclasses.replace(mondrian_model(), edges={"mpp": [0.075, 0.05]}))
+    with pytest.raises(ValueError, match="positive finite"):
+        check_conformal(dataclasses.replace(mondrian_model(), pooled=float("inf")))
     path = tmp_path / "conformal.json"
     path.write_text(mondrian_model().to_json())
     assert load_conformal(path) == mondrian_model()
-    path.write_text("{}")
-    with pytest.raises(ValueError, match="not a conformal model"):
-        load_conformal(path)
+    for text in ("{}", "[1, 2]", '{"alpha": "0.1", "edges": {}, "quantiles": {}, "counts": {}, "pooled": 9}'):
+        path.write_text(text)
+        with pytest.raises(ValueError, match="not a conformal model"):
+            load_conformal(path)
 
 
 def test_pixels_above_the_horizon_have_no_position():

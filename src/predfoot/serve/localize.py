@@ -62,7 +62,8 @@ def region_threshold(
 
 
 def check_conformal(model: MondrianConformal) -> None:
-    """Raises ValueError unless ``model`` gives 90 % regions from features that /v1/localize can compute."""
+    """Raises ValueError unless ``model`` gives 90 % regions from features that /v1/localize can compute, with
+    sorted bin edges and positive finite quantiles (a broken model fails at start-up, not on requests)."""
     if not math.isclose(model.alpha, 0.1):
         level = f"{1 - model.alpha:.0%}"
         raise ValueError(f"the conformal model is fitted for {level} regions, the API serves 90 % regions")
@@ -70,6 +71,12 @@ def check_conformal(model: MondrianConformal) -> None:
     if unknown:
         known = list(MONDRIAN_FEATURES)
         raise ValueError(f"the conformal model bins on {unknown}; /v1/localize only computes {known}")
+    edges = [np.asarray(e, dtype=np.float64) for e in model.edges.values()]
+    if not all(e.ndim == 1 and np.all(np.diff(e) >= 0) for e in edges):
+        raise ValueError("the conformal model has bin edges that are not sorted numbers")
+    q = np.asarray([model.pooled, *model.quantiles.values()], dtype=np.float64)
+    if not np.all(np.isfinite(q) & (q > 0)):
+        raise ValueError("the conformal model has a quantile that is not a positive finite number")
 
 
 def load_conformal(path: Path) -> MondrianConformal:
@@ -77,9 +84,9 @@ def load_conformal(path: Path) -> MondrianConformal:
     :func:`check_conformal`; ValueError when the file is not one."""
     try:
         model = MondrianConformal.from_json(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, KeyError, TypeError) as err:
+        check_conformal(model)
+    except (json.JSONDecodeError, KeyError, TypeError, AttributeError) as err:
         raise ValueError(f"{path} is not a conformal model written by MondrianConformal.to_json()") from err
-    check_conformal(model)
     return model
 
 
