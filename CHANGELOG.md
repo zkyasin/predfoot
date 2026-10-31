@@ -30,6 +30,14 @@ the project uses [semantic versioning](https://semver.org/).
 - Real pipeline stages for `predfoot run` (cached detections → calibration → calibrated ellipses).
 - Scripts: spike S0, dev evaluation with leave-one-game-out coverage, failure detection, error process.
 - Preregistration draft for the locked test run.
+- Temporal camera smoothing (PTZ-RTS): fixed-centre pan-tilt-zoom camera model, label-free projection centre
+  per clip (game centre when the clip's own is unreliable, refused when it does not explain the clip), Kalman
+  filter and RTS smoother inside shot segments; outlier deletion under one process-noise model (shrink, then
+  release from a clean core), manoeuvre segments and single-step manoeuvres for camera moves faster than the
+  fitted noise, deleted frames without a smoothed state abstain; noise fitted without labels per
+  leave-one-game-out fold; `eval_dev.py --smooth none|proj|ptz` (`--calib-from`, `--fit-scope`, `--beta`)
+  with Mondrian bins per covariance source, `error_process.py --compare` with a model-free KPI proxy,
+  optional smoothing in the real stages (with an optional game centre).
 - HTTP API, `predfoot serve` (extra `serve`): `/healthz`; `/v1/localize`, pitch positions with calibrated
   covariances and 90 % radii from a camera and its 8 × 8 Σθ, nulls above the horizon, with the Mondrian
   conformal regions of the pipeline when the server loads a model (`--conformal`, fitted by
@@ -61,6 +69,13 @@ the project uses [semantic versioning](https://semver.org/).
   re-keyed by clip frame index, `conformal.json`), so `predfoot run --detections` reruns a dev clip from files.
 
 ### Fixed
+- Temporal smoothing tails: a run of misfit frames lasting at most 0.5 s strictly inside a segment gets the
+  smoothed state (flag `bridged`) instead of its raw camera; raw-OK frames of a segment too short for any
+  innovation to test them abstain (flag `unchecked`) instead of publishing their PTZ projection; the
+  process-noise factor across failure gaps is fitted without labels (`NoiseParams.gap`), apart from the fixed
+  manoeuvre factor. `eval_dev.py` calibrates filled and bridged frames in their own covariance source with one
+  pooled quantile, counts PTZ-projected frames as single-frame calibrations, gives a source its own quantiles
+  only with at least 10 calibration clips, and reports robust common-mode step statistics.
 - The export rate entered the config hash as given, so `RunConfig()` (10) and `predfoot run` (10.0) hashed the
   same configuration differently, and a run resumed through the other path recomputed every block.
 - `meta.json` described every stage as a stub and the conformal model as null even when the real stages ran

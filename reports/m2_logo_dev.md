@@ -1,6 +1,6 @@
 # Dev evaluation: calibration, positions and leave-one-game-out coverage
 
-`uv run python scripts/eval_dev.py` · commit `7ae1b77` · per-player table in `runs/20261031-1200_7ae1b77` (not in git).
+`uv run python scripts/eval_dev.py` · commit `c3861c7` · per-player table in `runs/20261031-152537_c3861c7_none` (not in git).
 
 Dev clips with cached detections: 115 from 6 games. Frames: 17250 (one in five), calibrated 95.5%. Player-frames: 254976 (ground-truth boxes; truncated boxes and frames without a labelled camera excluded).
 
@@ -57,5 +57,6 @@ Per held-out game (its quantiles come from the five other games):
 
 Notes. Exploratory dev numbers, not the preregistered test. Frames are subsampled at 5 fps and
 remain correlated within a clip, hence clip-level bootstrap intervals. Mondrian bins: metres per
-pixel at the feet (3 bins) × number of RANSAC inliers (2 bins); small bins use the pooled
-quantile.
+pixel at the feet (3 bins) × number of RANSAC inliers (2 bins), formed within each covariance
+source when the camera is smoothed (smoother, PTZ projection, per-frame); small bins use the
+pooled quantile of their source.
