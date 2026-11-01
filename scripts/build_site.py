@@ -64,7 +64,13 @@ TV picture, and how far off it could be. The code, the method and every result a
 
 This Space is built by `scripts/build_site.py` from `site/page.html`: change the page there, not here.
 
-Footage: SoccerTrack v2, Scott et al., CC BY 4.0. Independent project, not affiliated with SkillCorner.
+Footage: [SoccerTrack v2](https://huggingface.co/datasets/atomscott/soccertrack-v2), Scott et al.,
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), reprojected to a virtual camera, cropped,
+downscaled and overlaid. Test matches: SoccerNet SN-GSR (Somers et al.), shown only as numbers and pitch
+diagrams. Every credit: [ATTRIBUTION.md](https://github.com/zkyasin/predfoot/blob/main/ATTRIBUTION.md).
+
+Built by Ya-Sin, a data-science master's student, as a portfolio project.
+Independent project, not affiliated with SkillCorner.
 """
 
 _RESET = (

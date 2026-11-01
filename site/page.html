@@ -4,9 +4,10 @@
 <style>
 @import url("https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Mono:wght@400;500&family=Atkinson+Hyperlegible+Next:ital,wght@0,400;0,600;1,400&family=Big+Shoulders+Display:wght@700;800&display=swap");
 
-/* Layout: a mown-pitch band carries the thesis and the broadcast screen; below it, chalk-ruled sections with
-   the heading in a left column, the four results on a board split by chalk lines like a pitch, a quiet footer.
-   Light theme: a day match. Dark theme: the same match under floodlights. Magenta is always predfoot. */
+/* Layout: a mown-pitch band carries the thesis, the four results at a glance and the broadcast screen; below
+   it, chalk-ruled sections with the heading in a left column, the four results on a board split by chalk
+   lines like a pitch, a quiet footer. Light theme: a day match. Dark theme: the same match under floodlights.
+   Magenta (pink on grass) is always predfoot; grey is predfoot without its smoothing step. */
 :root {
   --paper: #f3f6f2;          /* page ground: chalk white with a green bias */
   --paper-2: #e7ede6;        /* quiet panels */
@@ -20,11 +21,11 @@
   --chalk: #f4f7f2;          /* lines and text on grass */
   --chalk-line: rgba(244, 247, 242, 0.3);
   --on-chalk: #0f1d16;       /* text on a chalk label */
-  --chalk-2: #d2e0d5;        /* secondary text on grass */
+  --chalk-2: #dae6dc;        /* secondary text on grass (4.6:1 on the mown stripe) */
   --zone: #c0176f;           /* predfoot: error zones, smoothed camera, alarm */
   --zone-wash: rgba(192, 23, 111, 0.12);
   --zone-on-pitch: #ff9ccb;  /* error zones drawn on grass */
-  --context: #818e87;        /* the comparison: frame by frame, single warning sign */
+  --context: #818e87;        /* the comparison: without smoothing, single warning signal */
   --link: #b0135f;
   --warn: #8a5a00;           /* target missed */
   --warn-wash: #f5e8cb;
@@ -99,10 +100,9 @@ a:hover { color: var(--link); }
 .band .pitch { position: absolute; inset: 0; width: 100%; height: 100%; }
 .band .wrap { position: relative; }
 .pitch .stripes rect { fill: var(--pitch-stripe); }
-.pitch .lines { fill: none; stroke: var(--chalk-line); stroke-width: 1.5px; }
+.pitch .lines { fill: none; stroke: var(--chalk-line); stroke-width: 1.5px; opacity: 0.5; }  /* faint: text runs over it */
 .pitch .lines circle.spot { fill: var(--chalk-line); stroke: none; }
 .pitch * { vector-effect: non-scaling-stroke; }
-@media (max-width: 639px) { .pitch .lines { opacity: 0.5; } }  /* on a phone the text covers the whole band */
 
 .masthead { display: flex; align-items: center; justify-content: space-between; gap: 12px 24px; flex-wrap: wrap; }
 .wordmark { display: inline-flex; align-items: center; gap: 10px; font: 800 1.75rem/1 var(--font-display); letter-spacing: 0.01em; }
@@ -112,12 +112,12 @@ a:hover { color: var(--link); }
 .masthead a { font: 500 0.8125rem/1 var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; text-decoration-color: var(--zone-on-pitch); }
 .masthead a:hover { color: var(--chalk); text-decoration-thickness: 2px; }
 
-/* Thesis and caption beside the broadcast screen on wide screens; stacked on a phone */
-.hero { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-areas: "thesis" "screen" "caption"; gap: 22px; padding-top: clamp(36px, 6vw, 80px); }
+/* Thesis and results at a glance beside the broadcast screen on wide screens; stacked on a phone, with the
+   results before the video */
+.hero { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-areas: "thesis" "glance" "screen"; gap: 26px; padding-top: clamp(32px, 5vw, 64px); }
 .hero > * { min-width: 0; }
 @media (min-width: 900px) {
-  .hero { grid-template-columns: minmax(0, 1fr) minmax(0, 28rem); grid-template-areas: "thesis screen" "caption screen"; grid-template-rows: auto 1fr; column-gap: clamp(40px, 5vw, 72px); row-gap: 28px; }
-  .hero .caption { align-self: end; }
+  .hero { grid-template-columns: minmax(0, 1fr) minmax(0, 28rem); grid-template-areas: "thesis screen" "glance screen"; grid-template-rows: auto 1fr; column-gap: clamp(40px, 5vw, 72px); row-gap: 30px; }
 }
 .thesis { grid-area: thesis; display: grid; gap: clamp(14px, 2vw, 22px); }
 h1 {
@@ -128,13 +128,27 @@ h1 {
 }
 .lede { max-width: 54ch; font-size: clamp(1.0625rem, 1rem + 0.35vw, 1.25rem); line-height: 1.5; }
 
-/* Broadcast screen */
-.screen { grid-area: screen; }
-.caption { grid-area: caption; display: grid; justify-items: start; gap: 12px; }
-.caption p { max-width: 60ch; font-size: 0.9375rem; line-height: 1.55; color: var(--chalk-2); }
+/* The four results at a glance */
+.glance { grid-area: glance; align-self: start; display: grid; gap: 14px; padding-top: 16px; border-top: 1px solid var(--chalk-line); }
+.glance-head { font: 500 0.75rem/1.4 var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--chalk-2); }
+.glance-head a { color: var(--chalk); text-decoration-color: var(--zone-on-pitch); }
+.glance-head a:hover { color: var(--chalk); text-decoration-thickness: 2px; }
+.glance ul { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 22px; }
+@media (min-width: 600px) and (max-width: 899px), (min-width: 1180px) { .glance ul { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.glance li { display: grid; align-content: start; gap: 6px; }
+.glance b { font: 800 clamp(2.1rem, 1.7rem + 1.1vw, 2.6rem)/0.92 var(--font-display); color: var(--chalk); }
+.glance b .unit { font-size: 0.58em; color: var(--chalk-2); }
+.glance li > span { font-size: 0.875rem; line-height: 1.4; color: var(--chalk-2); }
+.glance em { font-style: normal; font-weight: 600; color: var(--chalk); }
+
+/* Broadcast screen, with its caption under it */
+.screen { grid-area: screen; display: grid; }
+.screen-bar { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
+.screen figcaption { max-width: 60ch; padding-top: 14px; font-size: 0.9375rem; line-height: 1.55; color: var(--chalk-2); }
 .tab {
   display: inline-block;
   padding: 7px 10px 6px;
+  white-space: nowrap;
   background: var(--chalk);
   color: var(--on-chalk);
   font: 500 0.75rem/1.2 var(--font-mono);
@@ -166,7 +180,7 @@ video.clip-tall { aspect-ratio: auto 720 / 850; }
   cursor: pointer;
 }
 .toggle:hover { border-color: var(--ink-3); }
-.band .toggle { border-color: var(--chalk-line); background: transparent; color: var(--chalk); }
+.band .toggle { margin-bottom: 4px; border-color: var(--chalk-line); background: transparent; color: var(--chalk); }
 .band .toggle:hover { border-color: var(--chalk); }
 
 /* Sections: heading in a left column on wide screens */
@@ -194,6 +208,7 @@ h2 {
 .legend i.is-zone { background: var(--zone); }
 .board { display: grid; grid-template-columns: minmax(0, 1fr); border-top: 1px solid var(--rule); }
 .metric { display: flex; flex-direction: column; gap: 16px; min-width: 0; padding-block: clamp(26px, 3.6vw, 44px); border-bottom: 1px solid var(--rule); }
+.metric > .source { margin-top: auto; }  /* sources line up at the foot of each row of cards */
 @media (min-width: 860px) {
   .board { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .metric:nth-child(odd) { padding-right: clamp(28px, 3.6vw, 48px); border-right: 1px solid var(--rule); }
@@ -215,6 +230,7 @@ h3.kicker { font: 500 0.8125rem/1.2 var(--font-mono); letter-spacing: 0.12em; te
 .bar-group { display: grid; gap: 8px; }
 .bar-group + .bar-group { padding-top: 6px; }
 .bar-title { font-size: 0.875rem; font-weight: 600; color: var(--ink); }
+.bar-title .dir { font-weight: 400; color: var(--ink-2); white-space: nowrap; }
 .bar-row { display: grid; gap: 3px; }
 .bar-label { font-size: 0.875rem; color: var(--ink-2); }
 .bar-line { display: flex; align-items: center; gap: 8px; border-left: 1px solid var(--ink-3); }
@@ -236,13 +252,14 @@ h3.kicker { font: 500 0.8125rem/1.2 var(--font-mono); letter-spacing: 0.12em; te
 .dot-axis span:first-child { transform: none; }
 .dot-axis span:last-child { transform: translateX(-100%); }
 .dot-axis .is-target { color: var(--ink); font-weight: 600; }
+.dot-key { font-size: 0.8125rem; color: var(--ink-3); }
 
 .size { display: flex; align-items: center; gap: 16px; padding-top: 4px; }
 .size > svg { width: 92px; height: 60px; flex: none; }
-.size > div { display: grid; justify-items: start; gap: 8px; }
+.size > div, .judged { display: grid; justify-items: start; gap: 8px; }
 .size .circle { fill: none; stroke: var(--ink-3); stroke-width: 1.5; }
 .size .zone { fill: var(--zone-wash); stroke: var(--zone); stroke-width: 1.75; }
-.size p { font-size: 0.9375rem; line-height: 1.45; }
+.size p, .judged p { max-width: 46ch; font-size: 0.9375rem; line-height: 1.45; }
 
 /* Trust band */
 .trust { margin-top: clamp(56px, 8vw, 104px); background: var(--pitch); color: var(--chalk); }
@@ -250,7 +267,7 @@ h3.kicker { font: 500 0.8125rem/1.2 var(--font-mono); letter-spacing: 0.12em; te
 @media (min-width: 900px) { .trust .wrap { grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); } }
 .trust .wrap > * { min-width: 0; }
 .trust-head { display: grid; gap: 18px; }
-.trust-line { max-width: 22ch; font: 800 clamp(1.9rem, 1.3rem + 2.2vw, 3rem)/1 var(--font-display); text-wrap: balance; }
+.trust-line { max-width: 22ch; font: 800 clamp(1.9rem, 1.3rem + 2.2vw, 3rem)/1 var(--font-display); letter-spacing: 0; text-transform: none; text-wrap: balance; }
 .trust .links { display: flex; flex-wrap: wrap; gap: 8px 28px; }
 .trust ol { list-style: none; padding: 0; display: grid; gap: 0; border-top: 1px solid var(--chalk-line); counter-reset: step; }
 .trust li { display: grid; grid-template-columns: 2.25rem minmax(0, 1fr); gap: 12px; padding-block: 14px; border-bottom: 1px solid var(--chalk-line); counter-increment: step; font-size: 1.0625rem; line-height: 1.5; }
@@ -344,18 +361,27 @@ footer .wrap { display: grid; gap: 22px; padding-block: clamp(32px, 5vw, 52px); 
     <div class="hero">
       <div class="thesis">
         <h1>Where every player stands, read from a TV picture, and how far off it could be.</h1>
-        <p class="lede">predfoot recovers the broadcast camera from the pitch markings, places each player on the 105 × 68 m pitch, and gives every position an error zone built to hold the true spot 9 times in 10.</p>
+        <p class="lede">predfoot works out from the pitch markings where a TV camera stands and where it points, then places each player on the 105 × 68 m pitch with an error zone built to hold the true spot 9 times in 10. It is about the camera: the players' spots in the picture come from boxes drawn by the dataset's annotators, not from a detector.</p>
+      </div>
+      <div class="glance">
+        <p class="glance-head">On three matches never used in development · <a href="#results">details</a></p>
+        <ul>
+          <li><b>1.2<span class="unit"> m</span></b><span>9 players in 10 placed this close, against 1.8 m without smoothing</span></li>
+          <li><b>3.4<span class="unit"> %</span></b><span>extra distance covered from camera wobble, down from 26 %</span></li>
+          <li><b>93.1<span class="unit"> %</span></b><span>of true spots inside zones built for 90 %: <em>target missed</em>, on the cautious side</span></li>
+          <li><b>55<span class="unit"> %</span></b><span>of the frames with a wrong camera estimate caught by the alarm</span></li>
+        </ul>
       </div>
       <figure class="screen">
-        <span class="tab">Public footage · illustration</span>
-        <video class="clip-tall" id="hero-video" data-toggle="hero-toggle" data-name="the public footage" autoplay muted loop playsinline preload="auto" poster="assets/hero.jpg" aria-label="predfoot on public match footage: the recovered pitch lines over the broadcast view, and the same players on a pitch diagram with their error zones" aria-describedby="hero-caption">
+        <div class="screen-bar">
+          <span class="tab">Public footage · illustration</span>
+          <button class="toggle" id="hero-toggle" type="button" hidden>Pause</button>
+        </div>
+        <video class="clip-tall" id="hero-video" data-toggle="hero-toggle" data-name="the public footage" autoplay muted loop playsinline preload="auto" poster="assets/hero.jpg" aria-label="predfoot on public match footage seen through a virtual TV camera: the recovered pitch lines over the view, and the same players on a pitch diagram with their error zones" aria-describedby="hero-caption">
           <source src="assets/hero.mp4" type="video/mp4">
         </video>
+        <figcaption id="hero-caption">Public footage (SoccerTrack v2) seen through a virtual TV camera that pans inside the dataset's fixed panoramic recording; a short window chosen for the demo. Top: the pitch lines redrawn from the camera predfoot recovered, and the players' feet from the dataset's boxes. Bottom: the same players on the pitch with their error zones, and the area the camera sees. An illustration, not a measurement: the results come from SoccerNet matches, whose images cannot be shown for licence reasons.</figcaption>
       </figure>
-      <div class="caption">
-        <p id="hero-caption">Top: public footage (SoccerTrack v2), with the pitch lines redrawn from the camera predfoot recovered. Bottom: the same players on the pitch, each with its error zone, and the area the camera sees. This only illustrates the output: the accuracy figures below come from SoccerNet test matches, whose images cannot be shown here.</p>
-        <button class="toggle" id="hero-toggle" type="button" hidden>Pause</button>
-      </div>
     </div>
   </div>
 </header>
@@ -373,79 +399,91 @@ footer .wrap { display: grid; gap: 22px; padding-block: clamp(32px, 5vw, 52px); 
   <section class="wrap sec" aria-labelledby="results">
     <h2 id="results">What the test showed</h2>
     <div class="prose">
-      <p class="note">One test, run once, on three SoccerNet matches that played no part in development: 49 clips, one frame in five, checked against the dataset's annotated player positions. In grey, what predfoot is compared with: the camera worked out from each frame on its own, or for the alarm the best single warning sign.</p>
-      <p class="legend" aria-hidden="true"><span><i class="is-zone"></i>predfoot</span><span><i></i>Comparison</span></p>
+      <p class="note">Tested once, on 49 clips from three SoccerNet matches never used in development, against the dataset's labels. Grey is predfoot with its smoothing step switched off: the same network and the same camera solver, each frame worked out on its own. In the alarm card, grey is the best single warning signal.</p>
+      <p class="legend" aria-hidden="true"><span><i class="is-zone"></i>With smoothing (predfoot)</span><span><i></i>Without smoothing</span></p>
     </div>
 
     <div class="board span">
       <article class="metric" aria-labelledby="m-accuracy">
         <div class="metric-head"><h3 class="kicker" id="m-accuracy">Accuracy</h3></div>
         <p class="figure">1.2<span class="unit"> m</span></p>
-        <p class="claim">With the camera smoothed over time, 9 players in 10 are placed within 1.2 m of their annotated position.</p>
+        <p class="claim">With smoothing, 9 players in 10 are placed within 1.2 m of their labelled position, against 1.8 m without.</p>
         <div class="bars">
           <div class="bar-group">
-            <p class="bar-title">Distance that 9 players in 10 stay within</p>
+            <p class="bar-title">9 players in 10 are within <span class="dir">(lower is better)</span></p>
             <div class="bar-row">
-              <span class="bar-label">Frame by frame</span>
+              <span class="bar-label">Without smoothing</span>
               <span class="bar-line"><span class="bar" style="--v: 0.91"></span><span class="bar-value">1.8 m</span></span>
             </div>
             <div class="bar-row">
-              <span class="bar-label">predfoot, smoothed camera</span>
+              <span class="bar-label">With smoothing (predfoot)</span>
               <span class="bar-line"><span class="bar is-zone" style="--v: 0.58"></span><span class="bar-value">1.2 m</span></span>
             </div>
           </div>
+          <div class="bar-group">
+            <p class="bar-title">Half of the players are within <span class="dir">(lower is better)</span></p>
+            <div class="bar-row">
+              <span class="bar-label">Without smoothing</span>
+              <span class="bar-line"><span class="bar" style="--v: 0.255"></span><span class="bar-value">0.51 m</span></span>
+            </div>
+            <div class="bar-row">
+              <span class="bar-label">With smoothing (predfoot)</span>
+              <span class="bar-line"><span class="bar is-zone" style="--v: 0.2"></span><span class="bar-value">0.40 m</span></span>
+            </div>
+          </div>
         </div>
-        <p class="source">Same 89,700 player positions for both cameras. Source: <a href="https://github.com/zkyasin/predfoot/blob/main/reports/test_run.md" target="_blank" rel="noopener">test report</a>.</p>
+        <p class="source">Same 89,700 player positions for both. Source: <a href="https://github.com/zkyasin/predfoot/blob/main/reports/test_run.md" target="_blank" rel="noopener">test report</a>.</p>
       </article>
 
       <article class="metric" aria-labelledby="m-stats">
         <div class="metric-head"><h3 class="kicker" id="m-stats">Physical stats</h3></div>
-        <p class="figure">+3.4<span class="unit"> %</span></p>
-        <p class="claim">With the camera smoothed over time, the distance players cover comes out 3.4 % too high; frame by frame, camera wobble makes them seem to run much further and faster.</p>
+        <p class="figure">3.4<span class="unit"> %</span></p>
+        <p class="claim">extra distance covered that camera wobble still adds with smoothing. Without it, wobble adds 26.1 % and makes players look far faster than they are.</p>
         <div class="bars">
           <div class="bar-group">
-            <p class="bar-title">Total distance covered, overstated by</p>
+            <p class="bar-title">Distance covered, extra from wobble <span class="dir">(lower is better)</span></p>
             <div class="bar-row">
-              <span class="bar-label">Frame by frame</span>
-              <span class="bar-line"><span class="bar" style="--v: 0.3263"></span><span class="bar-value">+26.1 %</span></span>
+              <span class="bar-label">Without smoothing</span>
+              <span class="bar-line"><span class="bar" style="--v: 0.3263"></span><span class="bar-value">26.1 %</span></span>
             </div>
             <div class="bar-row">
-              <span class="bar-label">predfoot, smoothed camera</span>
-              <span class="bar-line"><span class="bar is-zone" style="--v: 0.0425"></span><span class="bar-value">+3.4 %</span></span>
+              <span class="bar-label">With smoothing (predfoot)</span>
+              <span class="bar-line"><span class="bar is-zone" style="--v: 0.0425"></span><span class="bar-value">3.4 %</span></span>
             </div>
           </div>
           <div class="bar-group">
-            <p class="bar-title">High-speed running (20 km/h or faster), overstated by</p>
+            <p class="bar-title">High-speed running (20 km/h or faster), extra from wobble <span class="dir">(lower is better)</span></p>
             <div class="bar-row">
-              <span class="bar-label">Frame by frame</span>
-              <span class="bar-line"><span class="bar" style="--v: 0.905"></span><span class="bar-value">+72.4 %</span></span>
+              <span class="bar-label">Without smoothing</span>
+              <span class="bar-line"><span class="bar" style="--v: 0.905"></span><span class="bar-value">72.4 %</span></span>
             </div>
             <div class="bar-row">
-              <span class="bar-label">predfoot, smoothed camera</span>
-              <span class="bar-line"><span class="bar is-zone" style="--v: 0.0688"></span><span class="bar-value">+5.5 %</span></span>
+              <span class="bar-label">With smoothing (predfoot)</span>
+              <span class="bar-line"><span class="bar is-zone" style="--v: 0.0688"></span><span class="bar-value">5.5 %</span></span>
             </div>
           </div>
         </div>
-        <p class="source">Measured at 5 frames per second against the dataset's smoothed reference tracks. The raw annotations themselves differ from that reference by +17.0 % and +40.3 %, so what remains is within the reference's own noise. Source: <a href="https://github.com/zkyasin/predfoot/blob/main/reports/test_run.md" target="_blank" rel="noopener">test report</a>.</p>
+        <p class="source">Measured 5 times a second against the dataset's own smoothed tracks, which are not exact either: this is the distance camera wobble adds, not absolute accuracy. Source: <a href="https://github.com/zkyasin/predfoot/blob/main/reports/test_run.md" target="_blank" rel="noopener">test report</a>.</p>
       </article>
 
       <article class="metric" aria-labelledby="m-zones">
         <div class="metric-head">
-          <h3 class="kicker" id="m-zones">Honest error zones</h3>
+          <h3 class="kicker" id="m-zones">Error zones</h3>
           <span class="verdict is-missed"><svg viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"/></svg>Target missed</span>
         </div>
         <p class="figure">93.1<span class="unit"> %</span></p>
-        <p class="claim">of true positions fell inside their 90 % zone: the zones were a bit too large, so the preregistered target was missed, on the cautious side.</p>
+        <p class="claim">of true positions fell inside their 90 % zone: a bit too cautious, so the target set before the test was missed. Without smoothing, the zones landed at 90.7 %.</p>
         <div class="dots">
           <div class="dot-row">
-            <div class="dot-head"><span>Frame by frame</span><b>90.7 %</b></div>
+            <div class="dot-head"><span>Without smoothing</span><b>90.7 %</b></div>
             <div class="dot-track"><span class="range" style="--lo: 0.2533; --hi: 0.5067"></span><span class="dot" style="--x: 0.38"></span></div>
           </div>
           <div class="dot-row">
-            <div class="dot-head"><span>predfoot, smoothed camera</span><b>93.1 %</b></div>
+            <div class="dot-head"><span>With smoothing (predfoot)</span><b>93.1 %</b></div>
             <div class="dot-track"><span class="range is-zone" style="--lo: 0.4467; --hi: 0.6333"></span><span class="dot is-zone" style="--x: 0.54"></span></div>
           </div>
           <div class="dot-axis" aria-hidden="true"><span style="--x: 0">85 %</span><span class="is-target" style="--x: 0.3333">90 % target</span><span style="--x: 0.6667">95 %</span><span style="--x: 1">100 %</span></div>
+          <p class="dot-key">Dot: the result. Bar: its likely range.</p>
         </div>
         <div class="size">
           <svg viewBox="0 0 92 60" aria-hidden="true" focusable="false"><circle class="circle" cx="46" cy="30" r="26"/><ellipse class="zone" cx="46" cy="30" rx="33" ry="14.95" transform="rotate(-24 46 30)"/></svg>
@@ -454,21 +492,18 @@ footer .wrap { display: grid; gap: 22px; padding-block: clamp(32px, 5vw, 52px); 
             <span class="verdict is-met"><svg viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M2 6.5l2.6 2.6L10 3.4"/></svg>Target met</span>
           </div>
         </div>
-        <p class="source">The test asked for a result compatible with 90 %; the lines show the 95 % interval, 91.7 to 94.5 % for predfoot. Per match: 89.8, 93.2 and 96.0 %. Source: <a href="https://github.com/zkyasin/predfoot/blob/main/reports/test_run.md" target="_blank" rel="noopener">test report</a>.</p>
+        <p class="source">Source: <a href="https://github.com/zkyasin/predfoot/blob/main/reports/test_run.md" target="_blank" rel="noopener">test report</a>, with the likely ranges and each match's result.</p>
       </article>
 
       <article class="metric" aria-labelledby="m-alarm">
-        <div class="metric-head">
-          <h3 class="kicker" id="m-alarm">Bad-camera alarm</h3>
-          <span class="verdict is-met"><svg viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M2 6.5l2.6 2.6L10 3.4"/></svg>Target met</span>
-        </div>
+        <div class="metric-head"><h3 class="kicker" id="m-alarm">Bad-camera alarm</h3></div>
         <p class="figure">55<span class="unit"> %</span></p>
-        <p class="claim">of camera failures are caught by setting aside the 10 % of frames the alarm finds most suspicious.</p>
+        <p class="claim">of the frames with a wrong camera estimate are caught when the alarm sets aside the 10 % of frames it finds most suspicious. Tested on the frame-by-frame estimates, where 1 frame in 10 is wrong.</p>
         <div class="bars">
           <div class="bar-group">
-            <p class="bar-title">Camera failures caught, with 10 % of frames set aside</p>
+            <p class="bar-title">Wrong frames caught, with 10 % of frames set aside <span class="dir">(higher is better)</span></p>
             <div class="bar-row">
-              <span class="bar-label">Best single warning sign</span>
+              <span class="bar-label">Best single warning signal</span>
               <span class="bar-line"><span class="bar" style="--v: 0.341"></span><span class="bar-value">34 %</span></span>
             </div>
             <div class="bar-row">
@@ -477,7 +512,11 @@ footer .wrap { display: grid; gap: 22px; padding-block: clamp(32px, 5vw, 52px); 
             </div>
           </div>
         </div>
-        <p class="source">A failure is a frame whose recovered pitch lines sit more than 10 pixels from the annotated ones, on average. Ranking quality (AUROC): 0.91 for the alarm against 0.80 for the best single sign. Source: <a href="https://github.com/zkyasin/predfoot/blob/main/reports/test_run.md" target="_blank" rel="noopener">test report</a>.</p>
+        <div class="judged">
+          <p>It ranks the wrong frames better than the best single signal, the target set before the test (ranking score 0.91 against 0.80).</p>
+          <span class="verdict is-met"><svg viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M2 6.5l2.6 2.6L10 3.4"/></svg>Target met</span>
+        </div>
+        <p class="source">A frame counts as wrong when its recovered pitch lines sit more than 10 pixels from the labelled ones, on average. Source: <a href="https://github.com/zkyasin/predfoot/blob/main/reports/test_run.md" target="_blank" rel="noopener">test report</a>.</p>
       </article>
     </div>
   </section>
@@ -485,12 +524,12 @@ footer .wrap { display: grid; gap: 22px; padding-block: clamp(32px, 5vw, 52px); 
   <section class="trust" aria-labelledby="trust">
     <div class="wrap">
       <div class="trust-head">
-        <p class="trust-line" id="trust">Tested once, on matches never used during development.</p>
+        <h2 class="trust-line" id="trust">Tested once, on matches never used during development.</h2>
         <p class="links"><a href="https://github.com/zkyasin/predfoot/blob/main/docs/preregistration.md" target="_blank" rel="noopener">Preregistration</a><a href="https://github.com/zkyasin/predfoot/blob/main/reports/test_run.md" target="_blank" rel="noopener">Test report</a></p>
       </div>
       <ol>
-        <li><span><b>Protocol frozen and published</b> before the test, success criteria included (commit 8640b9a).</span></li>
-        <li><span><b>Test run once</b> on the three held-out matches, with every model fixed in advance.</span></li>
+        <li><span><b>Protocol frozen before the test</b>, success criteria included, and locked with checksums in the repository's history.</span></li>
+        <li><span><b>Test run once</b> on the three unseen matches, with every model fixed in advance.</span></li>
         <li><span><b>Every result published</b>, including the missed target.</span></li>
       </ol>
     </div>
@@ -499,7 +538,7 @@ footer .wrap { display: grid; gap: 22px; padding-block: clamp(32px, 5vw, 52px); 
   <section class="wrap sec" aria-labelledby="smoothing">
     <h2 id="smoothing">Smoothing the camera</h2>
     <div class="prose">
-      <p>A broadcast camera turns around an almost fixed point, so its view changes smoothly. Worked out frame by frame, the camera estimate jitters, and every position jitters with it.</p>
+      <p>A TV camera turns around an almost fixed point, so its view changes smoothly. Worked out frame by frame, the camera estimate jitters, and every position jitters with it. predfoot smooths it over time.</p>
     </div>
     <figure class="col-2">
       <p class="duo-bar" aria-hidden="true"><span><i class="k-plain"></i>Without smoothing</span><span><i class="k-zone"></i>With smoothing (predfoot)</span><span><i class="k-true"></i>True position</span></p>
@@ -524,7 +563,7 @@ footer .wrap { display: grid; gap: 22px; padding-block: clamp(32px, 5vw, 52px); 
           <circle class="accent-fill" cx="17" cy="15" r="2.4"/><circle class="accent-fill" cx="39" cy="15" r="2.4"/><circle class="accent-fill" cx="28" cy="15" r="2.4"/><circle class="accent-fill" cx="28" cy="37" r="2.4"/><circle class="accent-fill" cx="10" cy="37" r="2.4"/><circle class="accent-fill" cx="46" cy="37" r="2.4"/>
         </svg>
         <h3><span>1</span> Find the pitch markings</h3>
-        <p>A neural network (PnLCalib, public weights, not retrained) spots the lines of the pitch, and the points where they cross, in each frame.</p>
+        <p>An existing public neural network (PnLCalib), used as it is, spots the lines of the pitch, and the points where they cross, in each frame.</p>
       </li>
       <li>
         <svg viewBox="0 0 56 56" aria-hidden="true" focusable="false">
@@ -549,7 +588,7 @@ footer .wrap { display: grid; gap: 22px; padding-block: clamp(32px, 5vw, 52px); 
           <ellipse class="accent" cx="40" cy="23" rx="6" ry="2.8" transform="rotate(-62 40 23)"/><circle class="accent-fill" cx="40" cy="23" r="1.6"/>
         </svg>
         <h3><span>4</span> Place each player, with an error zone</h3>
-        <p>Each player's feet are projected onto the pitch with a zone built to hold the true spot 9 times in 10, tuned on past matches so it keeps that promise. A health score flags frames whose camera looks wrong.</p>
+        <p>Each player's feet, taken from the dataset's boxes, are projected onto the pitch with a zone built to hold the true spot 9 times in 10, tuned on past matches so it keeps that promise. An alarm flags frames whose camera estimate looks wrong.</p>
       </li>
     </ol>
   </section>
@@ -558,8 +597,10 @@ footer .wrap { display: grid; gap: 22px; padding-block: clamp(32px, 5vw, 52px); 
     <h2 id="limits">Limits</h2>
     <ul class="limits">
       <li>Tested on three matches from one league and one broadcast style.</li>
-      <li>Players come from the dataset's annotated boxes: detecting and tracking them is not part of the project.</li>
-      <li>The alarm and the physical-stat measurements run in the evaluation scripts, not yet in the command-line tool.</li>
+      <li>Players come from boxes drawn by the dataset's annotators: detecting and tracking them is not part of the project.</li>
+      <li>The error zones were a bit cautious on the test matches: they held the true spot 93 times in 100 rather than 90.</li>
+      <li>The physical stats were measured against the dataset's own smoothed tracks, which are not exact either: they show what camera wobble adds, not absolute accuracy.</li>
+      <li>The alarm and the physical-stat measurements run in the test scripts, not yet in the tool itself.</li>
     </ul>
   </section>
 </main>
@@ -573,7 +614,8 @@ footer .wrap { display: grid; gap: 22px; padding-block: clamp(32px, 5vw, 52px); 
       <li><a href="https://github.com/zkyasin/predfoot/blob/main/docs/preregistration.md" target="_blank" rel="noopener"><b>Preregistration</b><span>The protocol, frozen before the test</span></a></li>
     </ul>
     <div class="credits">
-      <p>Footage: SoccerTrack v2, Scott et al., CC BY 4.0 (reprojected, cropped, downscaled and overlaid). Test matches: SoccerNet <span class="nowrap">SN-GSR</span>, shown only as numbers and pitch diagrams. Pitch-marking network: PnLCalib weights by <span class="nowrap">Gutiérrez-Pérez</span> and Agudo, CC BY 4.0. Code: <span class="nowrap">Apache-2.0</span>.</p>
+      <p>Footage: <a href="https://huggingface.co/datasets/atomscott/soccertrack-v2" target="_blank" rel="noopener">SoccerTrack v2</a>, Scott et al., <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>, reprojected to a virtual camera, cropped, downscaled and overlaid. Test matches: SoccerNet <span class="nowrap">SN-GSR</span> (Somers et al.), shown only as numbers and pitch diagrams. Pitch-marking network: PnLCalib weights by <span class="nowrap">Gutiérrez-Pérez</span> and Agudo, CC BY 4.0. Code: <span class="nowrap">Apache-2.0</span>. <a href="https://github.com/zkyasin/predfoot/blob/main/ATTRIBUTION.md" target="_blank" rel="noopener">All credits</a>.</p>
+      <p>Built by Ya-Sin, a data-science master's student, as a portfolio project (<a href="https://github.com/zkyasin" target="_blank" rel="noopener">github.com/zkyasin</a>).</p>
       <p class="independent">Independent project, not affiliated with SkillCorner.</p>
     </div>
   </div>

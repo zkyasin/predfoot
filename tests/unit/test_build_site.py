@@ -230,6 +230,9 @@ def test_space_readme_front_matter():
     assert front["emoji"]
     assert 0 < len(front["short_description"]) < 60
     assert "not affiliated with SkillCorner" in text
+    # ADR-0002: the footage credit beside the downloadable clips says how the frames were changed
+    assert "SoccerTrack v2](https://huggingface.co/datasets/atomscott/soccertrack-v2), Scott et al." in text
+    assert all(change in text for change in ("reprojected", "cropped", "downscaled", "overlaid"))
 
 
 def test_cli_builds_and_fails_with_a_readable_message(tmp_path):
@@ -307,10 +310,11 @@ def test_showcase_page_keeps_its_contract():
     for video in re.findall(r"<video\b[^>]*>", page):
         for attr in ("autoplay", "muted", "loop", "playsinline", "poster=", "aria-label="):
             assert attr in video
-    assert "Independent project, not affiliated with SkillCorner." in page
-    assert "SoccerTrack v2, Scott et al., CC BY 4.0" in page
+    text = re.sub(r"<[^>]+>", "", page)
+    assert "Independent project, not affiliated with SkillCorner." in text
+    assert "SoccerTrack v2, Scott et al., CC BY 4.0" in text
     # ADR-0002: public pixels say how the frames were changed
-    assert all(change in page for change in ("cropped", "downscaled", "overlaid"))
+    assert all(change in text for change in ("cropped", "downscaled", "overlaid"))
 
 
 def test_phones_get_the_stacked_smoothing_clip_and_its_poster():
