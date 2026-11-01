@@ -121,6 +121,17 @@ the project uses [semantic versioning](https://semver.org/).
   the test positions (over-coverage; the per-frame camera, the comparison arm, covers 90.7 % [88.8, 92.6]).
   P2 met: median area 0.73 of the constant circle's. P3 met: gradient boosting AUROC 0.911 against 0.797 for
   the best dev single feature. The README now opens with them.
+- Showcase for visitors: `site/page.html`, a one-page visual summary for people who are not computer-vision
+  specialists, published as a static Hugging Face Space (thesis, the SoccerTrack v2 hero loop captioned as an
+  illustration, the four headline results of the test run as before/after figures drawn to scale with the
+  missed coverage target stated on the result, the run-once protocol, the smoothing clip, how it works,
+  limits and credits), written as claude.ai Artifact page content with light and dark themes;
+  `scripts/build_site.py` wraps it into `site/dist/` with only the media it references, refuses a missing file,
+  an outside load other than Google Fonts, a broken anchor or more than 4 MB, and writes the Space's front
+  matter; `scripts/deploy_space.py` creates the static Space and uploads the build. The README is rewritten in
+  plain words and its technical content moves, complete, to `docs/technical.md`. Web visuals in
+  `assets/showcase/`: the hero loop on SoccerTrack v2 footage and the smoothing clip in a plain style (MP4,
+  poster and GIF).
 
 ### Changed
 - The dev evaluation core moved from `scripts/eval_dev.py` into `predfoot.eval.positions`, the failure
