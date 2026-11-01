@@ -4,8 +4,8 @@ The animations in `assets/showcase/`, made for the showcase page and the README.
 
 | File | Size | Format | Made by |
 |---|---|---|---|
-| `hero.mp4` | 718 kB | H.264 (High, yuv420p, `+faststart`, no audio), 720 × 850, 25 fps, 170 frames, 6.8 s loop | `scripts/render_hero.py` at `39f1560` |
-| `hero.jpg` | 125 kB | JPEG 720 × 850, poster: the middle frame (clip frame 440) | same run |
+| `hero.mp4` | 713 kB | H.264 (High, yuv420p, `+faststart`, no audio), 720 × 850, 25 fps, 170 frames, 6.8 s loop | `scripts/render_hero.py` at `93ad599` |
+| `hero.jpg` | 124 kB | JPEG 720 × 850, poster: the middle frame (clip frame 440) | same run |
 | `smoothing.mp4` | 456 kB | H.264 (High, yuv420p, `+faststart`, no audio), 960 × 374, 5 fps, 75 frames, 15.0 s: the two pitches side by side | `scripts/render_minimap_demo.py --style page` at `9ce6da5` |
 | `smoothing.jpg` | 39 kB | JPEG 960 × 374, poster: the still of `reports/minimap_demo.md` (t = 7.4 s) | same run |
 | `smoothing-tall.mp4` | 532 kB | H.264 as above, 640 × 992: the two pitches stacked, for phones | same run |
@@ -25,9 +25,9 @@ uv run python scripts/render_hero.py --start 13.0 --seconds 8 --show-from 14.2 -
 panorama. It is rendered at every clip frame, the top 92 of 1080 rows are cut where the panorama has no pixels,
 and it is scaled down to 720 px. The view shows predfoot's pitch lines in aqua and each player's feet as amber dots.
 The feet are the bottom centre of the dataset's annotated boxes: predfoot does not detect players. At the bottom,
-the same players are drawn on a top-down 105 × 68 m pitch, each with its 90 % zone, and the lighter area outlined
-in aqua is the ground the camera sees. 15 to 20 players are placed per frame. The only text is the credit
-"SoccerTrack v2 (CC BY 4.0)".
+the same players are drawn on a top-down 105 × 68 m pitch, each with its 90 % zone in the page's pink, and the
+lighter area outlined in aqua is the ground the camera sees. 15 to 20 players are placed per frame. The only text
+is the credit "SoccerTrack v2 (CC BY 4.0)".
 
 **How.** PnLCalib, with its public CC BY 4.0 weights and not retrained, runs on MPS on 41 keyframes, one clip frame
 in five from 13.0 s (frames 325-525). Then come the robust solver and the PTZ smoother, with the noise parameters
@@ -39,7 +39,8 @@ interpolated linearly between the two keyframes, which is an approximation. The 
 of the SN-GSR dev evaluation (`src/predfoot/demo/dev_calibration.json`, smoother model). Their median 90 % radius
 is 3.0 m and their p90 is 4.3 m. The keyframe detections come from an earlier run of the same script on the same
 views (largest difference in camera parameters: 0). The final render reused them through `--detections`, so it ran
-no network itself.
+no network itself. The loop was rendered again at `93ad599`, from the same detections, only to draw the zones in
+pink instead of the players' amber; nothing else changed.
 
 **What it does not show.**
 
