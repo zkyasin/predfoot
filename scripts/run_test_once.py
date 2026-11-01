@@ -10,10 +10,11 @@ locked SHA-256, the lock is anchored in its freeze commit, nothing under the pro
 lock commit, the working tree is clean, and the interpreter and packages are those of the freeze. The clips
 must be the pinned list (count and digest in the lock).
 
-Every output of a freeze lives under ``runs/test_once/lock-<lock SHA-256>/`` and its detections under
-``cache/kp-test/lock-<lock SHA-256>/``, and every record (``stage_a.json``, ``stage_b.json``, each clip's
-part file, both saved camera files) carries the lock's SHA-256: a re-freeze starts from nothing, and an output
-of another lock is never reused or evaluated.
+Every output of a freeze lives under ``runs/test_once/lock-<first 16 hex digits of the lock SHA-256>/`` in the
+repository and its detections under ``PREDFOOT_DATA_DIR/cache/kp-test/lock-<the same 16 digits>/`` (one file
+per clip in ``pnlcalib-sv/``), and every record (``stage_a.json``, ``stage_b.json``, each clip's part file,
+both saved camera files) carries the lock's full SHA-256: a re-freeze starts from nothing, and an output of
+another lock is never reused or evaluated.
 
 - A, label-free preparation: test frames at 5 fps (``scripts/download_data.py sn-gsr-frames --allow-locked``,
   run with this interpreter), the network weights checked against the lock, keypoint and line networks into
