@@ -383,6 +383,21 @@ def _put_detections(ctx, repo, version=MODEL):
     save_detections(cache_path(CLIP[0], len(dets), root=root), dets, 0.0, version)
 
 
+LABEL_SCHEMAS = {
+    "persons": {"clip_id": pl.String, "frame": pl.Int32, "track_id": pl.Int64, "foot_u": pl.Float64,
+                "foot_v": pl.Float64, "x": pl.Float64, "y": pl.Float64, "x_raw": pl.Float64,
+                "y_raw": pl.Float64, "truncated": pl.Boolean},
+    "lines": {"clip_id": pl.String, "frame": pl.Int32, "line_class": pl.String, "point_idx": pl.Int32,
+              "u": pl.Float64, "v": pl.Float64, "is_planar": pl.Boolean},
+}  # fmt: skip
+
+
+def _put_label_tables(ctx):
+    """Label tables without a single row, with the columns of the index (no label exists in these tests)."""
+    pl.DataFrame(schema=LABEL_SCHEMAS["persons"]).write_parquet(ctx.persons_path)
+    pl.DataFrame(schema=LABEL_SCHEMAS["lines"]).write_parquet(ctx.lines_path)
+
+
 @pytest.fixture
 def world(repo, tmp_path, monkeypatch):
     """Stages A, B and C on the throw-away repository with a valid lock: one fake test clip (empty frame
@@ -396,6 +411,7 @@ def world(repo, tmp_path, monkeypatch):
         (img / f"{f:06d}.jpg").write_bytes(b"")
     ctx = _context(repo, tmp_path)
     _put_detections(ctx, repo)
+    _put_label_tables(ctx)
     art = fz.Artifacts(tm.NoiseParams(), tm.SmootherConfig().digest(), {}, None, {})  # type: ignore[arg-type]
     monkeypatch.setattr(run_test_once, "artifacts", lambda ctx: art)
     monkeypatch.setattr(run_test_once, "verify_weights", lambda lock: None)
@@ -489,6 +505,35 @@ def test_stage_c_checks_every_label_free_input_before_the_claim(world, monkeypat
     monkeypatch.setattr(run_test_once.pl, "read_parquet", no_labels)
     with pytest.raises(pr.PreregError):
         run_test_once.stage_c(ctx)
+    assert not any(m.exists() for m in world.markers)
+
+
+@pytest.mark.data
+def test_the_dev_label_tables_have_the_columns_stage_c_reads():
+    """build_index writes the test split's tables with the dev tables' columns: schemas only, dev only."""
+    for name, columns in run_test_once.LABEL_COLUMNS.items():
+        path = run_test_once.index_dir() / f"{name}.parquet"
+        if not path.exists():
+            pytest.skip(f"no dev index at {path}")
+        assert set(columns) <= set(pl.read_parquet_schema(path))
+        assert set(columns) <= set(LABEL_SCHEMAS[name])
+
+
+@pytest.mark.parametrize("damage", ["persons missing", "lines empty", "lines truncated", "column renamed"])
+def test_stage_c_refuses_missing_or_damaged_label_tables_before_the_claim(world, monkeypatch, damage):
+    run_test_once.stage_a(world)
+    run_test_once.stage_b(world)
+    if damage == "persons missing":
+        world.persons_path.unlink()
+    elif damage == "lines empty":
+        world.lines_path.write_bytes(b"")
+    elif damage == "lines truncated":
+        world.lines_path.write_bytes(world.lines_path.read_bytes()[:-20])
+    else:
+        pl.read_parquet(world.persons_path).rename({"x_raw": "x_raw_m"}).write_parquet(world.persons_path)
+    monkeypatch.setattr(run_test_once.pl, "read_parquet", lambda *a, **k: pytest.fail("a label was read"))
+    with pytest.raises(pr.PreregError, match="label table"):
+        run_test_once.stage_c(_fresh(world))
     assert not any(m.exists() for m in world.markers)
 
 

@@ -23,11 +23,12 @@ of another lock is never reused or evaluated.
   resumable), then PTZ smoothing with the frozen noise parameters. The detection caches must still have the
   SHA-256 recorded by stage A.
 - C, evaluation, the only stage that reads test labels (``index/test/``), exactly once. Every label-free input
-  is checked and loaded first (stage records, caches, saved cameras, clip lists, frame counts); then the
-  markers (``PREDFOOT_DATA_DIR/test_once/`` and ``runs/test_once/``) are written before any label is read, so
-  a second C is refused even after a crash. Every endpoint for both cameras and both references, the success
-  criteria evaluated as written, into ``reports/test_run.md`` (aggregate numbers) and the lock's run folder
-  (local). A crash after the markers still writes ``reports/test_run.md``, naming the failure.
+  is checked and loaded first (stage records, caches, saved cameras, clip lists, frame counts), and both label
+  tables must exist with the columns stage C reads (their parquet schemas, no label); then the markers
+  (``PREDFOOT_DATA_DIR/test_once/`` and ``runs/test_once/``) are written before any label is read, so a second
+  C is refused even after a crash. Every endpoint for both cameras and both references, the success criteria
+  evaluated as written, into ``reports/test_run.md`` (aggregate numbers) and the lock's run folder (local). A
+  crash after the markers still writes ``reports/test_run.md``, naming the failure.
 
 ``--dry-run`` exercises the same chain on dev clips standing in for test clips (``--dry-clips``, default three
 clips of game 4), in a scratch folder: a scratch freeze on a few clips of the five other dev games
@@ -443,11 +444,35 @@ class Prepared:
     smoothed: dict[str, fz.SavedOutput]
 
 
+#: Columns of the two label tables that stage C reads (:func:`predfoot.eval.positions.attach_labels`).
+LABEL_COLUMNS = {
+    "persons": ("clip_id", "frame", "track_id", "foot_u", "foot_v", "x", "y", "x_raw", "y_raw", "truncated"),
+    "lines": ("clip_id", "frame", "line_class", "point_idx", "u", "v", "is_planar"),
+}
+
+
+def check_label_tables(ctx: Context) -> None:
+    """Both label tables exist and have the columns stage C reads. Only their parquet schemas are read, no
+    label: a missing, empty or damaged table is refused before the claim, not after it."""
+    for name, path in (("persons", ctx.persons_path), ("lines", ctx.lines_path)):
+        if not path.is_file() or path.stat().st_size == 0:
+            raise pr.PreregError(f"the {name} label table {path} is missing or empty")
+        try:
+            schema = pl.read_parquet_schema(path)
+        except Exception as err:  # a damaged file: polars raises its own error types
+            raise pr.PreregError(f"the {name} label table {path} is unreadable ({err})") from err
+        missing = [c for c in LABEL_COLUMNS[name] if c not in schema]
+        if missing:
+            raise pr.PreregError(f"the {name} label table {path} lacks the columns {missing}")
+
+
 def prepare_c(ctx: Context) -> Prepared:
     """Check and load everything stage C needs except the labels, so that nothing label-free can fail after
-    the claim: the clip list, both stage records, the detection caches, the frozen artifacts, the two camera
-    files (lock, parameters, clips) and every clip's frame count."""
+    the claim: the clip list, the two label tables (their schemas, no label), both stage records, the
+    detection caches, the frozen artifacts, the two camera files (lock, parameters, clips) and every clip's
+    frame count."""
     check_clips(ctx)
+    check_label_tables(ctx)
     verify_caches(ctx, read_stage(ctx, "stage_a.json"))
     art = artifacts(ctx)
     check_stage_b(ctx, read_stage(ctx, "stage_b.json"), art)
