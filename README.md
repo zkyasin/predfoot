@@ -17,8 +17,8 @@ Outputs follow the SkillCorner open-data JSONL schema at 10 fps, with the uncert
 (`p90_radius_m`, `pos_cov_m2`, `calib_health`, `abstain`).
 
 > **Development results only.** Everything below comes from the six SN-GSR development games. The test games
-> (7, 8 and 11) stay locked until the preregistered run ([`docs/preregistration.md`](docs/preregistration.md),
-> draft), whose results will all be published here, failed criteria included.
+> (7, 8 and 11) stay locked until the preregistered run ([`docs/preregistration.md`](docs/preregistration.md)),
+> whose results will all be published here, failed criteria included.
 
 ![Side-by-side minimaps of one dev clip: per-frame camera on the left, PTZ-smoothed camera on the right](assets/minimap_demo.gif)
 
@@ -138,10 +138,9 @@ calibration fails. The KPI modules run only in the evaluation scripts; a run's o
   rises with its number of trusted player-frames: 84.6 % in the smallest third of the clips, 96.6 % in the
   largest (per-frame camera). Weighting each clip equally gives 91.6 % [89.1, 94.0] for the per-frame camera
   and 91.3 % [88.5, 94.0] for the smoothed one; against the labels the two weightings agree (90.4 and 90.5 %,
-  per-frame camera). The draft preregistration makes the oracle
-  its primary reference and the clip its unit of analysis, but does not say how player-frames are weighted:
-  on dev, its coverage criterion (a 95 % interval containing 90 %) would fail with pooled player-frames and
-  pass with clips weighted equally. That choice has to be made, and argued, before the file is frozen.
+  per-frame camera). The preregistration takes the raw labels as its primary reference (the oracle penalises a
+  smooth camera and fails grossly on about 1.5 % of its own player-frames), decides its coverage criterion on
+  pooled player-frames, and reports the coverage with clips weighted equally next to it.
 - **Inputs are labelled boxes.** Detection and tracking errors are not part of these numbers.
 - **SoccerTrack v2 supplies demo pixels only.** Its released calibration misses its own annotated keypoints by
   8 to 23 px (median), metres on the far half of the pitch, so it cannot referee predfoot. On its virtual

@@ -1,12 +1,9 @@
-# Preregistration of the test run (DRAFT, not frozen)
+# Preregistration of the test run
 
 - Version: 1
-- Status: **DRAFT for owner review.** Each choice marked "(proposed, pending owner approval)" is a proposal;
-  the owner confirms or changes it, then deletes the markers and the draft wording of the title and of this
-  status line. Nothing
-  here is binding until `scripts/freeze_prereg.py` freezes the file: it refuses a text that still carries a
-  draft marker, writes `docs/preregistration.lock.json` (SHA-256 of this file and of the frozen artifacts,
-  code commit, date) and prints the line that README.md quotes.
+- Status: final. The owner settled every choice on 2026-11-01. The text binds from the commit that freezes
+  it: `scripts/freeze_prereg.py` writes `docs/preregistration.lock.json` (SHA-256 of this file and of the
+  frozen artifacts, code commit, date) and prints the line that README.md quotes.
 - Prior exposure to the test split, stated exactly. At M0 the SN-GSR labels of every split, test included
   (v1.3), were downloaded (`scripts/download_data.py sn-gsr-labels`) and parsed by `scripts/build_index.py`
   into `index/clips.parquet` (one row per clip, test clips included) and `index/test/` (the test split's
@@ -34,10 +31,10 @@
   any label is read. Positions come from the ground-truth boxes (feet at the bottom centre), so the test
   measures calibration and uncertainty, not detection. Excluded, as on dev: truncated boxes, frames without
   labelled positions, and labels from a failed raw camera (raw and smoothed labels more than 5 m apart).
-- **R1, SN-GSR raw labels (`bbox_pitch_raw`): primary reference** (proposed, pending owner approval).
-- **R2, trusted line oracle: secondary reference** (proposed, pending owner approval). The homography fitted to
-  the annotated pitch lines of the frame, used only where it fits those lines within 3 px (about 60 % of the
-  player-frames on dev: 61 % for the per-frame camera, 62 % for the smoothed one).
+- **R1, SN-GSR raw labels (`bbox_pitch_raw`): primary reference**.
+- **R2, trusted line oracle: secondary reference**. The homography fitted to the annotated pitch lines of the
+  frame, used only where it fits those lines within 3 px (about 60 % of the player-frames on dev: 61 % for the
+  per-frame camera, 62 % for the smoothed one).
 - The two references are not symmetric, and neither is exact:
   - R1 comes from the annotators' camera, which sits 3.9 px (median) from the annotated lines on dev: coverage
     against R1 mixes predfoot's error with the labels' own.
@@ -63,12 +60,11 @@
 - Per-frame calibration: MSAC RANSAC seeded by (clip, frame), soft-L1 Levenberg-Marquardt on keypoints and
   line points, Laplace covariance with Huber's scale correction, noise prior σ₀ = 2 px with 10 degrees of
   freedom.
-- **Camera under test: the PTZ-smoothed camera** (proposed, pending owner approval): the fixed-centre
-  pan-tilt-zoom Kalman/RTS smoother of `predfoot.calib.temporal`, its noise parameters (κ², q pan, q tilt,
-  q log f, gap factor λ) fitted without labels on all six dev games and frozen; projection centres per test
-  clip, and the game centre per test game, estimated from the test clips' own per-frame calibrations, without
-  labels. **Comparison arm: the per-frame camera.** Both arms come from the same detections and the same
-  per-frame calibrations, and each runs once.
+- **Camera under test: the PTZ-smoothed camera**: the fixed-centre pan-tilt-zoom Kalman/RTS smoother of
+  `predfoot.calib.temporal`, its noise parameters (κ², q pan, q tilt, q log f, gap factor λ) fitted without
+  labels on all six dev games and frozen; projection centres per test clip, and the game centre per test game,
+  estimated from the test clips' own per-frame calibrations, without labels. **Comparison arm: the per-frame
+  camera.** Both arms come from the same detections and the same per-frame calibrations, and each runs once.
 - Positions: delta-method covariance Σp of the foot point.
 - Conformal regions: grouped split conformal, α = 0.10, score d² = eᵀ Σp⁻¹ e, every clip with the same total
   weight and the level raised to (1 − α)(1 + 1/G) for G clips. Mondrian bins over metres per pixel at the feet
@@ -80,18 +76,18 @@
   `scripts/eval_dev.py` with every dev game on the calibration side) and frozen.
 - Constant circle: radius equal to the grouped conformal quantile of the error norms on all six dev games,
   same camera and reference, frozen.
-- **Failure detector: gradient boosting** (proposed, pending owner approval) on the 11 per-frame
-  calibration-health features of `predfoot.health.features` (depth 3, learning rate 0.05, 300 iterations,
-  balanced class weights, early stopping off), trained on the per-frame calibrations of all six dev games and
-  frozen as plain parameters. Baseline: the single feature with the best out-of-game AUROC on dev (by the
-  dev numbers, `log_sigma_centre`, 0.731), its sign fixed on dev, frozen with it. Logistic regression and
-  every single feature are frozen too, for the secondary table.
+- **Failure detector: gradient boosting** on the 11 per-frame calibration-health features of
+  `predfoot.health.features` (depth 3, learning rate 0.05, 300 iterations, balanced class weights, early
+  stopping off), trained on the per-frame calibrations of all six dev games and frozen as plain parameters.
+  Baseline: the single feature with the best out-of-game AUROC on dev (by the dev numbers, `log_sigma_centre`,
+  0.731), its sign fixed on dev, frozen with it. Logistic regression and every single feature are frozen too,
+  for the secondary table.
 
 ## 4. Primary endpoints and success criteria
 
 | # | Endpoint | Camera | Reference | Success criterion |
 |---|---|---|---|---|
-| P1 | Marginal coverage of the 90 % Mondrian regions on the test games | PTZ-smoothed | R1 | The 95 % CI contains 0.90 |
+| P1 | Marginal coverage of the 90 % Mondrian regions on the test games, player-frames pooled | PTZ-smoothed | R1 | The 95 % CI contains 0.90 |
 | P2 | Median region area / area of the constant circle at the same nominal level | PTZ-smoothed | R1 | Ratio below 1 |
 | P3 | AUROC of the frozen gradient boosting minus AUROC of the frozen best single feature, on the per-frame calibrations of the test frames with self-consistent lines (failure: mean distance to the annotated lines above 10 px) | per-frame | annotated lines | Difference above 0 |
 
@@ -103,12 +99,22 @@ in 168 frames, with larger per-frame errors: p90 2.72 m against 2.02 m). Their n
 next to P1, with P1's coverage counting them as misses. Frames that only the smoother fills (raw calibration
 failed) are reported apart. P2 and P3 are decided on the point estimate; their intervals are reported.
 
+P1 pools the headline player-frames, as every dev coverage quoted here does. The grouped conformal quantile
+weighs each calibration clip equally, so the coverage with every clip weighted equally (the mean of the clips'
+own coverage rates) is the quantity its construction targets; it is reported next to P1 for every camera and
+reference (secondary analysis 1) but decides nothing. On dev the two agree against R1 (90.4 % pooled against
+90.5 % with clips weighted equally, per-frame camera) and differ against R2 (94.4 % against 91.6 %), where a
+clip's coverage rises with its number of trusted player-frames. Pooling is also the stricter test here:
+small clips weigh less, and on dev its intervals are the narrower ones (against R1, per-frame camera, [88.8,
+91.8] against [88.8, 92.0]).
+
 ## 5. Secondary analyses
 
 All are reported; none is a success criterion.
 
 1. P1 and P2 for the per-frame camera (comparison arm), and for both cameras against R2; for the smoothed
-   camera, the raw-OK player-frames where it abstains and the coverage counting them as misses.
+   camera, the raw-OK player-frames where it abstains and the coverage counting them as misses; for every
+   camera and reference, the coverage with every clip weighted equally, with its clip-bootstrap interval.
 2. Coverage of the constant circle; coverage of the uncalibrated Laplace regions.
 3. Coverage by distance tercile (metres per pixel at the feet, terciles of the test rows).
 4. Simultaneous coverage: the share of frames in which every player is inside their region (the marginal
@@ -125,12 +131,12 @@ All are reported; none is a success criterion.
    output cameras both calibrated, as on dev); frames filled by the smoother and raw-OK frames where it
    abstains counted apart; the share per output type (smoothed, repaired, filled, bridged, passthrough,
    duplicate) over every published frame of the smoothed camera; published-position rates.
-10. **KPI proxy** (proposed, pending owner approval): the model-free proxy of `predfoot.kpi.proxy` (5 fps,
-    Savitzky-Golay window 5, order 2, runs of at least 8 frames with every error against R1 below 10 m), with
-    the distance bias and the high-speed-running (≥ 20 km/h) distance bias against the smoothed labels, for
-    both cameras from the same input player-frames. Each camera's runs break at its own errors above 10 m, so
-    the two cameras' runs can differ slightly (their counts are reported). The raw labels' own bias against
-    the smoothed labels is the noise floor of that reference.
+10. **KPI proxy**: the model-free proxy of `predfoot.kpi.proxy` (5 fps, Savitzky-Golay window 5, order 2, runs
+    of at least 8 frames with every error against R1 below 10 m), with the distance bias and the
+    high-speed-running (≥ 20 km/h) distance bias against the smoothed labels, for both cameras from the same
+    input player-frames. Each camera's runs break at its own errors above 10 m, so the two cameras' runs can
+    differ slightly (their counts are reported). The raw labels' own bias against the smoothed labels is the
+    noise floor of that reference.
 
 ## 6. Unit of analysis and intervals
 
@@ -141,7 +147,7 @@ All are reported; none is a success criterion.
 
 ## 7. Procedure
 
-1. The owner reviews this text, settles every proposed choice and removes the draft markers.
+1. The owner reviewed this text and settled every choice (2026-11-01).
 2. `scripts/freeze_prereg.py` (clean working tree only) fits every frozen artifact on dev only (smoother
    noise, conformal models, detectors) into `artifacts/prereg/v1/`, writes `docs/preregistration.lock.json`
    and prints the line to quote in README.md. The lock records the SHA-256 of this file and of every
