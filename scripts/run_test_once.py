@@ -25,13 +25,16 @@ another lock is never reused or evaluated.
   The detection caches must still have the SHA-256 recorded by stage A.
 - C, evaluation, the only stage that reads test labels (``index/test/``), exactly once. Every label-free input
   is checked and loaded first (stage records, caches, saved cameras, clip lists, frame counts), and both label
-  tables must exist with the columns stage C reads (their parquet schemas, no label); then stage C asks the
+  tables must exist with the columns stage C reads and some rows (their parquet schemas and row counts, no
+  label value); then stage C asks the
   owner to confirm (``--yes`` skips the question) and writes the markers (``PREDFOOT_DATA_DIR/test_once/``
   and ``runs/test_once/``) before any label is read, so a second C is refused even after a crash. Every
   endpoint for both cameras and both references, the success criteria evaluated as written, into
-  ``reports/test_run.md`` (aggregate numbers) and the lock's run folder (local). A crash or an interruption
-  after the markers (an exception, Ctrl-C, SIGTERM or SIGHUP) still writes ``reports/test_run.md``, naming
-  the failure, with every result computed before it; a hard kill (SIGKILL) or a power loss leaves only the
+  ``reports/test_run.md`` (aggregate numbers) and the lock's run folder (local). The criteria and the primary
+  endpoints are saved (``results.json``) as soon as they are computed; a secondary endpoint that raises is
+  reported as a deviation with the other results. A crash or an interruption after the markers (an exception,
+  Ctrl-C or SIGTERM) still writes ``reports/test_run.md``, naming the failure, with the results saved before
+  it; a closed terminal (SIGHUP) does not stop stage C; a hard kill (SIGKILL) or a power loss leaves only the
   markers.
 
 ``--dry-run`` exercises the same chain on dev clips standing in for test clips (``--dry-clips``, default three
@@ -190,9 +193,14 @@ def check_clips(ctx: Context) -> None:
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
+    write_text_atomic(path, fz.dump(payload))
+
+
+def write_text_atomic(path: Path, text: str) -> None:
+    """``text`` into ``path`` through a temporary file renamed over it, so an existing file is complete."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(fz.dump(payload), encoding="utf-8")
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
     tmp.replace(path)
 
 
@@ -470,18 +478,22 @@ LABEL_COLUMNS = {
 
 
 def check_label_tables(ctx: Context) -> None:
-    """Both label tables exist and have the columns stage C reads. Only their parquet schemas are read, no
-    label: a missing, empty or damaged table is refused before the claim, not after it."""
+    """Both label tables exist, have the columns stage C reads and some rows. Only their parquet schemas and
+    row counts are read, no label value: a missing, empty or damaged table is refused before the claim, not
+    after it."""
     for name, path in (("persons", ctx.persons_path), ("lines", ctx.lines_path)):
         if not path.is_file() or path.stat().st_size == 0:
             raise pr.PreregError(f"the {name} label table {path} is missing or empty")
         try:
             schema = pl.read_parquet_schema(path)
+            rows = pl.scan_parquet(path).select(pl.len()).collect().item()
         except Exception as err:  # a damaged file: polars raises its own error types
             raise pr.PreregError(f"the {name} label table {path} is unreadable ({err})") from err
         missing = [c for c in LABEL_COLUMNS[name] if c not in schema]
         if missing:
             raise pr.PreregError(f"the {name} label table {path} lacks the columns {missing}")
+        if rows == 0:
+            raise pr.PreregError(f"the {name} label table {path} has no rows")
 
 
 def prepare_c(ctx: Context) -> Prepared:
@@ -544,8 +556,8 @@ def report_header(ctx: Context, lock: pr.Lock, started_utc: str) -> list[str]:
 
 
 class Interrupted(KeyboardInterrupt):
-    """A signal (SIGINT, SIGTERM, SIGHUP) while stage C holds its claim, raised like Ctrl-C so that the
-    failure report is still written."""
+    """A signal (SIGINT, SIGTERM) while stage C holds its claim, raised like Ctrl-C so that the failure report
+    is still written."""
 
 
 @dataclass
@@ -563,10 +575,10 @@ class SignalGuard:
 
 @contextlib.contextmanager
 def signals_raise() -> Iterator[SignalGuard]:
-    """While stage C holds its claim, SIGINT, SIGTERM and SIGHUP raise :class:`Interrupted`: by default
-    SIGTERM and SIGHUP (a closed terminal) end Python without running ``finally`` blocks, so no report would
-    be written. A signal already ignored, as under ``nohup``, stays ignored; outside the main thread nothing
-    changes. The previous handlers are restored afterwards."""
+    """While stage C holds its claim, SIGINT and SIGTERM raise :class:`Interrupted` (by default SIGTERM ends
+    Python without running ``finally`` blocks, so no report would be written), and SIGHUP is ignored: a closed
+    terminal does not stop an evaluation that needs no terminal. A signal already ignored, as under ``nohup``,
+    stays ignored; outside the main thread nothing changes. The previous handlers are restored afterwards."""
     guard = SignalGuard()
     previous: dict[int, Any] = {}
     for name in ("SIGINT", "SIGTERM", "SIGHUP"):
@@ -577,7 +589,7 @@ def signals_raise() -> Iterator[SignalGuard]:
             old = signal.getsignal(sig)
             if old == signal.SIG_IGN:
                 continue
-            signal.signal(sig, guard.handler)
+            signal.signal(sig, signal.SIG_IGN if name == "SIGHUP" else guard.handler)
         except ValueError:  # not the main thread
             continue
         previous[sig] = old
@@ -627,9 +639,10 @@ def stage_c(ctx: Context, confirm: Callable[[], bool] | None = None) -> dict[str
             pr.claim_once(ctx.markers, payload)  # written before any label is read
             ctx.log(f"stage C started, markers written: {', '.join(str(m) for m in ctx.markers)}")
             return _evaluate(ctx, prepared, lock, payload)
-        except BaseException as err:  # Ctrl-C, SIGTERM and SIGHUP included
+        except BaseException as err:  # Ctrl-C and SIGTERM included
             signals.held = True  # a second signal must not stop the failure report
-            if any(m.exists() for m in ctx.markers):  # the claim is spent, even if half written
+            # the claim is spent, even if half written; a claim lost to another invocation is that one's
+            if not isinstance(err, pr.AlreadyClaimed) and any(m.exists() for m in ctx.markers):
                 _failure_report(ctx, lock, payload, err)
             raise
         finally:
@@ -639,7 +652,7 @@ def stage_c(ctx: Context, confirm: Callable[[], bool] | None = None) -> dict[str
 
 def _failure_report(ctx: Context, lock: pr.Lock, payload: dict[str, Any], err: BaseException) -> None:
     """The claim is spent: a crash or an interruption after it still leaves the report, which names the
-    failure (a deviation) and carries every result computed before it. The traceback goes to the log."""
+    failure (a deviation) and carries the results saved before it. The traceback goes to the log."""
     ctx.log_lines.append("".join(traceback.format_exception(err)).rstrip())
     if ctx.report.exists():
         return
@@ -655,20 +668,25 @@ def _failure_report(ctx: Context, lock: pr.Lock, payload: dict[str, Any], err: B
         "",
         *_computed_results(ctx),
     ]
-    ctx.report.parent.mkdir(parents=True, exist_ok=True)
-    ctx.report.write_text("\n".join(md) + "\n", encoding="utf-8")
+    write_text_atomic(ctx.report, "\n".join(md) + "\n")
     ctx.log(f"stage C failed after the claim ({what}); failure report {ctx.report}")
 
 
 def _computed_results(ctx: Context) -> list[str]:
-    """Every result computed before a failure: ``results.json`` is written before the report is rendered."""
+    """The results saved before a failure: ``results.json`` holds the criteria and the primary endpoints as
+    soon as they are computed, and every endpoint once all of them are."""
     try:
         res = json.loads((ctx.work_dir / "results.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return ["No result was computed before the failure."]
+        return ["No result was saved before the failure."]
+    what = (
+        "Every endpoint was computed and saved before the failure, but the report could not be rendered."
+        if res.get("complete")
+        else "The success criteria and the primary endpoints (regions and failure detection) were computed"
+        " and saved before the failure; the secondary endpoints were not."
+    )
     return [
-        "Every endpoint was computed before the failure, but the report could not be rendered. The success"
-        " criteria and every result, as saved in `results.json` (aggregate numbers):",
+        f"{what} As saved in `results.json` (aggregate numbers):",
         "",
         "```json",
         fz.dump(res).rstrip(),
@@ -700,14 +718,19 @@ def _evaluate(ctx: Context, prepared: Prepared, lock: pr.Lock, payload: dict[str
         f"labels attached ({tables['perframe'].frames.height} labelled frames); computing every endpoint"
         f" ({fz.N_BOOT} bootstrap draws per interval)"
     )
-    res = fz.evaluate(tables, prepared.art)
-    res["provenance"] = {**payload, "lock_code_commit": lock.code_commit, "artifacts": lock.artifacts}
+    provenance = {**payload, "lock_code_commit": lock.code_commit, "artifacts": lock.artifacts}
+
+    def save_primary(primary: dict[str, Any]) -> None:
+        write_json(ctx.work_dir / "results.json", {**primary, "provenance": provenance, "complete": False})
+        ctx.log("criteria and primary endpoints computed and saved (results.json); secondary endpoints next")
+
+    res = fz.evaluate(tables, prepared.art, on_primary=save_primary)
+    res["provenance"], res["complete"] = provenance, True
     write_json(ctx.work_dir / "results.json", res)
+    if res["endpoint_errors"]:
+        ctx.log(f"secondary endpoints that raised, reported as deviations: {res['endpoint_errors']}")
     ctx.log("every endpoint computed and saved (results.json); writing the report")
-    ctx.report.parent.mkdir(parents=True, exist_ok=True)
-    ctx.report.write_text(
-        fz.render_report(res, report_header(ctx, lock, payload["started_utc"])), encoding="utf-8"
-    )
+    write_text_atomic(ctx.report, fz.render_report(res, report_header(ctx, lock, payload["started_utc"])))
     write_json(ctx.work_dir / "stage_c.json", {"finished_utc": _now(), "report": str(ctx.report)})
     ctx.log(f"stage C done: report {ctx.report}")
     return res

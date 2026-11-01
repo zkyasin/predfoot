@@ -19,7 +19,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -430,6 +430,8 @@ def detector_endpoint(
     comparison (boosting against the single feature chosen on dev) with a clip-bootstrap interval of the
     difference, and the best frozen single feature on these frames, its dev sign kept, with boosting's AUROC
     minus its AUROC (post hoc, stricter; no random draw)."""
+    if frames.height == 0:
+        return {"frames": 0, "failures": 0, "best_single_dev": det.best_single, "auroc": None}
     df = failure_table(frames)
     y = df["fail"].to_numpy().astype(bool)
     out: dict[str, Any] = {"frames": len(df), "failures": int(y.sum()), "best_single_dev": det.best_single}
@@ -568,9 +570,19 @@ def p1_criterion(prim: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def evaluate(
-    tables: Mapping[str, CameraTables], art: Artifacts, n_boot: int = N_BOOT, seed: int = BOOT_SEED
+    tables: Mapping[str, CameraTables],
+    art: Artifacts,
+    n_boot: int = N_BOOT,
+    seed: int = BOOT_SEED,
+    on_primary: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
-    """Every endpoint of the preregistration, the success criteria evaluated as written."""
+    """Every endpoint of the preregistration, the success criteria evaluated as written.
+
+    The region endpoints, the failure detection and the criteria come first and are handed to ``on_primary``
+    (stage C saves them) before the secondary endpoints run. A secondary endpoint that raises is recorded in
+    ``endpoint_errors`` (a deviation the report lists) and does not take the other results with it. Only the
+    region and detector endpoints draw from the generator.
+    """
     rng = np.random.default_rng(seed)
     players = {c: tables[c].players for c in CAMERAS}
     other = {"perframe": players["ptz"], "ptz": players["perframe"]}
@@ -591,7 +603,7 @@ def evaluate(
         else {"pass": None}
     )
     frames_pf = tables["perframe"].frames
-    return {
+    res: dict[str, Any] = {
         "clips": int(frames_pf["clip"].n_unique()) if frames_pf.height else 0,
         "games": sorted(int(g) for g in frames_pf["game"].unique()) if frames_pf.height else [],
         "labelled_frames": frames_pf.height,
@@ -599,11 +611,24 @@ def evaluate(
         "seed": seed,
         "regions": regions,
         "detector": det,
-        "residual": residual_endpoint(frames_pf, tables["ptz"].frames),
-        "errors": error_endpoint(players),
-        "kpi": kpi_endpoint(players),
         "criteria": {"P1": p1, "P2": p2, "P3": p3},
     }
+    if on_primary is not None:
+        on_primary(res)
+    secondary: dict[str, Callable[[], dict[str, Any]]] = {
+        "residual": lambda: residual_endpoint(frames_pf, tables["ptz"].frames),
+        "errors": lambda: error_endpoint(players),
+        "kpi": lambda: kpi_endpoint(players),
+    }
+    failed: dict[str, str] = {}
+    for name, compute in secondary.items():
+        try:
+            res[name] = compute()
+        except Exception as err:  # a secondary endpoint must not take the primary results with it
+            res[name] = None
+            failed[name] = f"{type(err).__name__}: {err}"
+    res["endpoint_errors"] = failed
+    return res
 
 
 # --- report -------------------------------------------------------------------------------------------------
@@ -655,6 +680,18 @@ def render_report(res: Mapping[str, Any], header: Sequence[str]) -> str:
         f"| P3 | AUROC of gradient boosting − AUROC of `{det.get('best_single_dev')}` (best single feature on"
         f" dev), per-frame calibrations | {_num(det.get('auroc_diff'), '+.3f')} | above 0 |"
         f" {_verdict(crit['P3']['pass'])} |",
+    ]
+    failed = res.get("endpoint_errors") or {}
+    if failed:
+        md += [
+            "",
+            "## Deviations",
+            "",
+            "Secondary endpoints that raised an error; their results are missing from this report:",
+            "",
+            *[f"- {name}: `{what}`" for name, what in failed.items()],
+        ]
+    md += [
         "",
         "## Coverage and size of the regions",
         "",
@@ -690,9 +727,7 @@ def render_report(res: Mapping[str, Any], header: Sequence[str]) -> str:
     if nonfinite:
         md += [
             "",
-            "Headline rows whose region area is not finite (their median area is not): "
-            + "; ".join(nonfinite)
-            + ".",
+            "Headline rows whose region area is not finite: " + "; ".join(nonfinite) + ".",
         ]
     unpublished = [(c, r, res["regions"][c][r].get("unpublished")) for c in CAMERAS for r in REFERENCES]
     if any(u for _, _, u in unpublished):
@@ -744,7 +779,7 @@ def render_report(res: Mapping[str, Any], header: Sequence[str]) -> str:
                 md.append(
                     f"- {REF_TITLES[r]}: {_pct(f['coverage'])} / {_pct(f['coverage_const'])} (n = {f['n']})."
                 )
-    err = res["errors"]
+    err = res.get("errors") or {}
     if err.get("n"):
         md += [
             "",
@@ -793,25 +828,27 @@ def render_report(res: Mapping[str, Any], header: Sequence[str]) -> str:
             f" {_num(pg['auroc_boosting'], '.3f')} | {_num(pg['auroc_best_single'], '.3f')} |"
             for pg in det["per_game"]
         ]
-    rs = res["residual"]
-    md += ["", "## Residual failures of the smoothed camera", ""]
-    if rs.get("frames"):
+    rs = res.get("residual")
+    if rs is not None:
+        md += ["", "## Residual failures of the smoothed camera", ""]
+        if rs.get("frames"):
+            md += [
+                f"{rs['frames']} frames with self-consistent lines where both cameras are calibrated: above"
+                f" {FAIL_LINE_PX:.0f} px, per-frame camera {_pct(rs['fail_share_perframe'])}, smoothed camera"
+                f" {_pct(rs['fail_share_ptz'])} (line distance p90 {_num(rs['line_px_p90_perframe'], '.1f')}"
+                f" and {_num(rs['line_px_p90_ptz'], '.1f')} px). Apart: {rs['filled_frames']} frames filled"
+                f" by the smoother (above {FAIL_LINE_PX:.0f} px {_pct(rs['fail_share_filled'])}) and"
+                f" {rs['abstained_frames']} raw-OK frames where it abstains. Published-position rate:"
+                f" per-frame {_pct(rs['published_rate_perframe'])},"
+                f" smoothed {_pct(rs['published_rate_ptz'])}.",
+                "",
+            ]
         md += [
-            f"{rs['frames']} frames with self-consistent lines where both cameras are calibrated: above"
-            f" {FAIL_LINE_PX:.0f} px, per-frame camera {_pct(rs['fail_share_perframe'])}, smoothed camera"
-            f" {_pct(rs['fail_share_ptz'])} (line distance p90 {_num(rs['line_px_p90_perframe'], '.1f')} and"
-            f" {_num(rs['line_px_p90_ptz'], '.1f')} px). Apart: {rs['filled_frames']} frames filled by the"
-            f" smoother (above {FAIL_LINE_PX:.0f} px {_pct(rs['fail_share_filled'])}) and"
-            f" {rs['abstained_frames']} raw-OK frames where it abstains. Published-position rate: per-frame"
-            f" {_pct(rs['published_rate_perframe'])}, smoothed {_pct(rs['published_rate_ptz'])}.",
-            "",
+            "| Output type | Frames | Above 10 px |",
+            "|---|---|---|",
+            *[f"| {n} | {v['frames']} | {_pct(v['fail_share'])} |" for n, v in rs["by_type"].items()],
         ]
-    md += [
-        "| Output type | Frames | Above 10 px |",
-        "|---|---|---|",
-        *[f"| {n} | {v['frames']} | {_pct(v['fail_share'])} |" for n, v in rs["by_type"].items()],
-    ]
-    kpi = res["kpi"]
+    kpi = res.get("kpi")
     if kpi:
         md += [
             "",

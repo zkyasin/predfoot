@@ -63,6 +63,10 @@ class PreregError(RuntimeError):
     """A guard of the preregistered test run refused to go on."""
 
 
+class AlreadyClaimed(PreregError):
+    """The evaluation was already claimed: another invocation wrote a marker first."""
+
+
 def git(root: Path, *args: str) -> str:
     out = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True)
     if out.returncode != 0:
@@ -360,7 +364,7 @@ def claim_once(markers: Sequence[Path], payload: Mapping[str, Any]) -> None:
     """
     existing = [m for m in markers if m.exists()]
     if existing:
-        raise PreregError(
+        raise AlreadyClaimed(
             f"the test evaluation already started ({existing[0]}): a second evaluation is refused"
         )
     text = json.dumps(dict(payload), indent=2, sort_keys=True) + "\n"
@@ -369,6 +373,6 @@ def claim_once(markers: Sequence[Path], payload: Mapping[str, Any]) -> None:
         try:
             fd = os.open(marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o444)
         except FileExistsError as err:
-            raise PreregError(f"the test evaluation already started ({marker})") from err
+            raise AlreadyClaimed(f"the test evaluation already started ({marker})") from err
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(text)

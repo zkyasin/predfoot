@@ -439,9 +439,12 @@ LABEL_SCHEMAS = {
 
 
 def _put_label_tables(ctx):
-    """Label tables without a single row, with the columns of the index (no label exists in these tests)."""
-    pl.DataFrame(schema=LABEL_SCHEMAS["persons"]).write_parquet(ctx.persons_path)
-    pl.DataFrame(schema=LABEL_SCHEMAS["lines"]).write_parquet(ctx.lines_path)
+    """Label tables with the columns of the index and one row of another clip: the fake test clip has no
+    label in these tests."""
+    for name, path in (("persons", ctx.persons_path), ("lines", ctx.lines_path)):
+        row = {c: ["SNGS-000"] if t == pl.String else [False] if t == pl.Boolean else [0]
+               for c, t in LABEL_SCHEMAS[name].items()}  # fmt: skip
+        pl.DataFrame(row, schema=LABEL_SCHEMAS[name]).write_parquet(path)
 
 
 @pytest.fixture
@@ -593,7 +596,9 @@ def test_the_dev_label_tables_have_the_columns_stage_c_reads():
         assert set(columns) <= set(LABEL_SCHEMAS[name])
 
 
-@pytest.mark.parametrize("damage", ["persons missing", "lines empty", "lines truncated", "column renamed"])
+@pytest.mark.parametrize(
+    "damage", ["persons missing", "lines empty", "lines truncated", "column renamed", "persons without rows"]
+)
 def test_stage_c_refuses_missing_or_damaged_label_tables_before_the_claim(world, monkeypatch, damage):
     run_test_once.stage_a(world)
     run_test_once.stage_b(world)
@@ -603,6 +608,8 @@ def test_stage_c_refuses_missing_or_damaged_label_tables_before_the_claim(world,
         world.lines_path.write_bytes(b"")
     elif damage == "lines truncated":
         world.lines_path.write_bytes(world.lines_path.read_bytes()[:-20])
+    elif damage == "persons without rows":
+        pl.read_parquet(world.persons_path).head(0).write_parquet(world.persons_path)
     else:
         pl.read_parquet(world.persons_path).rename({"x_raw": "x_raw_m"}).write_parquet(world.persons_path)
     monkeypatch.setattr(run_test_once.pl, "read_parquet", lambda *a, **k: pytest.fail("a label was read"))
@@ -641,7 +648,7 @@ def test_stage_c_claims_before_reading_labels_and_a_crash_still_leaves_a_report(
     report = world.report.read_text()
     assert "Stage C failed" in report
     assert "OSError: disk unplugged" in report
-    assert "No result was computed" in report
+    assert "No result was saved" in report
     assert "disk unplugged" in (world.work_dir / "stage_c.log").read_text()  # with its traceback
     with pytest.raises(pr.PreregError, match="already ran"):
         run_test_once.stage_c(_fresh(world))
@@ -692,7 +699,7 @@ def test_the_real_run_asks_before_stage_c_unless_yes(world, monkeypatch):
     assert all(m.exists() for m in world.markers)
 
 
-@pytest.mark.parametrize("how", ["KeyboardInterrupt", "SIGTERM", "SIGHUP"])
+@pytest.mark.parametrize("how", ["KeyboardInterrupt", "SIGTERM"])
 def test_an_interruption_after_the_claim_still_leaves_a_report(world, monkeypatch, how):
     if threading.current_thread() is not threading.main_thread():
         pytest.skip("signal handlers belong to the main thread")
@@ -717,6 +724,40 @@ def test_an_interruption_after_the_claim_still_leaves_a_report(world, monkeypatc
     assert "Stage C failed" in report
     assert how in report
     assert {s: signal.getsignal(s) for s in before} == before  # the handlers are restored
+
+
+def test_a_closed_terminal_does_not_stop_stage_c(world, monkeypatch):
+    if threading.current_thread() is not threading.main_thread():
+        pytest.skip("signal handlers belong to the main thread")
+    run_test_once.stage_a(world)
+    run_test_once.stage_b(world)
+    before = signal.getsignal(signal.SIGHUP)
+
+    def hangup_then_fail(*args, **kwargs):
+        assert signal.getsignal(signal.SIGHUP) == signal.SIG_IGN  # raising it below cannot end pytest
+        signal.raise_signal(signal.SIGHUP)
+        raise OSError("still running after SIGHUP")
+
+    monkeypatch.setattr(run_test_once.pl, "read_parquet", hangup_then_fail)
+    with pytest.raises(OSError, match="still running after SIGHUP"):
+        run_test_once.stage_c(_fresh(world))
+    assert "still running after SIGHUP" in world.report.read_text()
+    assert signal.getsignal(signal.SIGHUP) == before
+
+
+def test_a_claim_lost_to_another_invocation_writes_no_failure_report(world, monkeypatch):
+    run_test_once.stage_a(world)
+    run_test_once.stage_b(world)
+    monkeypatch.setattr(run_test_once.pl, "read_parquet", lambda *a, **k: pytest.fail("a label was read"))
+
+    def the_other_one_claims_first():
+        pr.claim_once(world.markers, {"other": True})  # another invocation answered the question first
+        return True
+
+    with pytest.raises(pr.AlreadyClaimed):
+        run_test_once.stage_c(_fresh(world), the_other_one_claims_first)
+    assert not world.report.exists()  # the other invocation's evaluation writes the report
+    assert json.loads(world.markers[0].read_text()) == {"other": True}
 
 
 def test_a_second_signal_is_ignored_and_an_ignored_signal_stays_ignored():
@@ -777,7 +818,27 @@ def test_a_failure_after_the_results_puts_every_result_in_the_report(world, monk
     report = world.report.read_text()
     assert "TypeError: unsupported format string" in report
     assert '"coverage": 0.91' in report
-    assert "No result was computed" not in report
+    assert "the secondary endpoints were not" in report  # results.json without "complete"
+
+
+def test_an_interruption_after_the_primary_endpoints_keeps_them_in_the_report(world, monkeypatch):
+    run_test_once.stage_a(world)
+    run_test_once.stage_b(world)
+
+    def primary_then_interrupt(tables, art, on_primary):
+        on_primary({"criteria": {"P1": {"coverage": 0.905, "pass": True}}, "regions": {}, "detector": {}})
+        raise KeyboardInterrupt  # during the secondary endpoints
+
+    monkeypatch.setattr(run_test_once.fz, "evaluate", primary_then_interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        run_test_once.stage_c(_fresh(world))
+    report = world.report.read_text()
+    assert "Stage C failed" in report
+    assert "primary endpoints (regions and failure detection) were computed and saved" in report
+    assert '"coverage": 0.905' in report
+    saved = json.loads((world.work_dir / "results.json").read_text())
+    assert saved["complete"] is False
+    assert saved["provenance"]["lock_sha256"] == world.lock_sha
 
 
 def test_the_dry_run_never_falls_back_to_the_test_clip_list(tmp_path, monkeypatch):
@@ -1137,3 +1198,52 @@ def test_artifacts_endpoints_criteria_and_report_end_to_end(tmp_path, rng):
     assert "region area is not finite" in md_nan
     # no smoothed player row at all: the error table is empty instead of a crash
     assert fz.error_endpoint({"ptz": pl.DataFrame(), "perframe": perframe}) == {"n": 0}
+
+
+def test_a_failing_secondary_endpoint_is_a_deviation_and_the_primary_results_come_first(
+    tmp_path, rng, monkeypatch
+):
+    dev = fz.DEV_GAMES
+    tables = fz.DevTables(
+        perframe=fz.CameraTables(_camera_players(rng, dev, 1.0), _camera_frames(rng, dev)),
+        ptz=fz.CameraTables(_camera_players(rng, dev, 1.0, filled_rows=True), _camera_frames(rng, dev)),
+        smoothing=ps.SmoothingInfo(
+            fits={"all": {"params": tm.NoiseParams().to_dict(), "training_clips": 24}}
+        ),
+        params=tm.NoiseParams(),
+        cfg=tm.SmootherConfig(),
+    )
+    fz.write_artifacts(tables, tmp_path / "v1", {"dev_clips": 24})
+    art = fz.load_artifacts(tmp_path / "v1")
+    frames = _camera_frames(rng, fz.TEST_GAMES)
+    test = {
+        "perframe": fz.CameraTables(_camera_players(np.random.default_rng(1), fz.TEST_GAMES, 3.0), frames),
+        "ptz": fz.CameraTables(_camera_players(np.random.default_rng(1), fz.TEST_GAMES, 1.0), frames),
+    }
+    full = fz.evaluate(test, art, n_boot=50)
+    assert full["endpoint_errors"] == {}
+
+    def no_qualifying_run(players):
+        raise ValueError("no qualifying run")
+
+    monkeypatch.setattr(fz, "kpi_endpoint", no_qualifying_run)
+    primary = []
+    res = fz.evaluate(test, art, n_boot=50, on_primary=lambda r: primary.append(json.loads(fz.dump(r))))
+    assert len(primary) == 1
+    assert set(primary[0]) == {"clips", "games", "labelled_frames", "n_boot", "seed", "regions", "detector",
+                               "criteria"}  # fmt: skip
+    assert primary[0]["criteria"] == json.loads(fz.dump(full["criteria"]))  # the draws come first, unchanged
+    assert res["endpoint_errors"] == {"kpi": "ValueError: no qualifying run"}
+    assert res["kpi"] is None
+    assert fz.dump(res["residual"]) == fz.dump(full["residual"])
+    md = fz.render_report(json.loads(fz.dump(res)), ["# Synthetic"])
+    assert "## Deviations" in md
+    assert "- kpi: `ValueError: no qualifying run`" in md
+    assert "## KPI proxy" not in md
+    assert "## Residual failures of the smoothed camera" in md
+    assert fz.detector_endpoint(pl.DataFrame(), art.detector, rng, 10) == {
+        "frames": 0,
+        "failures": 0,
+        "best_single_dev": art.detector.best_single,
+        "auroc": None,
+    }
