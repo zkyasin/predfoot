@@ -1,0 +1,600 @@
+<title>predfoot</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+@import url("https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Mono:wght@400;500&family=Atkinson+Hyperlegible+Next:ital,wght@0,400;0,600;1,400&family=Big+Shoulders+Display:wght@700;800&display=swap");
+
+/* Layout: a mown-pitch band carries the thesis and the broadcast screen; below it, chalk-ruled sections with
+   the heading in a left column, the four results on a board split by chalk lines like a pitch, a quiet footer.
+   Light theme: a day match. Dark theme: the same match under floodlights. Magenta is always predfoot. */
+:root {
+  --paper: #f3f6f2;          /* page ground: chalk white with a green bias */
+  --paper-2: #e7ede6;        /* quiet panels */
+  --ink: #0f1d16;            /* text */
+  --ink-2: #4a5a51;          /* secondary text */
+  --ink-3: #5f6e66;          /* captions, sources, axis labels */
+  --rule: #c9d4cb;           /* chalk hairlines on paper */
+  --track: #dde5dd;          /* empty part of a scale */
+  --pitch: #22683c;          /* grass */
+  --pitch-stripe: #26713f;   /* mown stripe */
+  --chalk: #f4f7f2;          /* lines and text on grass */
+  --chalk-line: rgba(244, 247, 242, 0.3);
+  --on-chalk: #0f1d16;       /* text on a chalk label */
+  --chalk-2: #d2e0d5;        /* secondary text on grass */
+  --zone: #c0176f;           /* predfoot: error zones, smoothed camera, alarm */
+  --zone-wash: rgba(192, 23, 111, 0.12);
+  --zone-on-pitch: #ff9ccb;  /* error zones drawn on grass */
+  --context: #818e87;        /* the comparison: frame by frame, single warning sign */
+  --link: #b0135f;
+  --warn: #8a5a00;           /* target missed */
+  --warn-wash: #f5e8cb;
+  --good: #1f6137;           /* target met */
+  --focus: #b0135f;
+  --shadow: rgba(15, 29, 22, 0.32);
+  --screen: #0f1d16;         /* behind a video until it loads */
+
+  --font-display: "Big Shoulders Display", "Arial Narrow", "Roboto Condensed", "Helvetica Neue", Arial, sans-serif;
+  --font-body: "Atkinson Hyperlegible Next", "Atkinson Hyperlegible", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "Atkinson Hyperlegible Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #0d1612; --paper-2: #121f19; --ink: #e6ede7; --ink-2: #a8b6ad; --ink-3: #8e9c94;
+    --rule: #27372e; --track: #1d2b24; --pitch: #123d25; --pitch-stripe: #15452a; --chalk: #e6ede7;
+    --chalk-line: rgba(230, 237, 231, 0.24); --on-chalk: #0d1612; --chalk-2: #bccbc1; --zone: #f0479a;
+    --zone-wash: rgba(240, 71, 154, 0.16); --zone-on-pitch: #ff8cc3; --context: #58675f; --link: #ff7ab6;
+    --warn: #e9b949; --warn-wash: #2b2414; --good: #7fcb98; --focus: #ff7ab6; --shadow: rgba(0, 0, 0, 0.55);
+    --screen: #050a07;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #0d1612; --paper-2: #121f19; --ink: #e6ede7; --ink-2: #a8b6ad; --ink-3: #8e9c94;
+  --rule: #27372e; --track: #1d2b24; --pitch: #123d25; --pitch-stripe: #15452a; --chalk: #e6ede7;
+  --chalk-line: rgba(230, 237, 231, 0.24); --on-chalk: #0d1612; --chalk-2: #bccbc1; --zone: #f0479a;
+  --zone-wash: rgba(240, 71, 154, 0.16); --zone-on-pitch: #ff8cc3; --context: #58675f; --link: #ff7ab6;
+  --warn: #e9b949; --warn-wash: #2b2414; --good: #7fcb98; --focus: #ff7ab6; --shadow: rgba(0, 0, 0, 0.55);
+  --screen: #050a07;
+  color-scheme: dark;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 400 1.0625rem/1.6 var(--font-body);
+}
+h1, h2, h3, p, ol, ul, figure { margin: 0; }
+a { color: inherit; text-decoration: underline; text-decoration-color: var(--zone); text-decoration-thickness: 1.5px; text-underline-offset: 0.2em; }
+a:hover { color: var(--link); }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; border-radius: 2px; }
+.band :focus-visible { outline-color: var(--chalk); }
+.nowrap { white-space: nowrap; }
+
+.wrap {
+  width: 100%;
+  max-width: 74rem;
+  margin-inline: auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+
+/* Pitch band */
+.band {
+  position: relative;
+  background: var(--pitch);
+  color: var(--chalk);
+  padding-block: clamp(18px, 3vw, 30px) clamp(32px, 5vw, 64px);
+}
+.band .pitch { position: absolute; inset: 0; width: 100%; height: 100%; }
+.band .wrap { position: relative; }
+.pitch .stripes rect { fill: var(--pitch-stripe); }
+.pitch .lines { fill: none; stroke: var(--chalk-line); stroke-width: 1.5px; }
+.pitch .lines circle.spot { fill: var(--chalk-line); stroke: none; }
+.pitch * { vector-effect: non-scaling-stroke; }
+@media (max-width: 639px) { .pitch .lines { opacity: 0.5; } }  /* on a phone the text covers the whole band */
+
+.masthead { display: flex; align-items: center; justify-content: space-between; gap: 12px 24px; flex-wrap: wrap; }
+.wordmark { display: inline-flex; align-items: center; gap: 10px; font: 800 1.75rem/1 var(--font-display); letter-spacing: 0.01em; }
+.wordmark svg { width: 30px; height: 20px; flex: none; }
+.wordmark svg ellipse { fill: none; stroke: var(--zone-on-pitch); stroke-width: 1.75; }
+.wordmark svg circle { fill: var(--chalk); }
+.masthead a { font: 500 0.8125rem/1 var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; text-decoration-color: var(--zone-on-pitch); }
+.masthead a:hover { color: var(--chalk); text-decoration-thickness: 2px; }
+
+/* Thesis and caption beside the broadcast screen on wide screens; stacked on a phone */
+.hero { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-areas: "thesis" "screen" "caption"; gap: 22px; padding-top: clamp(36px, 6vw, 80px); }
+.hero > * { min-width: 0; }
+@media (min-width: 900px) {
+  .hero { grid-template-columns: minmax(0, 1fr) minmax(0, 25rem); grid-template-areas: "thesis screen" "caption screen"; grid-template-rows: auto 1fr; column-gap: clamp(40px, 5vw, 72px); row-gap: 28px; }
+  .hero .caption { align-self: end; }
+}
+.thesis { grid-area: thesis; display: grid; gap: clamp(14px, 2vw, 22px); }
+h1 {
+  max-width: 21ch;
+  font: 800 clamp(2.4rem, 1.2rem + 3.9vw, 4.25rem)/0.96 var(--font-display);
+  letter-spacing: 0.004em;
+  text-wrap: balance;
+}
+.lede { max-width: 54ch; font-size: clamp(1.0625rem, 1rem + 0.35vw, 1.25rem); line-height: 1.5; }
+
+/* Broadcast screen */
+.screen { grid-area: screen; }
+.caption { grid-area: caption; display: grid; justify-items: start; gap: 12px; }
+.caption p { max-width: 60ch; font-size: 0.9375rem; line-height: 1.55; color: var(--chalk-2); }
+.tab {
+  display: inline-block;
+  padding: 7px 10px 6px;
+  background: var(--chalk);
+  color: var(--on-chalk);
+  font: 500 0.75rem/1.2 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+video {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  aspect-ratio: auto 16 / 9;
+  background: var(--screen);
+}
+video.clip-tall { aspect-ratio: auto 720 / 850; }
+video.clip-wide { aspect-ratio: auto 2 / 1; }
+.screen video { box-shadow: 0 0 0 1px var(--chalk-line), 0 28px 56px -28px var(--shadow); }
+.media-foot { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px 24px; padding-top: 12px; }
+.media-foot figcaption { max-width: 72ch; font-size: 0.9375rem; line-height: 1.55; color: var(--ink-2); }
+.toggle {
+  flex: none;
+  padding: 7px 12px 6px;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--paper);
+  color: var(--ink);
+  font: 500 0.75rem/1 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.toggle:hover { border-color: var(--ink-3); }
+.band .toggle { border-color: var(--chalk-line); background: transparent; color: var(--chalk); }
+.band .toggle:hover { border-color: var(--chalk); }
+
+/* Sections: heading in a left column on wide screens */
+.sec { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px 56px; padding-block: clamp(56px, 8vw, 104px) 0; }
+.sec > * { min-width: 0; }
+@media (min-width: 900px) {
+  .sec { grid-template-columns: 14rem minmax(0, 1fr); }
+  .sec > .span { grid-column: 1 / -1; }
+  .sec > .col-2 { grid-column: 2; }
+}
+h2 {
+  font: 800 clamp(1.9rem, 1.4rem + 1.8vw, 2.75rem)/1 var(--font-display);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  text-wrap: balance;
+}
+.prose { display: grid; gap: 14px; max-width: 64ch; }
+.prose p { font-size: clamp(1.0625rem, 1rem + 0.25vw, 1.1875rem); }
+.note { font-size: 0.9375rem; color: var(--ink-2); }
+
+/* Results board */
+.legend { display: flex; flex-wrap: wrap; gap: 6px 22px; font-size: 0.875rem; color: var(--ink-2); }
+.legend span { display: inline-flex; align-items: center; gap: 8px; }
+.legend i { display: inline-block; width: 18px; height: 10px; border-radius: 0 3px 3px 0; background: var(--context); }
+.legend i.is-zone { background: var(--zone); }
+.board { display: grid; grid-template-columns: minmax(0, 1fr); border-top: 1px solid var(--rule); }
+.metric { display: flex; flex-direction: column; gap: 16px; min-width: 0; padding-block: clamp(26px, 3.6vw, 44px); border-bottom: 1px solid var(--rule); }
+@media (min-width: 860px) {
+  .board { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .metric:nth-child(odd) { padding-right: clamp(28px, 3.6vw, 48px); border-right: 1px solid var(--rule); }
+  .metric:nth-child(even) { padding-left: clamp(28px, 3.6vw, 48px); }
+}
+.metric-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; }
+h3.kicker { font: 500 0.8125rem/1.2 var(--font-mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-2); }
+.figure { font: 800 clamp(3.6rem, 2.6rem + 3.4vw, 5.5rem)/0.88 var(--font-display); letter-spacing: 0.005em; }
+.figure .unit { font-size: 0.5em; letter-spacing: 0.02em; color: var(--ink-2); }
+.claim { max-width: 46ch; font-size: 1.0625rem; line-height: 1.5; }
+.source { max-width: 62ch; font-size: 0.8125rem; line-height: 1.5; color: var(--ink-3); }
+
+.verdict { display: inline-flex; align-items: center; gap: 6px; padding: 5px 9px 4px; border: 1px solid currentColor; border-radius: 3px; font: 500 0.75rem/1.2 var(--font-mono); letter-spacing: 0.06em; text-transform: uppercase; }
+.verdict svg { width: 12px; height: 12px; flex: none; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.verdict.is-missed { color: var(--warn); background: var(--warn-wash); }
+.verdict.is-met { color: var(--good); }
+
+.bars { display: grid; gap: 12px; }
+.bar-group { display: grid; gap: 8px; }
+.bar-group + .bar-group { padding-top: 6px; }
+.bar-title { font-size: 0.875rem; font-weight: 600; color: var(--ink); }
+.bar-row { display: grid; gap: 3px; }
+.bar-label { font-size: 0.875rem; color: var(--ink-2); }
+.bar-line { display: flex; align-items: center; gap: 8px; border-left: 1px solid var(--ink-3); }
+.bar { flex: none; display: block; width: calc(var(--v) * (100% - 4.75rem)); min-width: 3px; height: 16px; border-radius: 0 4px 4px 0; background: var(--context); }
+.bar.is-zone { background: var(--zone); }
+.bar-value { font-weight: 600; font-size: 0.9375rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+.dots { display: grid; gap: 14px; --target: 0.3333; }
+.dot-row { display: grid; gap: 4px; }
+.dot-head { display: flex; justify-content: space-between; gap: 12px; font-size: 0.875rem; color: var(--ink-2); }
+.dot-head b { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+.dot-track { position: relative; height: 20px; background: linear-gradient(var(--track), var(--track)) 0 50% / 100% 2px no-repeat; }
+.dot-track::before { content: ""; position: absolute; top: -3px; bottom: -3px; left: calc(var(--target) * 100%); width: 2px; margin-left: -1px; background: var(--ink); }
+.range { position: absolute; top: 8px; height: 4px; left: calc(var(--lo) * 100%); width: calc((var(--hi) - var(--lo)) * 100%); border-radius: 2px; background: var(--context); }
+.dot { position: absolute; top: 4px; left: calc(var(--x) * 100%); width: 12px; height: 12px; margin-left: -6px; border-radius: 50%; background: var(--context); box-shadow: 0 0 0 2px var(--paper); }
+.range.is-zone, .dot.is-zone { background: var(--zone); }
+.dot-axis { position: relative; height: 1.4em; font-size: 0.75rem; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.dot-axis span { position: absolute; top: 0; left: calc(var(--x) * 100%); transform: translateX(-50%); white-space: nowrap; }
+.dot-axis span:first-child { transform: none; }
+.dot-axis span:last-child { transform: translateX(-100%); }
+.dot-axis .is-target { color: var(--ink); font-weight: 600; }
+
+.size { display: flex; align-items: center; gap: 16px; padding-top: 4px; }
+.size > svg { width: 92px; height: 60px; flex: none; }
+.size > div { display: grid; justify-items: start; gap: 8px; }
+.size .circle { fill: none; stroke: var(--ink-3); stroke-width: 1.5; }
+.size .zone { fill: var(--zone-wash); stroke: var(--zone); stroke-width: 1.75; }
+.size p { font-size: 0.9375rem; line-height: 1.45; }
+
+/* Trust band */
+.trust { margin-top: clamp(56px, 8vw, 104px); background: var(--pitch); color: var(--chalk); }
+.trust .wrap { display: grid; grid-template-columns: minmax(0, 1fr); gap: 22px 56px; align-items: start; padding-block: clamp(36px, 5vw, 64px); }
+@media (min-width: 900px) { .trust .wrap { grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); } }
+.trust .wrap > * { min-width: 0; }
+.trust-head { display: grid; gap: 18px; }
+.trust-line { max-width: 22ch; font: 800 clamp(1.9rem, 1.3rem + 2.2vw, 3rem)/1 var(--font-display); text-wrap: balance; }
+.trust .links { display: flex; flex-wrap: wrap; gap: 8px 28px; }
+.trust ol { list-style: none; padding: 0; display: grid; gap: 0; border-top: 1px solid var(--chalk-line); counter-reset: step; }
+.trust li { display: grid; grid-template-columns: 2.25rem minmax(0, 1fr); gap: 12px; padding-block: 14px; border-bottom: 1px solid var(--chalk-line); counter-increment: step; font-size: 1.0625rem; line-height: 1.5; }
+.trust li::before { content: counter(step); font: 800 1.5rem/1.05 var(--font-display); color: var(--zone-on-pitch); }
+.trust li b { font-weight: 600; }
+.trust a { font: 500 0.8125rem/1.4 var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; text-decoration-color: var(--zone-on-pitch); }
+.trust a:hover { color: var(--chalk); text-decoration-thickness: 2px; }
+.trust :focus-visible { outline-color: var(--chalk); }
+
+/* How it works */
+.steps { list-style: none; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 28px 40px; }
+@media (min-width: 640px) { .steps { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.steps li { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 4px 16px; align-content: start; }
+.steps svg { grid-row: span 2; width: 64px; height: 64px; color: var(--ink); fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.steps svg .accent { stroke: var(--zone); }
+.steps svg .accent-fill { fill: var(--zone); stroke: none; }
+.steps svg .quiet { stroke: var(--context); }
+.steps h3 { font: 800 1.375rem/1.1 var(--font-display); letter-spacing: 0.02em; text-transform: uppercase; }
+.steps h3 span { color: var(--zone); }
+.steps p { font-size: 1rem; line-height: 1.55; color: var(--ink-2); }
+
+/* Limits */
+.limits { list-style: none; padding: 0; max-width: 64ch; border-top: 1px solid var(--rule); }
+.limits li { padding-block: 12px; border-bottom: 1px solid var(--rule); }
+
+/* Footer */
+footer { margin-top: clamp(56px, 8vw, 104px); background: var(--paper-2); border-top: 1px solid var(--rule); }
+footer .wrap { display: grid; gap: 22px; padding-block: clamp(32px, 5vw, 52px); }
+.links-grid { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: 10px 28px; }
+.links-grid a { display: grid; gap: 2px; padding-block: 8px; text-decoration: none; border-top: 2px solid var(--ink); }
+.links-grid a b { font: 800 1.25rem/1.15 var(--font-display); letter-spacing: 0.02em; text-transform: uppercase; }
+.links-grid a span { font-size: 0.875rem; color: var(--ink-2); }
+.links-grid a:hover b { color: var(--link); }
+.credits { display: grid; gap: 6px; max-width: 80ch; font-size: 0.875rem; color: var(--ink-2); }
+.credits .independent { color: var(--ink); font-weight: 600; }
+
+@media (max-width: 520px) {
+  .media-foot { flex-wrap: wrap; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; }
+}
+</style>
+
+<header class="band">
+  <svg class="pitch" viewBox="-60 -38 120 76" preserveAspectRatio="xMidYMid slice" aria-hidden="true" focusable="false">
+    <g class="stripes">
+      <rect x="-63" y="-40" width="5.25" height="80"/><rect x="-52.5" y="-40" width="5.25" height="80"/>
+      <rect x="-42" y="-40" width="5.25" height="80"/><rect x="-31.5" y="-40" width="5.25" height="80"/>
+      <rect x="-21" y="-40" width="5.25" height="80"/><rect x="-10.5" y="-40" width="5.25" height="80"/>
+      <rect x="0" y="-40" width="5.25" height="80"/><rect x="10.5" y="-40" width="5.25" height="80"/>
+      <rect x="21" y="-40" width="5.25" height="80"/><rect x="31.5" y="-40" width="5.25" height="80"/>
+      <rect x="42" y="-40" width="5.25" height="80"/><rect x="52.5" y="-40" width="5.25" height="80"/>
+    </g>
+    <g class="lines">
+      <rect x="-52.5" y="-34" width="105" height="68"/>
+      <line x1="0" y1="-34" x2="0" y2="34"/>
+      <circle r="9.15"/>
+      <circle class="spot" r="0.3"/>
+      <rect x="-52.5" y="-20.16" width="16.5" height="40.32"/>
+      <rect x="36" y="-20.16" width="16.5" height="40.32"/>
+      <rect x="-52.5" y="-9.16" width="5.5" height="18.32"/>
+      <rect x="47" y="-9.16" width="5.5" height="18.32"/>
+      <circle class="spot" cx="-41.5" r="0.3"/>
+      <circle class="spot" cx="41.5" r="0.3"/>
+      <path d="M-36 -7.31A9.15 9.15 0 0 1 -36 7.31"/>
+      <path d="M36 -7.31A9.15 9.15 0 0 0 36 7.31"/>
+      <rect x="-54.5" y="-3.66" width="2" height="7.32"/>
+      <rect x="52.5" y="-3.66" width="2" height="7.32"/>
+    </g>
+  </svg>
+  <div class="wrap">
+    <div class="masthead">
+      <p class="wordmark">
+        <svg viewBox="0 0 30 20" aria-hidden="true" focusable="false"><ellipse cx="15" cy="10" rx="13" ry="7" transform="rotate(-18 15 10)"/><circle cx="15" cy="10" r="2.6"/></svg>
+        predfoot
+      </p>
+      <a href="https://github.com/zkyasin/predfoot">Code on GitHub</a>
+    </div>
+    <div class="hero">
+      <div class="thesis">
+        <h1>Where every player stands, read from a TV picture, and how far off it could be.</h1>
+        <p class="lede">predfoot recovers the broadcast camera from the pitch markings, places each player on the 105 × 68 m pitch, and gives every position an error zone built to hold the true spot 9 times in 10.</p>
+      </div>
+      <figure class="screen">
+        <span class="tab">Public footage · illustration</span>
+        <video class="clip-tall" id="hero-video" data-toggle="hero-toggle" data-name="the public footage" autoplay muted loop playsinline preload="auto" poster="assets/hero.jpg" aria-label="predfoot on public match footage: the recovered pitch lines over the broadcast view, and the same players on a pitch diagram with their error zones" aria-describedby="hero-caption">
+          <source src="assets/hero.mp4" type="video/mp4">
+        </video>
+      </figure>
+      <div class="caption">
+        <p id="hero-caption">Top: public footage (SoccerTrack v2) with the pitch lines predfoot recovered from the camera. Bottom: the same players on the pitch, each with its error zone. This only illustrates the output: the accuracy figures below come from SoccerNet test matches, whose images cannot be shown here.</p>
+        <button class="toggle" id="hero-toggle" type="button" hidden>Pause</button>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main>
+
+  <section class="wrap sec" aria-labelledby="why">
+    <h2 id="why">Why it matters</h2>
+    <div class="prose">
+      <p>Much of football's tracking data now comes from ordinary TV broadcasts. To turn a picture into positions, software first has to work out where the camera is pointing, and when that estimate wobbles, every player on screen moves with it.</p>
+      <p>The wobble inflates stats such as distance covered and high-speed running, and the positions rarely say how far off they might be.</p>
+    </div>
+  </section>
+
+  <section class="wrap sec" aria-labelledby="results">
+    <h2 id="results">What the test showed</h2>
+    <div class="prose">
+      <p class="note">One test, run once, on three SoccerNet matches that played no part in development: 49 clips, one frame in five, checked against the dataset's annotated player positions. In grey, what predfoot is compared with: the camera worked out from each frame on its own, or for the alarm the best single warning sign.</p>
+      <p class="legend" aria-hidden="true"><span><i class="is-zone"></i>predfoot</span><span><i></i>Comparison</span></p>
+    </div>
+
+    <div class="board span">
+      <article class="metric" aria-labelledby="m-accuracy">
+        <div class="metric-head"><h3 class="kicker" id="m-accuracy">Accuracy</h3></div>
+        <p class="figure">1.2<span class="unit"> m</span></p>
+        <p class="claim">With the camera smoothed over time, 9 players in 10 are placed within 1.2 m of their annotated position.</p>
+        <div class="bars">
+          <div class="bar-group">
+            <p class="bar-title">Distance that 9 players in 10 stay within</p>
+            <div class="bar-row">
+              <span class="bar-label">Frame by frame</span>
+              <span class="bar-line"><span class="bar" style="--v: 0.91"></span><span class="bar-value">1.8 m</span></span>
+            </div>
+            <div class="bar-row">
+              <span class="bar-label">predfoot, smoothed camera</span>
+              <span class="bar-line"><span class="bar is-zone" style="--v: 0.58"></span><span class="bar-value">1.2 m</span></span>
+            </div>
+          </div>
+        </div>
+        <p class="source">Same 89,700 player positions for both cameras. Source: <a href="https://github.com/zkyasin/predfoot/blob/main/reports/test_run.md">test report</a>.</p>
+      </article>
+
+      <article class="metric" aria-labelledby="m-stats">
+        <div class="metric-head"><h3 class="kicker" id="m-stats">Physical stats</h3></div>
+        <p class="figure">+3.4<span class="unit"> %</span></p>
+        <p class="claim">With the camera smoothed over time, the distance players cover comes out 3.4 % too high; frame by frame, camera wobble makes them seem to run much further and faster.</p>
+        <div class="bars">
+          <div class="bar-group">
+            <p class="bar-title">Total distance covered, overstated by</p>
+            <div class="bar-row">
+              <span class="bar-label">Frame by frame</span>
+              <span class="bar-line"><span class="bar" style="--v: 0.3263"></span><span class="bar-value">+26.1 %</span></span>
+            </div>
+            <div class="bar-row">
+              <span class="bar-label">predfoot, smoothed camera</span>
+              <span class="bar-line"><span class="bar is-zone" style="--v: 0.0425"></span><span class="bar-value">+3.4 %</span></span>
+            </div>
+          </div>
+          <div class="bar-group">
+            <p class="bar-title">High-speed running (20 km/h or faster), overstated by</p>
+            <div class="bar-row">
+              <span class="bar-label">Frame by frame</span>
+              <span class="bar-line"><span class="bar" style="--v: 0.905"></span><span class="bar-value">+72.4 %</span></span>
+            </div>
+            <div class="bar-row">
+              <span class="bar-label">predfoot, smoothed camera</span>
+              <span class="bar-line"><span class="bar is-zone" style="--v: 0.0688"></span><span class="bar-value">+5.5 %</span></span>
+            </div>
+          </div>
+        </div>
+        <p class="source">Measured at 5 frames per second against the dataset's smoothed reference tracks. The raw annotations themselves differ from that reference by +17.0 % and +40.3 %, so what remains is within the reference's own noise. Source: <a href="https://github.com/zkyasin/predfoot/blob/main/reports/test_run.md">test report</a>.</p>
+      </article>
+
+      <article class="metric" aria-labelledby="m-zones">
+        <div class="metric-head">
+          <h3 class="kicker" id="m-zones">Honest error zones</h3>
+          <span class="verdict is-missed"><svg viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"/></svg>Target missed</span>
+        </div>
+        <p class="figure">93.1<span class="unit"> %</span></p>
+        <p class="claim">of true positions fell inside their 90 % zone: the zones were a bit too large, so the preregistered target was missed, on the cautious side.</p>
+        <div class="dots">
+          <div class="dot-row">
+            <div class="dot-head"><span>Frame by frame</span><b>90.7 %</b></div>
+            <div class="dot-track"><span class="range" style="--lo: 0.2533; --hi: 0.5067"></span><span class="dot" style="--x: 0.38"></span></div>
+          </div>
+          <div class="dot-row">
+            <div class="dot-head"><span>predfoot, smoothed camera</span><b>93.1 %</b></div>
+            <div class="dot-track"><span class="range is-zone" style="--lo: 0.4467; --hi: 0.6333"></span><span class="dot is-zone" style="--x: 0.54"></span></div>
+          </div>
+          <div class="dot-axis" aria-hidden="true"><span style="--x: 0">85 %</span><span class="is-target" style="--x: 0.3333">90 % target</span><span style="--x: 0.6667">95 %</span><span style="--x: 1">100 %</span></div>
+        </div>
+        <div class="size">
+          <svg viewBox="0 0 92 60" aria-hidden="true" focusable="false"><circle class="circle" cx="46" cy="30" r="26"/><ellipse class="zone" cx="46" cy="30" rx="33" ry="14.95" transform="rotate(-24 46 30)"/></svg>
+          <div>
+            <p>The zones are still 27 % smaller than a one-size-fits-all circle making the same promise.</p>
+            <span class="verdict is-met"><svg viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M2 6.5l2.6 2.6L10 3.4"/></svg>Target met</span>
+          </div>
+        </div>
+        <p class="source">The test asked for a result compatible with 90 %; the lines show the 95 % interval, 91.7 to 94.5 % for predfoot. Per match: 89.8, 93.2 and 96.0 %. Source: <a href="https://github.com/zkyasin/predfoot/blob/main/reports/test_run.md">test report</a>.</p>
+      </article>
+
+      <article class="metric" aria-labelledby="m-alarm">
+        <div class="metric-head">
+          <h3 class="kicker" id="m-alarm">Bad-camera alarm</h3>
+          <span class="verdict is-met"><svg viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M2 6.5l2.6 2.6L10 3.4"/></svg>Target met</span>
+        </div>
+        <p class="figure">55<span class="unit"> %</span></p>
+        <p class="claim">of camera failures are caught by setting aside the 10 % of frames the alarm finds most suspicious.</p>
+        <div class="bars">
+          <div class="bar-group">
+            <p class="bar-title">Camera failures caught, with 10 % of frames set aside</p>
+            <div class="bar-row">
+              <span class="bar-label">Best single warning sign</span>
+              <span class="bar-line"><span class="bar" style="--v: 0.341"></span><span class="bar-value">34 %</span></span>
+            </div>
+            <div class="bar-row">
+              <span class="bar-label">predfoot's alarm</span>
+              <span class="bar-line"><span class="bar is-zone" style="--v: 0.551"></span><span class="bar-value">55 %</span></span>
+            </div>
+          </div>
+        </div>
+        <p class="source">A failure is a frame whose recovered pitch lines sit more than 10 pixels from the annotated ones, on average. Ranking quality (AUROC): 0.91 for the alarm against 0.80 for the best single sign. Source: <a href="https://github.com/zkyasin/predfoot/blob/main/reports/test_run.md">test report</a>.</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="trust" aria-labelledby="trust">
+    <div class="wrap">
+      <div class="trust-head">
+        <p class="trust-line" id="trust">Tested once, on matches never used during development.</p>
+        <p class="links"><a href="https://github.com/zkyasin/predfoot/blob/main/docs/preregistration.md">Preregistration</a><a href="https://github.com/zkyasin/predfoot/blob/main/reports/test_run.md">Test report</a></p>
+      </div>
+      <ol>
+        <li><span><b>Protocol frozen and published</b> before the test, success criteria included (commit 8640b9a).</span></li>
+        <li><span><b>Test run once</b> on the three held-out matches, with every model fixed in advance.</span></li>
+        <li><span><b>Every result published</b>, including the missed target.</span></li>
+      </ol>
+    </div>
+  </section>
+
+  <section class="wrap sec" aria-labelledby="smoothing">
+    <h2 id="smoothing">Smoothing the camera</h2>
+    <div class="prose">
+      <p>A broadcast camera turns around an almost fixed point, so its view changes smoothly. Worked out frame by frame, the camera estimate jitters, and every position jitters with it.</p>
+    </div>
+    <figure class="col-2">
+      <video class="clip-wide" id="smoothing-video" data-toggle="smoothing-toggle" data-name="the smoothing clip" autoplay muted loop playsinline preload="auto" poster="assets/smoothing.jpg" aria-label="Two pitch diagrams of the same clip: with the camera worked out frame by frame, the error zones jump and swell; smoothed over time, they stay small and steady">
+        <source src="assets/smoothing.mp4" type="video/mp4">
+      </video>
+      <div class="media-foot">
+        <figcaption>A SoccerNet development clip, drawn on a pitch diagram because SoccerNet images cannot be shown, and picked to show the effect, so not a typical one. Frame by frame (left), the error zones jump and swell whenever the camera estimate wobbles; smoothed over time (right), they stay small and steady. On the test matches, smoothing cut the frames whose camera misses the pitch lines by more than 10 pixels from 9.7 % to 2.4 %.</figcaption>
+        <button class="toggle" id="smoothing-toggle" type="button" hidden>Pause</button>
+      </div>
+    </figure>
+  </section>
+
+  <section class="wrap sec" aria-labelledby="how">
+    <h2 id="how">How it works</h2>
+    <ol class="steps">
+      <li>
+        <svg viewBox="0 0 56 56" aria-hidden="true" focusable="false">
+          <rect x="4" y="8" width="48" height="34" rx="3"/><path d="M22 49h12M28 42v7"/>
+          <path class="quiet" d="M17 15h22l7 22H10z M28 15v22"/><ellipse class="quiet" cx="28" cy="25.5" rx="6.5" ry="3.6"/>
+          <circle class="accent-fill" cx="17" cy="15" r="2.4"/><circle class="accent-fill" cx="39" cy="15" r="2.4"/><circle class="accent-fill" cx="28" cy="15" r="2.4"/><circle class="accent-fill" cx="28" cy="37" r="2.4"/><circle class="accent-fill" cx="10" cy="37" r="2.4"/><circle class="accent-fill" cx="46" cy="37" r="2.4"/>
+        </svg>
+        <h3><span>1</span> Find the pitch markings</h3>
+        <p>A neural network (PnLCalib, public weights, not retrained) spots the lines of the pitch, and the points where they cross, in each frame.</p>
+      </li>
+      <li>
+        <svg viewBox="0 0 56 56" aria-hidden="true" focusable="false">
+          <path class="quiet" d="M29 9h19l6 17H23z M38.5 9v17"/>
+          <path class="accent" d="M22 37L23 26M22 37L54 26"/>
+          <rect x="5" y="33" width="14" height="10" rx="2"/><circle cx="22" cy="38" r="3"/><path d="M12 43l-4 9M12 43l4 9"/>
+        </svg>
+        <h3><span>2</span> Recover the camera</h3>
+        <p>The pitch is a known 105 × 68 m shape, so those markings reveal where the camera is and where it points. This is called calibration; predfoot also measures how sure it can be of it.</p>
+      </li>
+      <li>
+        <svg viewBox="0 0 56 56" aria-hidden="true" focusable="false">
+          <path class="quiet" d="M4 36l5-14 5 16 5-20 5 16 5-13 5 16 5-17 5 13 5-9 3 5"/>
+          <path class="accent" stroke-width="2.8" d="M4 30c9-4 15 1 24-1s15-3 24-1"/>
+        </svg>
+        <h3><span>3</span> Smooth over time</h3>
+        <p>A TV camera pans, tilts and zooms around an almost fixed point. predfoot uses this to smooth the camera across the clip and to catch frames that do not fit.</p>
+      </li>
+      <li>
+        <svg viewBox="0 0 56 56" aria-hidden="true" focusable="false">
+          <rect x="4" y="12" width="48" height="31"/><path d="M28 12v31"/><circle cx="28" cy="27.5" r="4.2"/>
+          <ellipse class="accent" cx="40" cy="23" rx="6" ry="2.8" transform="rotate(-62 40 23)"/><circle class="accent-fill" cx="40" cy="23" r="1.6"/>
+        </svg>
+        <h3><span>4</span> Place each player, with an error zone</h3>
+        <p>Each player's feet are projected onto the pitch with a zone built to hold the true spot 9 times in 10, tuned on past matches so it keeps that promise. A health score flags frames whose camera looks wrong.</p>
+      </li>
+    </ol>
+  </section>
+
+  <section class="wrap sec" aria-labelledby="limits">
+    <h2 id="limits">Limits</h2>
+    <ul class="limits">
+      <li>Tested on three matches from one league and one broadcast style.</li>
+      <li>Players come from the dataset's annotated boxes: detecting and tracking them is not part of the project.</li>
+      <li>The alarm and the physical-stat measurements run in the evaluation scripts, not yet in the command-line tool.</li>
+    </ul>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <ul class="links-grid">
+      <li><a href="https://github.com/zkyasin/predfoot"><b>Code</b><span>The repository on GitHub</span></a></li>
+      <li><a href="https://github.com/zkyasin/predfoot/blob/main/docs/technical.md"><b>Technical overview</b><span>Every number and how it was made</span></a></li>
+      <li><a href="https://github.com/zkyasin/predfoot/blob/main/reports/test_run.md"><b>Test report</b><span>The run on the three test matches</span></a></li>
+      <li><a href="https://github.com/zkyasin/predfoot/blob/main/docs/preregistration.md"><b>Preregistration</b><span>The protocol, frozen before the test</span></a></li>
+    </ul>
+    <div class="credits">
+      <p>Footage: SoccerTrack v2, Scott et al., CC BY 4.0 (cropped, reprojected and overlaid). Test matches: SoccerNet <span class="nowrap">SN-GSR</span>, shown only as numbers and pitch diagrams. Pitch-marking network: PnLCalib weights by <span class="nowrap">Gutiérrez-Pérez</span> and Agudo, CC BY 4.0. Code: <span class="nowrap">Apache-2.0</span>.</p>
+      <p class="independent">Independent project, not affiliated with SkillCorner.</p>
+    </div>
+  </div>
+</footer>
+
+<script>
+  // Clips play muted and in a loop while on screen. With reduced motion they wait for the Play button.
+  (function () {
+    var reduce = window.matchMedia("(prefers-reduced-motion: reduce)");
+    var clips = Array.prototype.slice.call(document.querySelectorAll("video[data-toggle]"));
+    function wantsMotion(v) { return !reduce.matches || v.dataset.asked === "yes"; }
+    function sync(v) {
+      var button = document.getElementById(v.dataset.toggle);
+      if (!button) return;
+      button.textContent = v.paused ? "Play" : "Pause";
+      button.setAttribute("aria-label", (v.paused ? "Play " : "Pause ") + v.dataset.name);
+    }
+    function start(v) { var p = v.play(); if (p && p.catch) p.catch(function () { sync(v); }); }
+    clips.forEach(function (v) {
+      var button = document.getElementById(v.dataset.toggle);
+      v.muted = true;
+      if (reduce.matches) { v.autoplay = false; v.removeAttribute("autoplay"); v.pause(); }
+      v.addEventListener("play", function () { if (!wantsMotion(v)) v.pause(); sync(v); });
+      v.addEventListener("pause", function () { sync(v); });
+      if (button) {
+        button.hidden = false;
+        button.addEventListener("click", function () {
+          if (v.paused) { v.dataset.asked = "yes"; v.dataset.held = ""; start(v); }
+          else { v.dataset.held = "yes"; v.pause(); }
+        });
+      }
+      sync(v);
+    });
+    if ("IntersectionObserver" in window) {
+      var watcher = new IntersectionObserver(function (entries) {
+        entries.forEach(function (entry) {
+          var v = entry.target;
+          if (!entry.isIntersecting) { if (!v.paused) v.pause(); }
+          else if (v.paused && v.dataset.held !== "yes" && wantsMotion(v)) start(v);
+        });
+      }, { threshold: 0.2 });
+      clips.forEach(function (v) { watcher.observe(v); });
+    }
+  })();
+</script>
