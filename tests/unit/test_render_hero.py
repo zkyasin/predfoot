@@ -216,6 +216,8 @@ def test_a_frame_is_the_view_above_the_map_and_an_abstained_frame_has_no_zone():
     assert frame.shape[0] % 2 == 0
     amber = np.all(np.abs(bottom.astype(int) - hero.PLAYER_BGR) < 30, axis=2)
     assert amber.any()
+    rim = np.all(np.abs(bottom.astype(int) - hero.ZONE_BGR) < 40, axis=2)
+    assert rim.any()  # the zone's rim is the page's pink
     empty = hero.draw_map(pmap, bg, grid, pad, None, (240, 120), None)
     assert not np.all(np.abs(empty.astype(int) - hero.PLAYER_BGR) < 30, axis=2).any()
     ring = hero.draw_view(view, None, feet)

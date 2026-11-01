@@ -93,9 +93,11 @@ SMOOTHED_FLAGS = ("smoothed", "repaired", "filled", "bridged")
 FLAG_NAMES = ("smoothed", "repaired", "filled", "bridged", "projected", "passthrough", "duplicate",
               "rejected", "unchecked")  # fmt: skip
 
-# Colours, BGR. Aqua is predfoot's camera (lines in the view, footprint on the map); amber is the players.
+# Colours, BGR. Aqua is predfoot's camera (lines in the view, footprint on the map); amber is the players;
+# pink is their error zones, the colour of error zones everywhere on the showcase page (--zone-on-pitch).
 CAMERA_BGR = (232, 212, 95)  # #5fd4e8
 PLAYER_BGR = (61, 194, 255)  # #ffc23d
+ZONE_BGR = (203, 156, 255)  # #ff9ccb
 OUTLINE_BGR = (24, 24, 24)
 ABSTAIN_BGR = (190, 190, 190)
 STRIPES_BGR = ((58, 89, 35), (64, 96, 40))  # #23593a, #286040: mown bands of the map's pitch
@@ -343,10 +345,10 @@ def draw_map(
         ai = (max(round(axes[0] * 16), 1), max(round(axes[1] * 16), 1))
         shapes.append((ci, ai, angle))
         cv2.ellipse(zones, ci, ai, angle, 0, 360, 255, -1, cv2.LINE_AA, shift=4)
-    img = blend(img, np.full_like(img, PLAYER_BGR), 0.32 * zones.astype(np.float32) / 255)
+    img = blend(img, np.full_like(img, ZONE_BGR), 0.32 * zones.astype(np.float32) / 255)
     rims = img.copy()
     for ci, ai, angle in shapes:
-        cv2.ellipse(rims, ci, ai, angle, 0, 360, PLAYER_BGR, 1, cv2.LINE_AA, shift=4)
+        cv2.ellipse(rims, ci, ai, angle, 0, 360, ZONE_BGR, 1, cv2.LINE_AA, shift=4)
     img = cv2.addWeighted(rims, 0.8, img, 0.2, 0)
     for c in centres:
         ci = (round(c[0] * 16), round(c[1] * 16))
