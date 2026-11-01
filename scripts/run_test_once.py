@@ -28,7 +28,9 @@ of another lock is never reused or evaluated.
   (``PREDFOOT_DATA_DIR/test_once/`` and ``runs/test_once/``) are written before any label is read, so a second
   C is refused even after a crash. Every endpoint for both cameras and both references, the success criteria
   evaluated as written, into ``reports/test_run.md`` (aggregate numbers) and the lock's run folder (local). A
-  crash after the markers still writes ``reports/test_run.md``, naming the failure.
+  crash or an interruption after the markers (an exception, Ctrl-C, SIGTERM or SIGHUP) still writes
+  ``reports/test_run.md``, naming the failure, with every result computed before it; a hard kill (SIGKILL) or
+  a power loss leaves only the markers.
 
 ``--dry-run`` exercises the same chain on dev clips standing in for test clips (``--dry-clips``, default three
 clips of game 4), in a scratch folder: a scratch freeze on a few clips of the five other dev games
@@ -40,14 +42,17 @@ be refused. It never reads, writes or checks the real lock, markers, test clip l
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import json
 import shutil
+import signal
 import subprocess
 import sys
 import time
 import traceback
 import zipfile
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -106,7 +111,8 @@ class Context:
     def log(self, msg: str) -> None:
         line = f"[{datetime.now(UTC):%H:%M:%S}] {msg}"
         self.log_lines.append(line)
-        typer.echo(line)
+        with contextlib.suppress(OSError):  # a closed terminal or pipe must not stop a stage
+            typer.echo(line)
 
     @property
     def work_dir(self) -> Path:
@@ -525,11 +531,61 @@ def report_header(ctx: Context, lock: pr.Lock, started_utc: str) -> list[str]:
     return header
 
 
+class Interrupted(KeyboardInterrupt):
+    """A signal (SIGINT, SIGTERM, SIGHUP) while stage C holds its claim, raised like Ctrl-C so that the
+    failure report is still written."""
+
+
+@dataclass
+class SignalGuard:
+    """Raises :class:`Interrupted` on the first signal; once ``held`` is set (by that first signal, or while
+    the failure report is written), later signals are ignored."""
+
+    held: bool = False
+
+    def handler(self, signum: int, _frame: Any) -> None:
+        if not self.held:
+            self.held = True
+            raise Interrupted(signal.Signals(signum).name)
+
+
+@contextlib.contextmanager
+def signals_raise() -> Iterator[SignalGuard]:
+    """While stage C holds its claim, SIGINT, SIGTERM and SIGHUP raise :class:`Interrupted`: by default
+    SIGTERM and SIGHUP (a closed terminal) end Python without running ``finally`` blocks, so no report would
+    be written. A signal already ignored, as under ``nohup``, stays ignored; outside the main thread nothing
+    changes. The previous handlers are restored afterwards."""
+    guard = SignalGuard()
+    previous: dict[int, Any] = {}
+    for name in ("SIGINT", "SIGTERM", "SIGHUP"):
+        sig = getattr(signal, name, None)
+        if sig is None:
+            continue
+        try:
+            old = signal.getsignal(sig)
+            if old == signal.SIG_IGN:
+                continue
+            signal.signal(sig, guard.handler)
+        except ValueError:  # not the main thread
+            continue
+        previous[sig] = old
+    try:
+        yield guard
+    finally:
+        for sig, old in previous.items():
+            signal.signal(sig, signal.SIG_DFL if old is None else old)
+
+
 def stage_c(ctx: Context) -> dict[str, Any]:
     lock = guard(ctx)  # nothing below runs without a matching lock
     if ctx.report.exists():  # a committed result, e.g. from another clone with its own data folder
         raise pr.PreregError(f"{ctx.report} exists: the test evaluation already ran, a second one is refused")
     prepared = prepare_c(ctx)  # label-free: a failure here leaves the evaluation unclaimed
+    existing = [m for m in ctx.markers if m.exists()]
+    if existing:  # claim_once refuses too; refused here, a second stage C never writes a failure report
+        raise pr.PreregError(
+            f"the test evaluation already started ({existing[0]}): a second evaluation is refused"
+        )
     payload = {
         "started_utc": _now(),
         "lock_sha256": ctx.lock_sha,
@@ -538,33 +594,58 @@ def stage_c(ctx: Context) -> dict[str, Any]:
         "head": pr.head_commit(REPO_ROOT),
         "dry_run": ctx.dry,
     }
-    pr.claim_once(ctx.markers, payload)  # written before any label is read
-    ctx.log(f"stage C started, markers written: {', '.join(str(m) for m in ctx.markers)}")
-    try:
-        return _evaluate(ctx, prepared, lock, payload)
-    except Exception as err:
-        _failure_report(ctx, lock, payload, err)
-        raise
-    finally:
-        (ctx.work_dir / "stage_c.log").write_text("\n".join(ctx.log_lines) + "\n", encoding="utf-8")
+    with signals_raise() as signals:
+        try:
+            pr.claim_once(ctx.markers, payload)  # written before any label is read
+            ctx.log(f"stage C started, markers written: {', '.join(str(m) for m in ctx.markers)}")
+            return _evaluate(ctx, prepared, lock, payload)
+        except BaseException as err:  # Ctrl-C, SIGTERM and SIGHUP included
+            signals.held = True  # a second signal must not stop the failure report
+            if any(m.exists() for m in ctx.markers):  # the claim is spent, even if half written
+                _failure_report(ctx, lock, payload, err)
+            raise
+        finally:
+            with contextlib.suppress(OSError):
+                (ctx.work_dir / "stage_c.log").write_text("\n".join(ctx.log_lines) + "\n", encoding="utf-8")
 
 
 def _failure_report(ctx: Context, lock: pr.Lock, payload: dict[str, Any], err: BaseException) -> None:
-    """The claim is spent: a crash after it still leaves the report, which names the failure (a deviation)."""
+    """The claim is spent: a crash or an interruption after it still leaves the report, which names the
+    failure (a deviation) and carries every result computed before it. The traceback goes to the log."""
+    ctx.log_lines.append("".join(traceback.format_exception(err)).rstrip())
     if ctx.report.exists():
         return
+    what = f"{type(err).__name__}: {err}" if str(err) else type(err).__name__
     md = [
         *report_header(ctx, lock, payload["started_utc"]),
         "",
         "## Stage C failed",
         "",
-        f"Stage C stopped after its markers were written: `{type(err).__name__}: {err}`. No result is"
-        " reported. As preregistered, the evaluation is not run a second time; this failure is a deviation"
-        " from the preregistration.",
+        f"Stage C stopped after its markers were written: `{what}`. As preregistered, the evaluation is not"
+        " run a second time; this failure is a deviation from the preregistration. The traceback is in"
+        " `stage_c.log`, in the lock's run folder (local).",
+        "",
+        *_computed_results(ctx),
     ]
     ctx.report.parent.mkdir(parents=True, exist_ok=True)
     ctx.report.write_text("\n".join(md) + "\n", encoding="utf-8")
-    ctx.log(f"stage C failed after the claim ({type(err).__name__}); failure report {ctx.report}")
+    ctx.log(f"stage C failed after the claim ({what}); failure report {ctx.report}")
+
+
+def _computed_results(ctx: Context) -> list[str]:
+    """Every result computed before a failure: ``results.json`` is written before the report is rendered."""
+    try:
+        res = json.loads((ctx.work_dir / "results.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ["No result was computed before the failure."]
+    return [
+        "Every endpoint was computed before the failure, but the report could not be rendered. The success"
+        " criteria and every result, as saved in `results.json` (aggregate numbers):",
+        "",
+        "```json",
+        fz.dump(res).rstrip(),
+        "```",
+    ]
 
 
 def _evaluate(ctx: Context, prepared: Prepared, lock: pr.Lock, payload: dict[str, Any]) -> dict[str, Any]:
@@ -587,9 +668,14 @@ def _evaluate(ctx: Context, prepared: Prepared, lock: pr.Lock, payload: dict[str
         if t.players.height:
             t.players.write_parquet(ctx.work_dir / f"players_{name}.parquet")
         t.frames.write_parquet(ctx.work_dir / f"frames_{name}.parquet")
+    ctx.log(
+        f"labels attached ({tables['perframe'].frames.height} labelled frames); computing every endpoint"
+        f" ({fz.N_BOOT} bootstrap draws per interval)"
+    )
     res = fz.evaluate(tables, prepared.art)
     res["provenance"] = {**payload, "lock_code_commit": lock.code_commit, "artifacts": lock.artifacts}
     write_json(ctx.work_dir / "results.json", res)
+    ctx.log("every endpoint computed and saved (results.json); writing the report")
     ctx.report.parent.mkdir(parents=True, exist_ok=True)
     ctx.report.write_text(
         fz.render_report(res, report_header(ctx, lock, payload["started_utc"])), encoding="utf-8"

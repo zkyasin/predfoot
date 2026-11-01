@@ -5,8 +5,10 @@ The guards run on throw-away git repositories; nothing here touches data, the re
 
 import importlib.util
 import json
+import signal
 import subprocess
 import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -567,11 +569,102 @@ def test_stage_c_claims_before_reading_labels_and_a_crash_still_leaves_a_report(
     report = world.report.read_text()
     assert "Stage C failed" in report
     assert "OSError: disk unplugged" in report
+    assert "No result was computed" in report
+    assert "disk unplugged" in (world.work_dir / "stage_c.log").read_text()  # with its traceback
     with pytest.raises(pr.PreregError, match="already ran"):
         run_test_once.stage_c(_fresh(world))
     world.report.unlink()
     with pytest.raises(pr.PreregError, match="second evaluation"):
         run_test_once.stage_c(_fresh(world))
+    assert not world.report.exists()  # a refused second stage C writes no failure report
+
+
+@pytest.mark.parametrize("how", ["KeyboardInterrupt", "SIGTERM", "SIGHUP"])
+def test_an_interruption_after_the_claim_still_leaves_a_report(world, monkeypatch, how):
+    if threading.current_thread() is not threading.main_thread():
+        pytest.skip("signal handlers belong to the main thread")
+    run_test_once.stage_a(world)
+    run_test_once.stage_b(world)
+    before = {s: signal.getsignal(s) for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
+
+    def interrupt(*args, **kwargs):
+        if how == "KeyboardInterrupt":
+            raise KeyboardInterrupt
+        sig = getattr(signal, how)
+        if signal.getsignal(sig) in (signal.SIG_DFL, signal.SIG_IGN, None):  # would end pytest
+            pytest.fail(f"stage C holds its claim without a {how} handler")
+        signal.raise_signal(sig)  # the handler runs before raise_signal returns
+        pytest.fail(f"{how} did not interrupt stage C")
+
+    monkeypatch.setattr(run_test_once.pl, "read_parquet", interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        run_test_once.stage_c(_fresh(world))
+    assert all(m.exists() for m in world.markers)
+    report = world.report.read_text()
+    assert "Stage C failed" in report
+    assert how in report
+    assert {s: signal.getsignal(s) for s in before} == before  # the handlers are restored
+
+
+def test_a_second_signal_is_ignored_and_an_ignored_signal_stays_ignored():
+    if threading.current_thread() is not threading.main_thread():
+        pytest.skip("signal handlers belong to the main thread")
+    guard = run_test_once.SignalGuard()
+    with pytest.raises(run_test_once.Interrupted, match="SIGTERM"):
+        guard.handler(signal.SIGTERM, None)
+    guard.handler(signal.SIGTERM, None)  # while the failure report is written
+    old = signal.signal(signal.SIGHUP, signal.SIG_IGN)  # as under nohup
+    try:
+        with run_test_once.signals_raise():
+            assert signal.getsignal(signal.SIGHUP) == signal.SIG_IGN
+            assert signal.getsignal(signal.SIGTERM) not in (signal.SIG_DFL, signal.SIG_IGN, None)
+        assert signal.getsignal(signal.SIGHUP) == signal.SIG_IGN
+    finally:
+        signal.signal(signal.SIGHUP, old)
+
+
+def test_a_claim_that_fails_between_its_markers_still_leaves_a_report(world, monkeypatch):
+    run_test_once.stage_a(world)
+    run_test_once.stage_b(world)
+    claim = pr.claim_once
+
+    def no_marker(markers, payload):
+        raise OSError("data folder not writable")
+
+    monkeypatch.setattr(run_test_once.pr, "claim_once", no_marker)
+    with pytest.raises(OSError, match="data folder"):
+        run_test_once.stage_c(_fresh(world))
+    assert not world.report.exists()  # nothing written: the evaluation is still unclaimed
+    assert not any(m.exists() for m in world.markers)
+
+    def half_claim(markers, payload):
+        claim(markers[:1], payload)
+        raise OSError("run folder not writable")
+
+    monkeypatch.setattr(run_test_once.pr, "claim_once", half_claim)
+    with pytest.raises(OSError, match="run folder"):
+        run_test_once.stage_c(_fresh(world))
+    assert world.markers[0].exists()
+    assert not world.markers[1].exists()
+    assert "OSError: run folder not writable" in world.report.read_text()
+
+
+def test_a_failure_after_the_results_puts_every_result_in_the_report(world, monkeypatch):
+    run_test_once.stage_a(world)
+    run_test_once.stage_b(world)
+
+    def results_then_crash(ctx, prepared, lock, payload):
+        results = {"criteria": {"P1": {"coverage": 0.91, "pass": True}}, "regions": {}}
+        run_test_once.write_json(ctx.work_dir / "results.json", results)
+        raise TypeError("unsupported format string passed to NoneType.__format__")
+
+    monkeypatch.setattr(run_test_once, "_evaluate", results_then_crash)
+    with pytest.raises(TypeError):
+        run_test_once.stage_c(_fresh(world))
+    report = world.report.read_text()
+    assert "TypeError: unsupported format string" in report
+    assert '"coverage": 0.91' in report
+    assert "No result was computed" not in report
 
 
 def test_the_dry_run_never_falls_back_to_the_test_clip_list(tmp_path, monkeypatch):

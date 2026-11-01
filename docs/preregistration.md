@@ -168,7 +168,10 @@ All are reported; none is a success criterion.
    refuses outputs of another lock. Stage C, the only stage that reads test labels, first checks and loads
    every label-free input and checks that both label tables exist with the columns it reads (their schemas,
    no label), then writes its markers before reading any label, and runs once: a second stage C is refused,
-   even after a crash, and a crash after the markers still writes `reports/test_run.md`, naming the failure.
+   even after a crash. A crash or an interruption after the markers (an exception, Ctrl-C, SIGTERM or SIGHUP)
+   still writes `reports/test_run.md`, naming the failure, with every result computed before it; after a hard
+   kill (SIGKILL) or a power loss only the markers remain, and the owner writes the failure into
+   `reports/test_run.md` by hand.
 4. Every result goes into `reports/test_run.md`, failed criteria included. Nothing is re-run or re-analysed
    after stage C; any deviation from this text is listed in the report.
 
@@ -186,7 +189,8 @@ All are reported; none is a success criterion.
 - The single evaluation is enforced by markers in one data folder (`PREDFOOT_DATA_DIR/test_once/`) and one
   checkout (`runs/test_once/`), and by `reports/test_run.md` once it is committed. A fresh clone with
   another data folder, before that report is committed, would not be refused: across clones the guarantee
-  rests on committing the report (written even when stage C fails) and on the owner.
+  rests on committing the report (written even when stage C fails, by hand after a hard kill or a power loss)
+  and on the owner.
 - The KPI proxy's reference, the smoothed labels, carries track-smoothing artefacts; it measures the cost of
   jitter, not absolute KPI accuracy.
 - For orientation only (dev, leave-one-game-out, not a prediction): coverage against R1 90.6 % [89.0, 92.1]
