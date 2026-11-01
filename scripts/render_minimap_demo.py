@@ -264,8 +264,8 @@ def draw_panel(ax: Axes, cam: str, view: View, window: tuple[float, ...], plain:
         spine.set_edgecolor(VEIL)
     if plain:
         if view.state != SHOWN:
-            draw_veil(ax, view.state, PLAIN_VEILS[view.state], fontsize=18)
-        ax.set_title(PLAIN_TITLES[cam], loc="left", fontsize=22, color=TEXT, fontweight="bold", pad=7)
+            draw_veil(ax, view.state, PLAIN_VEILS[view.state], fontsize=20)
+        ax.set_title(PLAIN_TITLES[cam], loc="left", fontsize=23, color=TEXT, fontweight="bold", pad=7)
         return
     if view.state == SHOWN:
         inside, n, area = frame_stats(rows)
@@ -334,8 +334,8 @@ def render_frame(
             Patch(facecolor=TEXT_SECONDARY, alpha=0.16, edgecolor=TEXT_SECONDARY, label="90 % zone"),
             Line2D([], [], marker="o", ls="none", ms=4.5, color=TEXT, label="true position"),
         ]
-        fig.legend(handles=handles, loc="outside lower center", ncols=3, frameon=False, fontsize=16,
-                   handletextpad=0.4, columnspacing=1.6)  # fmt: skip
+        fig.legend(handles=handles, loc="outside lower center", ncols=3, frameon=False, fontsize=18,
+                   handletextpad=0.3, columnspacing=1.2)  # fmt: skip
         return _image(fig)
     t = (frame - 1) / NATIVE_FPS
     fig.suptitle(
@@ -440,6 +440,8 @@ def main(
     t0, t1 = (window_frames[0] - 1) / NATIVE_FPS, (window_frames[-1] - 1) / NATIVE_FPS
     height = round(width * 0.5 * 50) / 50 if plain else width * 0.47  # plain: even pixel sizes, for H.264
     fig = Figure(figsize=(width, height), dpi=100, facecolor=SURFACE, layout="constrained")
+    if plain:
+        fig.get_layout_engine().set(rect=(0.005, 0.0, 0.99, 0.975))  # air above the large titles
     FigureCanvasAgg(fig)
     window = crop(runs, chosen, window_frames)
     images = [render_frame(fig, runs, chosen, game, int(fr), window, plain=plain) for fr in window_frames]
