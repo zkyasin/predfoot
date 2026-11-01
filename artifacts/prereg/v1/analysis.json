@@ -1,0 +1,71 @@
+{
+ "config": {
+  "alpha": 0.1,
+  "bootstrap_seed": 0,
+  "cameras": [
+   "perframe",
+   "ptz"
+  ],
+  "dev_games": [
+   2,
+   3,
+   4,
+   5,
+   6,
+   9
+  ],
+  "fail_line_px": 10.0,
+  "frames_every": 5,
+  "min_source_clips": 10,
+  "mondrian_bins": {
+   "mpp": 3,
+   "n_inliers": 2
+  },
+  "n_boot": 2000,
+  "oracle_max_px": 3.0,
+  "p1_weighting": "player-frames",
+  "pooled_sources": [
+   "gap"
+  ],
+  "primary": {
+   "camera": "ptz",
+   "reference": "lab"
+  },
+  "raw_gap_max_m": 5.0,
+  "references": [
+   "lab",
+   "or"
+  ],
+  "solver": {
+   "loss_scale_px": 3.0,
+   "max_scaled_condition": 10000000000.0,
+   "min_inliers": 5,
+   "prior_dof": 10.0,
+   "ransac_iterations": 300,
+   "ransac_threshold_px": 8.0,
+   "sigma0_px": 2.0
+  },
+  "test_clips": 49,
+  "test_games": [
+   7,
+   8,
+   11
+  ],
+  "unit": "clip"
+ },
+ "format": "predfoot-prereg-artifact/1",
+ "kind": "analysis",
+ "provenance": {
+  "code_commit": "a46c15aaaea4f8f80d2de874658438b617e94726",
+  "dev_clip_ids_sha256": "8cb122eae4e9a945353f5c7d1532a9b891766de21d7eddef77faa287ab9e79e1",
+  "dev_clips": 115,
+  "dev_games": [
+   2,
+   3,
+   4,
+   5,
+   6,
+   9
+  ]
+ }
+}
