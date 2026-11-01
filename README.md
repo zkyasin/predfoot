@@ -19,6 +19,10 @@ Outputs follow the SkillCorner open-data JSONL schema at 10 fps, with the uncert
 > **Development results only.** Everything below comes from the six SN-GSR development games. The test games
 > (7, 8 and 11) stay locked until the preregistered run ([`docs/preregistration.md`](docs/preregistration.md)),
 > whose results will all be published here, failed criteria included.
+>
+> Preregistration v1 frozen on 2026-11-01 at commit `a46c15aaaea4`: `docs/preregistration.md` SHA-256
+> `25bf24bf31da3027…`, artifacts digest `20f06142cba1522c…`, `docs/preregistration.lock.json` SHA-256
+> `191bb06dbb75aba8…`; hashes in [`docs/preregistration.lock.json`](docs/preregistration.lock.json).
 
 ![Side-by-side minimaps of one dev clip: per-frame camera on the left, PTZ-smoothed camera on the right](assets/minimap_demo.gif)
 
