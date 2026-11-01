@@ -107,7 +107,7 @@ a:hover { color: var(--link); }
 .hero { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-areas: "thesis" "screen" "caption"; gap: 22px; padding-top: clamp(36px, 6vw, 80px); }
 .hero > * { min-width: 0; }
 @media (min-width: 900px) {
-  .hero { grid-template-columns: minmax(0, 1fr) minmax(0, 25rem); grid-template-areas: "thesis screen" "caption screen"; grid-template-rows: auto 1fr; column-gap: clamp(40px, 5vw, 72px); row-gap: 28px; }
+  .hero { grid-template-columns: minmax(0, 1fr) minmax(0, 28rem); grid-template-areas: "thesis screen" "caption screen"; grid-template-rows: auto 1fr; column-gap: clamp(40px, 5vw, 72px); row-gap: 28px; }
   .hero .caption { align-self: end; }
 }
 .thesis { grid-area: thesis; display: grid; gap: clamp(14px, 2vw, 22px); }
@@ -334,7 +334,7 @@ footer .wrap { display: grid; gap: 22px; padding-block: clamp(32px, 5vw, 52px); 
         </video>
       </figure>
       <div class="caption">
-        <p id="hero-caption">Top: public footage (SoccerTrack v2) with the pitch lines predfoot recovered from the camera. Bottom: the same players on the pitch, each with its error zone. This only illustrates the output: the accuracy figures below come from SoccerNet test matches, whose images cannot be shown here.</p>
+        <p id="hero-caption">Top: public footage (SoccerTrack v2), with the pitch lines redrawn from the camera predfoot recovered. Bottom: the same players on the pitch, each with its error zone, and the area the camera sees. This only illustrates the output: the accuracy figures below come from SoccerNet test matches, whose images cannot be shown here.</p>
         <button class="toggle" id="hero-toggle" type="button" hidden>Pause</button>
       </div>
     </div>
