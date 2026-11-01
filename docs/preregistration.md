@@ -170,8 +170,8 @@ All are reported; none is a success criterion.
    artifacts; the lock anchored in its freeze commit (lock, preregistration and artifacts tracked, unchanged
    since that commit, which adds only them to the lock's code commit); no change under `src/`, `scripts/`,
    `configs/`, `pyproject.toml`, `uv.lock` or `.python-version` since the lock commit; a clean working tree
-   (no tracked file hiding its changes, no ignored file under those paths); the interpreter and package
-   versions of the freeze; and the pinned clip list. A re-freeze (lock and artifacts deleted, then frozen and
+   (no tracked file hiding its changes, no ignored file under those paths other than bytecode caches and
+   Finder's `.DS_Store`); the interpreter and package versions of the freeze; and the pinned clip list. A re-freeze (lock and artifacts deleted, then frozen and
    committed again) stays possible until stage C has started; every re-freeze is visible in git history.
    Stage A (test frames at 5 fps, weights checked against the lock, keypoint networks into a cache of its own)
    and stage B (per-frame calibration, smoothing with the frozen noise parameters) read no label and resume

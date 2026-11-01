@@ -83,7 +83,7 @@ def repo(tmp_path):
     (root / "configs" / "c.yaml").write_text("a: 1\n")
     (root / "pyproject.toml").write_text("[project]\nname = 'x'\n")
     (root / "uv.lock").write_text("version = 1\n")
-    (root / ".gitignore").write_text("__pycache__/\ndata/\n")
+    (root / ".gitignore").write_text("__pycache__/\ndata/\n.DS_Store\n")
     git(root, "init", "-q")
     git(root, "config", "user.email", "test@example.com")
     git(root, "config", "user.name", "test")
@@ -229,9 +229,11 @@ def test_a_tracked_file_hiding_its_changes_is_refused(repo, flag):
         pr.verify_lock(repo)
 
 
-def test_an_ignored_file_under_a_protected_path_is_refused_but_bytecode_is_not(repo):
+def test_an_ignored_file_under_a_protected_path_is_refused_but_bytecode_and_finder_files_are_not(repo):
     (repo / "src" / "__pycache__").mkdir()
     (repo / "src" / "__pycache__" / "m.cpython-312.pyc").write_bytes(b"\0")
+    for folder in ("src", "scripts", "configs"):
+        (repo / folder / ".DS_Store").write_bytes(b"finder")  # git-ignored, as in the real repository
     pr.verify_lock(repo)
     (repo / "src" / "data").mkdir()
     (repo / "src" / "data" / "__init__.py").write_text("shadow = True\n")  # ignored by 'data/'

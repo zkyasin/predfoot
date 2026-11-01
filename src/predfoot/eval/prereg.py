@@ -18,7 +18,8 @@ environment. The lock and the artifacts are then committed together (the *freeze
   or pointing the lock at a newer code commit, is refused; a re-freeze (lock and artifacts deleted, then
   frozen and committed again) stays possible until stage C has claimed the evaluation;
 - the working tree is clean: git status shows nothing, no tracked file hides its changes (assume-unchanged or
-  skip-worktree) and no ignored file sits under the protected paths (bytecode caches aside);
+  skip-worktree) and no ignored file sits under the protected paths (bytecode caches and Finder's
+  ``.DS_Store`` aside);
 - the interpreter and the package versions are those recorded at the freeze;
 - the evaluation marker does not exist yet; it is written first, before any label is read, so a crash or a
   second invocation can never produce a second evaluation.
@@ -54,6 +55,8 @@ LOCK_FORMAT = "predfoot-prereg-lock/1"
 DRAFT_MARKERS = ("DRAFT", "pending owner approval")
 _VERSION = re.compile(r"^- Version:\s*(\d+)\s*$", re.MULTILINE)
 _BYTECODE = (".pyc", ".pyo", ".pyd")
+#: Folder metadata that macOS Finder writes (git-ignored): never importable, so it cannot shadow a module.
+_OS_METADATA = (".DS_Store",)
 
 
 class PreregError(RuntimeError):
@@ -80,7 +83,7 @@ def dirty_paths(root: Path, paths: Sequence[str] = ()) -> list[str]:
 def hidden_paths(root: Path) -> list[str]:
     """What git status cannot show: tracked files marked assume-unchanged or skip-worktree (their edits are
     invisible), and ignored files under the protected paths (an ignored module can shadow a tracked one);
-    bytecode caches are not counted."""
+    bytecode caches and Finder's ``.DS_Store`` are not counted."""
     flagged = [
         line[2:] for line in git(root, "ls-files", "-v").splitlines() if line[:1].islower() or line[:1] == "S"
     ]
@@ -90,7 +93,8 @@ def hidden_paths(root: Path) -> list[str]:
         if not line.startswith("!! "):
             continue
         path = line[3:].strip('"')
-        if "__pycache__" in PurePosixPath(path).parts or path.endswith(_BYTECODE):
+        posix = PurePosixPath(path)
+        if "__pycache__" in posix.parts or path.endswith(_BYTECODE) or posix.name in _OS_METADATA:
             continue
         ignored.append(path)
     return [*(f"{p} (changes hidden from git status)" for p in flagged), *(f"{p} (ignored)" for p in ignored)]
@@ -101,7 +105,8 @@ def require_clean_tree(root: Path) -> None:
     if dirty:
         shown = ", ".join(dirty[:5]) + (" …" if len(dirty) > 5 else "")
         raise PreregError(
-            f"the working tree is not clean ({len(dirty)} paths: {shown}); commit or stash first"
+            f"the working tree is not clean ({len(dirty)} paths: {shown}); commit or stash the changes and"
+            " delete untracked or ignored files first"
         )
 
 
