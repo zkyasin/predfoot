@@ -16,9 +16,9 @@ each broadcast frame from the pitch markings and adds three things to the positi
 Outputs follow the SkillCorner open-data JSONL schema at 10 fps, with the uncertainty as extra fields
 (`p90_radius_m`, `pos_cov_m2`, `calib_health`, `abstain`).
 
-> **Development results only.** Everything below comes from the six SN-GSR development games. The test games
-> (7, 8 and 11) stay locked until the preregistered run ([`docs/preregistration.md`](docs/preregistration.md)),
-> whose results will all be published here, failed criteria included.
+> **Test and development results.** The SN-GSR test games (7, 8 and 11) were evaluated once, as preregistered
+> ([`docs/preregistration.md`](docs/preregistration.md)); [the results](#preregistered-test-results) are all
+> published, the failed criterion included. Everything else comes from the six development games.
 >
 > Preregistration v1 frozen on 2026-11-01 at commit `a46c15aaaea4`: `docs/preregistration.md` SHA-256
 > `25bf24bf31da3027…`, artifacts digest `20f06142cba1522c…`, `docs/preregistration.lock.json` SHA-256
@@ -36,6 +36,35 @@ smoothing, and are not typical: over the clip the frame-to-frame jitter of the c
 0.52 m to 0.11 m (ratio 0.21, median over the dev clips 0.35), and the window is the clip's most jittery 15 s
 for the per-frame camera (0.73 m against 0.12 m; [`reports/minimap_demo.md`](reports/minimap_demo.md)).
 SoccerNet frames cannot be redistributed, so SoccerNet results appear only as metrics, plots and minimaps.
+
+## Preregistered test results
+
+The 49 clips of the locked test games, run once on 2026-11-01 with the models frozen on the dev games
+(`8640b9a`). Every number is in [`reports/test_run.md`](reports/test_run.md).
+
+| | Success criterion (preregistered) | Result | Verdict |
+|---|---|---|---|
+| P1 | Coverage of the 90 % regions, PTZ-smoothed camera, raw labels: the 95 % interval contains 90 % | 93.1 % [91.7, 94.5] | **not met** (over-coverage) |
+| P2 | Median region area / constant circle at the same level | 0.73 [0.70, 0.77] | **met** |
+| P3 | Failure-detection AUROC, gradient boosting − best dev single feature (`log_sigma_centre`) | 0.911 − 0.797 = +0.114 [+0.084, +0.150] | **met** |
+
+| Test games, raw labels as reference | Per-frame camera | PTZ-smoothed camera |
+|---|---|---|
+| Coverage of the 90 % regions [95 % CI] | 90.7 % [88.8, 92.6] | 93.1 % [91.7, 94.5] |
+| ... per test game (7, 8, 11) | 89.8, 89.3, 92.9 % | 89.8, 93.2, 96.0 % |
+| Median region area; constant circle | 4.69 m²; 13.98 m² | 5.17 m²; 7.03 m² |
+| Position error p50 / p90 / p99 (same player-frames) | 0.51 / 1.82 / 6.87 m | 0.40 / 1.16 / 4.00 m |
+| Frames more than 10 px from the annotated lines | 9.7 % | 2.4 % |
+| KPI proxy, distance / high-speed-running distance bias | +26.1 % / +72.4 % | +3.4 % / +5.5 % |
+
+Reading, after the fact (not preregistered): the smoothed camera's regions are conservative on these three
+games. The constant circle calibrated on the same dev errors over-covers as much (94.1 %), so the miss comes
+from the test games' errors being smaller than the dev games' (p90 1.16 m against 1.46 m on dev), not from the
+Mondrian bins; game 11 alone covers 96.0 %. The preregistration had stated this risk: on dev, the smoothed
+camera's coverage per held-out game ranged from 84.0 to 95.6 %, and a bootstrap over the clips of three games
+cannot capture the variability between games. The per-frame camera, the comparison arm, lands at 90.7 %.
+Smoothing keeps its other gains on the test games: smaller errors, a quarter of the line failures, and KPI
+biases below the reference's own noise floor (+17.0 % / +40.3 % on the smoothed camera's runs).
 
 ## Development results
 
@@ -129,8 +158,10 @@ calibration fails. The KPI modules run only in the evaluation scripts; a run's o
 
 - **Coverage holds on held-out games, on average.** Against the raw labels the regions cover the nominal
   level at 50 to 95 % and in each distance tercile (89.6 to 91.1 % at 90 %), but per held-out game coverage
-  ranges from 84.0 % (game 6) to 95.6 % (game 3) for the smoothed camera. Three test games could land
-  anywhere in that range.
+  ranges from 84.0 % (game 6) to 95.6 % (game 3) for the smoothed camera. On the three test games the
+  smoothed camera's regions over-cover (93.1 % [91.7, 94.5]), which fails the preregistered criterion, while
+  the per-frame camera's cover 90.7 %: the conformal guarantee is an average over games, and three games can
+  sit away from it.
 - **Neither reference is the truth.** The SN-GSR labels are the annotators' camera applied to the boxes; that
   camera sits 3.9 px (median) from the annotated lines ([`spike_s0.md`](reports/spike_s0.md)). The trusted line
   oracle is a homography fitted to the annotated lines of each frame, kept where it fits them within 3 px.
@@ -156,7 +187,8 @@ calibration fails. The KPI modules run only in the evaluation scripts; a run's o
   the measured proxy biases and fails its 5 fps check for the smoothed camera, so its budget is an upper bound,
   not predfoot's KPI error ([`kpi_budget_spectral.md`](reports/kpi_budget_spectral.md)). The per-player KPI
   cards are checked only on simulated errors ([`kpi_card.md`](reports/kpi_card.md)).
-- **Scope.** Six development games from one league and broadcast style; no claim beyond that.
+- **Scope.** Six development games and three test games from one league and broadcast style; no claim
+  beyond that.
 
 ## Quick start
 

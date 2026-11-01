@@ -116,6 +116,11 @@ the project uses [semantic versioning](https://semver.org/).
   lock. Stage C checks every label-free input and asks before its claim, saves the primary results as soon as
   they are computed, and writes `reports/test_run.md` even after a crash or an interruption. `--dry-run`
   rehearses the whole chain on dev clips with a scratch freeze.
+- Preregistered test results (`reports/test_run.md`): the frozen preregistration (`8640b9a`) run once on the
+  49 test clips on 2026-11-01. P1 not met: the PTZ-smoothed camera's 90 % regions cover 93.1 % [91.7, 94.5] of
+  the test positions (over-coverage; the per-frame camera, the comparison arm, covers 90.7 % [88.8, 92.6]).
+  P2 met: median area 0.73 of the constant circle's. P3 met: gradient boosting AUROC 0.911 against 0.797 for
+  the best dev single feature. The README now opens with them.
 
 ### Changed
 - The dev evaluation core moved from `scripts/eval_dev.py` into `predfoot.eval.positions`, the failure
