@@ -131,7 +131,8 @@ the project uses [semantic versioning](https://semver.org/).
   matter; `scripts/deploy_space.py` creates the static Space and uploads the build. The README is rewritten in
   plain words and its technical content moves, complete, to `docs/technical.md`. Web visuals in
   `assets/showcase/`: the hero loop on SoccerTrack v2 footage and the smoothing clip in a plain style (MP4,
-  poster and GIF).
+  poster and GIF), made by `scripts/render_hero.py` and `scripts/render_minimap_demo.py --style plain` and
+  described, with what they do not show, in `reports/showcase_visuals.md`.
 
 ### Changed
 - The dev evaluation core moved from `scripts/eval_dev.py` into `predfoot.eval.positions`, the failure

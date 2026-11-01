@@ -280,6 +280,11 @@ loads anything but Google Fonts from outside, or when the page and its media exc
 `scripts/deploy_space.py` creates the Space if needed and uploads `site/dist/` as one commit (it needs a Hugging
 Face token with write access).
 
+The media come from `scripts/render_hero.py` (the hero loop: predfoot on SoccerTrack v2 match 117093, an
+illustration with no reference to score against) and `scripts/render_minimap_demo.py --style plain` (the smoothing
+clip: an SN-GSR dev clip drawn on pitch diagrams). [`reports/showcase_visuals.md`](../reports/showcase_visuals.md)
+gives each file's command, commit and size, and what it does not show.
+
 ```bash
 uv run python scripts/build_site.py      # → site/dist/ (git-ignored)
 uv run python scripts/deploy_space.py    # → huggingface.co/spaces/Ya-SinZ/predfoot
