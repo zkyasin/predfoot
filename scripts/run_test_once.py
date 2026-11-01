@@ -20,9 +20,9 @@ another lock is never reused or evaluated.
   run with this interpreter), the network weights checked against the lock, keypoint and line networks into
   the lock's detection cache; every cache must carry the detection model version the artifacts were fitted
   on. Reads only the clip list (clip id, game) of ``index/clips.parquet``. Resumable.
-- B, camera, label-free: per-frame calibration of every cached test frame (seeded like dev, saved per clip,
-  resumable), then PTZ smoothing with the frozen noise parameters. The detection caches must still have the
-  SHA-256 recorded by stage A.
+- B, camera, label-free: per-frame calibration of every cached test frame (seeded like dev, saved per clip
+  with the SHA-256 of its detection cache, resumable), then PTZ smoothing with the frozen noise parameters.
+  The detection caches must still have the SHA-256 recorded by stage A.
 - C, evaluation, the only stage that reads test labels (``index/test/``), exactly once. Every label-free input
   is checked and loaded first (stage records, caches, saved cameras, clip lists, frame counts), and both label
   tables must exist with the columns stage C reads (their parquet schemas, no label); then stage C asks the
@@ -366,8 +366,9 @@ def check_stage_b(ctx: Context, info: dict[str, Any], art: fz.Artifacts) -> None
             raise pr.PreregError(f"{name} changed since stage B")
 
 
-def _load_part(ctx: Context, part: Path, clip_id: str) -> list[CalibResult] | None:
-    """A clip's saved per-frame calibrations, if readable and made under this lock; else None (recompute)."""
+def _load_part(ctx: Context, part: Path, clip_id: str, cache_sha: str) -> list[CalibResult] | None:
+    """A clip's saved per-frame calibrations, if readable and made under this lock from the detection cache
+    whose SHA-256 is ``cache_sha``; else None (recompute)."""
     if not part.exists():
         return None
     try:
@@ -377,6 +378,9 @@ def _load_part(ctx: Context, part: Path, clip_id: str) -> list[CalibResult] | No
         return None
     if meta.get("lock_sha256") != ctx.lock_sha or clip_id not in saved:
         ctx.log(f"  {clip_id}: part file of another lock, recomputed")
+        return None
+    if meta.get("cache_sha256") != cache_sha:
+        ctx.log(f"  {clip_id}: part file of another detection cache, recomputed")
         return None
     return saved[clip_id]
 
@@ -397,13 +401,19 @@ def stage_b(ctx: Context) -> None:
     for clip_id, split, game in ctx.clips:
         part = ctx.work_dir / "stage_b" / f"{clip_id}.npz"
         dets = _clip_dets(ctx, clip_id, split)
-        saved = _load_part(ctx, part, clip_id)
+        cache_sha = a["cache"][clip_id]["sha256"]  # verify_caches compared it with the file
+        saved = _load_part(ctx, part, clip_id, cache_sha)
+        cc: ps.ClipCalib | None = None
         if saved is not None:
-            cc = ps.calibrate_detections(clip_id, split, game, dets, saved)
-        else:
+            try:
+                cc = ps.calibrate_detections(clip_id, split, game, dets, saved)
+            except ValueError as err:  # not one saved calibration per cached frame
+                ctx.log(f"  {clip_id}: part file does not fit the detection cache ({err}), recomputed")
+        if cc is None:
             t0 = time.perf_counter()
             cc = ps.calibrate_detections(clip_id, split, game, dets)
-            ps.save_calib(part, [cc], {"clip": clip_id, "lock_sha256": ctx.lock_sha})
+            part_meta = {"clip": clip_id, "lock_sha256": ctx.lock_sha, "cache_sha256": cache_sha}
+            ps.save_calib(part, [cc], part_meta)
             rate = np.mean([r.ok for r in cc.results])
             seconds = time.perf_counter() - t0
             ctx.log(f"  {clip_id}: {len(cc.frames)} frames, {rate:.0%} calibrated ({seconds:.0f} s)")

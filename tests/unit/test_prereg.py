@@ -527,6 +527,34 @@ def test_a_truncated_part_file_is_recomputed(world):
     assert freeze_prereg.same_results(got[CLIP[0]], expected[CLIP[0]])
 
 
+@pytest.mark.parametrize("change", ["another cache", "one frame short"])
+def test_a_part_file_that_does_not_fit_the_detection_cache_is_recomputed(world, change):
+    run_test_once.stage_a(world)
+    run_test_once.stage_b(world)
+    part = world.work_dir / "stage_b" / f"{CLIP[0]}.npz"
+    expected, meta = ps.load_calib(part)
+    cache_sha = json.loads((world.work_dir / "stage_a.json").read_text())["cache"][CLIP[0]]["sha256"]
+    assert meta["cache_sha256"] == cache_sha
+    dets = ps.clip_detections(CLIP[0], CLIP[1], world.det_root)
+    cc = ps.calibrate_detections(CLIP[0], CLIP[1], CLIP[2], dets, expected[CLIP[0]])
+    if change == "another cache":
+        ps.save_calib(part, [cc], meta | {"cache_sha256": "0" * 64})
+        message = "part file of another detection cache"
+    else:
+        short = ps.ClipCalib(
+            cc.clip_id, cc.game, cc.split, cc.frames[:-1], cc.results[:-1], cc.duplicate[:-1], []
+        )
+        ps.save_calib(part, [short], meta)
+        message = "part file does not fit the detection cache"
+    (world.work_dir / "stage_b.json").unlink()
+    ctx = _fresh(world)
+    run_test_once.stage_b(ctx)  # resumes instead of failing until the part is deleted by hand
+    assert any(message in line for line in ctx.log_lines)
+    got, meta = ps.load_calib(part)
+    assert meta["cache_sha256"] == cache_sha
+    assert freeze_prereg.same_results(got[CLIP[0]], expected[CLIP[0]])
+
+
 @pytest.mark.parametrize("change", ["cache", "extra frame", "params", "clip list", "camera file"])
 def test_stage_c_checks_every_label_free_input_before_the_claim(world, monkeypatch, change):
     run_test_once.stage_a(world)
