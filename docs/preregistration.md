@@ -183,11 +183,14 @@ All are reported; none is a success criterion.
    checks that both label tables exist with the columns it reads and some rows (their schemas and row counts,
    no label value), asks the owner to confirm (unless run with `--yes`), then writes its markers before
    reading any label, and runs once: a second stage C is refused, even after a crash. The success criteria and
-   the primary endpoints are saved as soon as they are computed; a secondary endpoint that fails is reported
+   every region and failure-detection result (the primary endpoints and secondary analyses 1 to 6 and 8) are
+   saved as soon as they are computed; the position errors, the residual failures and the KPI proxy
+   (secondary analyses 7, 9 and 10) are computed after them, each on its own, and one that fails is reported
    as a deviation, with every other result. A crash or an interruption after the markers (an exception, Ctrl-C
    or SIGTERM) still writes `reports/test_run.md`, naming the failure, with the results saved before it; a
-   closed terminal does not stop stage C; after a hard kill (SIGKILL) or a power loss only the markers remain,
-   and the owner writes the failure into `reports/test_run.md` by hand.
+   closed terminal does not stop stage C. After a hard kill (SIGKILL) or a power loss no report is written:
+   the markers remain, with the saved results if the criteria were saved before it, and the owner writes the
+   failure and any saved results into `reports/test_run.md` by hand.
 4. Every result goes into `reports/test_run.md`, failed criteria included. Nothing is re-run or re-analysed
    after stage C; any deviation from this text is listed in the report.
 
