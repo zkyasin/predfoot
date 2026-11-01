@@ -347,9 +347,14 @@ class FakeHub:
         return type("CommitInfo", (), {"commit_url": "https://huggingface.co/spaces/o/n/commit/abc"})()
 
 
-def test_deploy_creates_the_static_space_and_replaces_its_files(tmp_path):
+def built(tmp_path, page=PAGE):
     dist = tmp_path / "dist"
-    build_site.write(build_site.plan(PAGE, media_dir(tmp_path)), dist)
+    build_site.write(build_site.plan(page, media_dir(tmp_path)), dist)
+    return dist
+
+
+def test_deploy_creates_the_static_space_and_replaces_its_files(tmp_path):
+    dist = built(tmp_path)
     hub = FakeHub()
     url = deploy.deploy(dist, "owner/name", api=hub)
     assert url.endswith("/commit/abc")
@@ -367,10 +372,126 @@ def test_deploy_creates_the_static_space_and_replaces_its_files(tmp_path):
     assert upload_kwargs["repo_type"] == "space"
     assert upload_kwargs["folder_path"] == dist
     assert upload_kwargs["delete_patterns"] == "*"
+    assert upload_kwargs["ignore_patterns"] == [".*", "*/.*"]
 
 
 def test_deploy_refuses_an_unbuilt_folder(tmp_path):
     hub = FakeHub()
-    with pytest.raises(FileNotFoundError, match=r"build_site\.py"):
+    with pytest.raises(deploy.DeployError, match=r"build_site\.py first"):
         deploy.deploy(tmp_path, "owner/name", api=hub)
     assert hub.calls == []
+
+
+def test_deploy_refuses_a_folder_the_build_did_not_write(tmp_path):
+    (tmp_path / "index.html").write_text("<p>hand-made</p>")
+    (tmp_path / "README.md").write_text("---\nsdk: static\n---\n")
+    hub = FakeHub()
+    with pytest.raises(deploy.DeployError, match=r"not written by scripts/build_site\.py"):
+        deploy.deploy(tmp_path, "owner/name", api=hub)
+    assert hub.calls == []
+
+
+def test_the_generator_mark_is_the_one_the_build_writes():
+    assert deploy.GENERATOR_META in build_site.wrap(PAGE)
+
+
+def test_external_links_are_the_pages_links_to_other_sites():
+    page = PAGE + (
+        '<a href="//example.org/a" target="_blank">a</a><a href="https://github.com/zkyasin/predfoot" '
+        'target="_blank">again</a><a href="mailto:x@example.org">mail</a>'
+    )
+    links = deploy.external_links(build_site.wrap(page))
+    assert links == ["https://github.com/zkyasin/predfoot", "https://example.org/a"]
+
+
+def test_preflight_lists_stale_files_and_links_that_are_not_public(tmp_path):
+    dist = built(tmp_path)
+    (dist / ".DS_Store").write_bytes(b"finder")  # hidden files are neither compared nor uploaded
+    fresh = {p.relative_to(dist).as_posix(): p.read_bytes() for p in dist.rglob("*") if p.is_file()}
+    del fresh[".DS_Store"]
+    answers = {"https://github.com/zkyasin/predfoot": 200}
+    assert deploy.preflight(dist, expected=fresh, status=answers.__getitem__) == []
+    fresh["assets/clip.mp4"] = b"newer"
+    fresh["assets/new.jpg"] = b"added"
+    (dist / "assets" / "old.jpg").write_bytes(b"stale")
+    answers["https://github.com/zkyasin/predfoot"] = 404
+    problems = deploy.preflight(dist, expected=fresh, status=answers.__getitem__)
+    assert problems == [
+        "stale build, run scripts/build_site.py: assets/new.jpg: missing",
+        "stale build, run scripts/build_site.py: assets/old.jpg: not in a fresh build",
+        "stale build, run scripts/build_site.py: assets/clip.mp4: differs from a fresh build",
+        "link not public yet: https://github.com/zkyasin/predfoot: HTTP 404",
+    ]
+    assert deploy.preflight(dist, expected=None, check_links=False) == []
+
+
+def test_the_fresh_build_is_what_build_site_writes(tmp_path):
+    out = tmp_path / "dist"
+    site = build_site.plan(build_site.PAGE.read_text(encoding="utf-8"), build_site.MEDIA)
+    build_site.write(site, out)
+    assert deploy.stale_files(out, deploy.fresh_build()) == []
+
+
+def test_link_status_asks_anonymously_and_falls_back_to_get(monkeypatch):
+    import urllib.error
+
+    seen = []
+
+    class Answer:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def fake_urlopen(request, timeout):
+        seen.append((request.get_method(), request.full_url, request.get_header("Authorization")))
+        if request.get_method() == "HEAD":
+            raise urllib.error.HTTPError(request.full_url, 405, "no HEAD", {}, None)
+        return Answer()
+
+    monkeypatch.setattr(deploy.urllib.request, "urlopen", fake_urlopen)
+    assert deploy.link_status("https://example.org/x") == 200
+    assert seen == [("HEAD", "https://example.org/x", None), ("GET", "https://example.org/x", None)]
+
+    def private(request, timeout):
+        raise urllib.error.HTTPError(request.full_url, 404, "not found", {}, None)
+
+    monkeypatch.setattr(deploy.urllib.request, "urlopen", private)
+    assert deploy.link_status("https://github.com/o/private") == 404
+
+    def offline(request, timeout):
+        raise urllib.error.URLError("offline")
+
+    monkeypatch.setattr(deploy.urllib.request, "urlopen", offline)
+    assert deploy.link_status("https://example.org/x") == 0
+
+
+def test_git_sha_marks_uncommitted_changes(monkeypatch):
+    outputs = {"rev-parse": "abc1234\n", "status": " M site/page.html\n"}
+
+    def fake_run(cmd, **kwargs):
+        return type("Done", (), {"stdout": outputs[cmd[1]]})()
+
+    monkeypatch.setattr(deploy.subprocess, "run", fake_run)
+    assert deploy.git_sha() == "abc1234-dirty"
+    outputs["status"] = ""
+    assert deploy.git_sha() == "abc1234"
+
+
+def test_cli_refuses_links_that_are_not_public_unless_told_to_skip(tmp_path, monkeypatch):
+    dist = built(tmp_path)
+    hub = FakeHub()
+    monkeypatch.setattr(deploy, "HfApi", lambda: hub)
+    monkeypatch.setattr(deploy, "link_status", lambda url: 404)
+    monkeypatch.setattr(deploy.urllib.request, "urlopen", lambda *a, **k: pytest.fail("no network in tests"))
+    runner = CliRunner()
+    refused = runner.invoke(deploy.app, ["--dist", str(dist), "--repo-id", "owner/name"])
+    assert refused.exit_code == 1
+    assert "link not public yet: https://github.com/zkyasin/predfoot: HTTP 404" in refused.output
+    assert hub.calls == []
+    skipped = runner.invoke(deploy.app, ["--dist", str(dist), "--repo-id", "owner/name", "--skip-link-check"])
+    assert skipped.exit_code == 0, skipped.output
+    assert [name for name, _ in hub.calls] == ["create_repo", "upload_folder"]
