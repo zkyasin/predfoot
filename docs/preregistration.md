@@ -103,8 +103,8 @@ counted and reported next to its coverage, with that coverage also computed coun
 (player-frames pooled, and clips weighted equally); for the primary camera and reference this is P1's coverage
 counting them as misses. Frames that only the smoother fills (raw calibration failed) are reported apart. P2
 and P3 are decided on the point estimate; their intervals are reported. A criterion whose estimate cannot be
-computed (for P1 and P2, no headline rows; for P2 also a region area that is not finite, which makes the
-median not finite; for P3, test frames without both failures and non-failures) is reported as not evaluable.
+computed (for P1 and P2, no headline rows; for P2 also a median region area that is not finite; for P3, test
+frames without both failures and non-failures) is reported as not evaluable.
 
 P1 pools the headline player-frames, as every dev coverage quoted here does. The grouped conformal quantile
 weighs each calibration clip equally, so the coverage with every clip weighted equally (the mean of the clips'
@@ -162,12 +162,12 @@ All are reported; none is a success criterion.
 1. The owner reviewed this text and settled every choice (2026-11-01).
 2. `scripts/freeze_prereg.py` (clean working tree only) fits every frozen artifact on dev only (smoother
    noise, conformal models, detectors) into `artifacts/prereg/v1/`, writes `docs/preregistration.lock.json`
-   and prints the line to quote in README.md; a freeze that fails leaves neither artifacts nor a lock. The
-   lock records the SHA-256 of this file and of every artifact, the code commit, the configuration digests,
-   the detection model version of the dev caches, the SHA-256 of the network weights, the interpreter and
-   package versions (torch included), and the test clip list (count and digest of the (clip id, game) pairs of
-   `index/clips.parquet`). The artifacts and the lock are committed together, in one commit that holds nothing
-   else (the freeze commit).
+   and prints the line to quote in README.md; a freeze that stops on an error leaves neither artifacts nor a
+   lock. The lock records the SHA-256 of this file and of every artifact, the code commit, the configuration
+   digests, the detection model version of the dev caches, the SHA-256 of the network weights, the interpreter
+   and package versions (torch included), and the test clip list (count and digest of the (clip id, game)
+   pairs of `index/clips.parquet`). The artifacts and the lock are committed together, in one commit that
+   holds nothing else (the freeze commit).
 3. `scripts/run_test_once.py` refuses to run unless the lock matches: the hashes of this file and of the
    artifacts; the lock anchored in its freeze commit (lock, preregistration and artifacts tracked, unchanged
    since that commit, which adds only them to the lock's code commit); no change under `src/`, `scripts/`,
@@ -180,12 +180,14 @@ All are reported; none is a success criterion.
    calibration, smoothing with the frozen noise parameters) read no label and resume after a crash. Their
    outputs are tied to the lock: a re-freeze starts them from nothing, and stage C refuses outputs of another
    lock. Stage C, the only stage that reads test labels, first checks and loads every label-free input and
-   checks that both label tables exist with the columns it reads (their schemas, no label), asks the owner to
-   confirm, then writes its markers before reading any label, and runs once: a second stage C is refused, even
-   after a crash. A crash or an interruption after the markers (an exception, Ctrl-C, SIGTERM or SIGHUP) still
-   writes `reports/test_run.md`, naming the failure, with every result computed before it; after a hard kill
-   (SIGKILL) or a power loss only the markers remain, and the owner writes the failure into
-   `reports/test_run.md` by hand.
+   checks that both label tables exist with the columns it reads and some rows (their schemas and row counts,
+   no label value), asks the owner to confirm (unless run with `--yes`), then writes its markers before
+   reading any label, and runs once: a second stage C is refused, even after a crash. The success criteria and
+   the primary endpoints are saved as soon as they are computed; a secondary endpoint that fails is reported
+   as a deviation, with every other result. A crash or an interruption after the markers (an exception, Ctrl-C
+   or SIGTERM) still writes `reports/test_run.md`, naming the failure, with the results saved before it; a
+   closed terminal does not stop stage C; after a hard kill (SIGKILL) or a power loss only the markers remain,
+   and the owner writes the failure into `reports/test_run.md` by hand.
 4. Every result goes into `reports/test_run.md`, failed criteria included. Nothing is re-run or re-analysed
    after stage C; any deviation from this text is listed in the report.
 
