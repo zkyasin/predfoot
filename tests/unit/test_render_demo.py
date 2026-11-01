@@ -1,4 +1,5 @@
 import importlib.util
+import shutil
 
 import numpy as np
 import polars as pl
@@ -94,3 +95,42 @@ def test_missing_inputs_are_listed_before_anything_runs(tmp_path, monkeypatch):
     names = {p.name for p in missing}
     assert {"117093_camera_intrinsics.npz", "117093.txt", "117093.mp4", "SV_kp", "SV_lines"} <= names
     assert calibration not in missing
+
+
+def test_ffmpeg_command_writes_web_h264_without_audio(tmp_path):
+    cmd = render_demo.ffmpeg_command("ffmpeg", tmp_path / "a.mp4", (640, 360), 25.0, 28, tune="animation")
+    text = " ".join(cmd)
+    assert "-s 640x360" in text
+    assert "-r 25 -i -" in text
+    for part in (
+        "-an",
+        "-c:v libx264",
+        "-crf 28",
+        "-tune animation",
+        "-pix_fmt yuv420p",
+        "-movflags +faststart",
+    ):
+        assert part in text
+    assert cmd[-1] == str(tmp_path / "a.mp4")
+
+
+def test_mp4_writer_refuses_odd_sizes(tmp_path):
+    with pytest.raises(ValueError, match="even"):
+        render_demo.Mp4Writer(tmp_path / "a.mp4", (641, 360), 25.0, ffmpeg="ffmpeg")
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
+def test_mp4_is_written_only_when_complete(tmp_path, rng):
+    frames = [rng.integers(0, 255, (64, 96, 3), dtype=np.uint8) for _ in range(5)]
+    path = tmp_path / "out" / "a.mp4"
+    size = render_demo.write_mp4(frames, path, fps=5.0, crf=30)
+    data = path.read_bytes()
+    assert size == len(data)
+    assert data[4:8] == b"ftyp"
+    assert not list(path.parent.glob("*.part"))
+    with (
+        pytest.raises(ValueError, match="expected"),
+        render_demo.Mp4Writer(tmp_path / "b.mp4", (96, 64), 5.0) as w,
+    ):
+        w.write(frames[0][:32])
+    assert not list(tmp_path.glob("b.mp4*"))

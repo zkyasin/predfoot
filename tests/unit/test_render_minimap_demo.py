@@ -162,3 +162,62 @@ def test_main_writes_a_small_animation_and_a_still(tmp_path, rng):
         assert im.info["duration"] == 200
     assert gif.stat().st_size < 1_000_000
     assert png.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_plain_style_writes_the_showcase_files_and_no_report(tmp_path, rng, monkeypatch):
+    none = write_run(tmp_path / "none", rng, smoothed=False)
+    ptz = write_run(tmp_path / "ptz", rng, smoothed=True)
+    encoded = {}
+
+    def fake_mp4(frames, path, fps, **kwargs):
+        encoded.update(n=len(frames), fps=fps, shape=frames[0].shape, kwargs=kwargs)
+        path.write_bytes(b"mp4")
+        return 3
+
+    monkeypatch.setattr(demo.render_demo, "write_mp4", fake_mp4)
+    out = {k: tmp_path / f"smoothing.{k}" for k in ("gif", "mp4", "jpg")}
+    report = tmp_path / "report.md"
+    args = [
+        "--none-run",
+        str(none),
+        "--ptz-run",
+        str(ptz),
+        "--seconds",
+        "2",
+        "--start",
+        "0",
+        "--style",
+        "plain",
+    ]
+    args += ["--gif", str(out["gif"]), "--mp4", str(out["mp4"]), "--poster", str(out["jpg"])]
+    args += ["--report", str(report), "--width", "6"]
+    result = CliRunner().invoke(demo.app, args)
+    assert result.exit_code == 0, result.output
+    assert not report.exists()
+    assert f"clip {STEADY} (game 2)" in result.output
+    with Image.open(out["gif"]) as im:
+        assert im.n_frames == 10
+        assert im.info["duration"] == 200
+    assert encoded["n"] == 10
+    assert encoded["fps"] == 5.0
+    h, w, _ = encoded["shape"]
+    assert h % 2 == 0
+    assert w % 2 == 0
+    assert out["jpg"].read_bytes()[:2] == b"\xff\xd8"
+
+
+def test_plain_panels_have_plain_titles_and_words_and_no_numbers(tmp_path, rng):
+    from matplotlib.figure import Figure
+
+    run = demo.load_run(write_run(tmp_path / "none", rng, smoothed=False))
+    frame = 1 + 5 * np.arange(20)
+    window = (-50.0, 50.0, -35.0, 35.0)
+    cases = [(0, "none", "Frame by frame", None), (7, "none", "Frame by frame", "no position"),
+             (UNLABELLED_K, "ptz", "Smoothed over time", "not checked")]  # fmt: skip
+    for k, cam, title, word in cases:
+        ax = Figure().subplots()
+        demo.draw_panel(ax, cam, demo.frame_view(run, "g1-c0", int(frame[k])), window, plain=True)
+        assert ax.get_title(loc="left") == title
+        texts = [t.get_text() for t in ax.texts]
+        assert texts == ([] if word is None else [word])
+        assert not any(c.isdigit() for t in [title, *texts] for c in t)
