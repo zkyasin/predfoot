@@ -298,11 +298,10 @@ def test_the_draft_markers_are_refused():
     pr.require_final_text(FINAL_TEXT)
 
 
-def test_the_current_preregistration_is_version_1_and_still_a_draft():
+def test_the_current_preregistration_is_version_1_and_final():
     text = (REPO_ROOT / pr.PREREG_PATH).read_text()
     assert pr.prereg_version(text) == 1
-    with pytest.raises(pr.PreregError):
-        pr.require_final_text(text)
+    pr.require_final_text(text)  # no draft marker: the freeze accepts it
 
 
 def test_a_second_evaluation_is_refused(tmp_path):
