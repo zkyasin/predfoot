@@ -154,7 +154,8 @@ All are reported; none is a success criterion.
 - Intervals: 95 % percentile bootstrap over clips, 2,000 draws, one generator seeded with 0 for the whole
   evaluation, used in a fixed order. Each draw resamples the 49 test clips with replacement, across the three
   games: the number of clips per game varies between draws, and games are never resampled. A per-game interval
-  resamples that game's clips. The dev intervals quoted here were drawn the same way, over the dev clips.
+  resamples that game's clips. The dev intervals quoted here resample the dev clips the same way, across
+  games.
 
 ## 7. Procedure
 
