@@ -24,6 +24,11 @@ Usage:
     uv run python scripts/render_minimap_demo.py --none-run runs/<per-frame run> --ptz-run runs/<ptz run>
 writes assets/minimap_demo.gif (5 fps) and assets/minimap_demo.png (the frame of the window where the
 per-frame camera's median error is largest).
+
+``--style plain`` draws the same clip, window and frames for a general audience (the showcase page and the
+README): panels titled "Frame by frame" and "Smoothed over time", a three-word legend, no counts, areas or
+subtitles, larger type; the two honest states stay (greyed "no position", hatched "not checked"). It writes
+assets/showcase/smoothing.gif, .mp4 (H.264, needs ffmpeg) and .jpg (the same still) and no report.
 """
 
 from __future__ import annotations
@@ -65,6 +70,7 @@ def load_script(name: str) -> ModuleType:
 
 
 eval_dev = load_script("eval_dev")
+render_demo = load_script("render_demo")
 
 app = typer.Typer(add_completion=False)
 CAMERAS = {"none": "Per-frame camera", "ptz": "PTZ-smoothed camera"}
@@ -80,6 +86,12 @@ DEFAULT_REPORT = Path("reports/minimap_demo.md")
 #: Panel states: positions with their regions and labels; no position published; positions published on a
 #: frame without usable labels (not evaluated).
 SHOWN, ABSTAINS, UNLABELLED = "shown", "abstains", "unlabelled"
+#: The plain style (--style plain): titles, words on the veils, outputs.
+PLAIN_TITLES = {"none": "Frame by frame", "ptz": "Smoothed over time"}
+PLAIN_VEILS = {ABSTAINS: "no position", UNLABELLED: "not checked"}
+PLAIN_GIF = Path("assets/showcase/smoothing.gif")
+PLAIN_MP4 = Path("assets/showcase/smoothing.mp4")
+PLAIN_POSTER = Path("assets/showcase/smoothing.jpg")
 
 
 @dataclass
@@ -205,13 +217,15 @@ def git_sha() -> str:
     ).stdout.strip()
 
 
-def draw_panel(ax: Axes, cam: str, view: View, window: tuple[float, ...]) -> None:
+def draw_panel(ax: Axes, cam: str, view: View, window: tuple[float, ...], plain: bool = False) -> None:
     """One camera at one frame: pitch, calibrated 90 % regions, predictions, labels; a grey veil if it
-    abstains, a hatched one if its positions cannot be checked."""
+    abstains, a hatched one if its positions cannot be checked. ``plain``: larger marks, a plain title and
+    plain words on the veils, no status line."""
     ax.set_facecolor(SURFACE)
     draw_pitch(ax)
     colour = COLOURS[cam]
     rows = view.rows
+    dot, label_dot = (6.0, 3.2) if plain else (3.6, 1.8)
     if view.state == SHOWN:
         for r in rows.iter_rows(named=True):
             cov = np.array([[r["c00"], r["c01"]], [r["c01"], r["c11"]]])
@@ -232,12 +246,12 @@ def draw_panel(ax: Axes, cam: str, view: View, window: tuple[float, ...]) -> Non
             ax.add_patch(
                 Ellipse(centre, width, height, angle=angle, fill=False, edgecolor=colour, lw=0.7, zorder=2)
             )
-        ax.plot(rows["x_pred"], rows["y_pred"], "o", ms=3.6, color=colour, mec=SURFACE, mew=0.6, zorder=3)
+        ax.plot(rows["x_pred"], rows["y_pred"], "o", ms=dot, color=colour, mec=SURFACE, mew=0.6, zorder=3)
         ax.plot(
             rows["x_pred"] - rows["ex_lab"],
             rows["y_pred"] - rows["ey_lab"],
             "o",
-            ms=1.8,
+            ms=label_dot,
             color=TEXT,
             zorder=4,
         )
@@ -248,6 +262,11 @@ def draw_panel(ax: Axes, cam: str, view: View, window: tuple[float, ...]) -> Non
     ax.set_yticks([])
     for spine in ax.spines.values():
         spine.set_edgecolor(VEIL)
+    if plain:
+        if view.state != SHOWN:
+            draw_veil(ax, view.state, PLAIN_VEILS[view.state], fontsize=18)
+        ax.set_title(PLAIN_TITLES[cam], loc="left", fontsize=22, color=TEXT, fontweight="bold", pad=7)
+        return
     if view.state == SHOWN:
         inside, n, area = frame_stats(rows)
         status = f"{inside} / {n} labels inside their region · median area {area:.1f} m²"
@@ -256,27 +275,35 @@ def draw_panel(ax: Axes, cam: str, view: View, window: tuple[float, ...]) -> Non
     else:
         if view.state == ABSTAINS:
             status, word = "abstains: no calibrated camera", "abstains"
-            veil = Rectangle((0, 0), 1, 1, facecolor=VEIL, alpha=0.85, edgecolor="none")
         else:
             status, word = "published, no labels to check", "not evaluated"
             if np.isfinite(view.line_px):
                 status += f" · line reprojection {view.line_px:.0f} px"
-            veil = Rectangle((0, 0), 1, 1, facecolor=SURFACE, alpha=0.8, hatch="////", edgecolor=PITCH_LINE)
-        veil.set(transform=ax.transAxes, zorder=5)
-        ax.add_patch(veil)
-        ax.text(
-            0.5,
-            0.5,
-            word,
-            transform=ax.transAxes,
-            ha="center",
-            va="center",
-            fontsize=11,
-            color=TEXT_SECONDARY,
-            zorder=6,
-            bbox={"facecolor": SURFACE, "edgecolor": "none", "pad": 2.0} if view.state != ABSTAINS else None,
-        )
+        draw_veil(ax, view.state, word)
     ax.set_title(f"{CAMERAS[cam]}\n{status}", loc="left", fontsize=8.5, color=TEXT, linespacing=1.4)
+
+
+def draw_veil(ax: Axes, state: str, word: str, fontsize: float = 11) -> None:
+    """Grey veil (no position published) or hatched veil (positions published, nothing to check them
+    against) over a panel, with ``word`` in its middle."""
+    if state == ABSTAINS:
+        veil = Rectangle((0, 0), 1, 1, facecolor=VEIL, alpha=0.85, edgecolor="none")
+    else:
+        veil = Rectangle((0, 0), 1, 1, facecolor=SURFACE, alpha=0.8, hatch="////", edgecolor=PITCH_LINE)
+    veil.set(transform=ax.transAxes, zorder=5)
+    ax.add_patch(veil)
+    ax.text(
+        0.5,
+        0.5,
+        word,
+        transform=ax.transAxes,
+        ha="center",
+        va="center",
+        fontsize=fontsize,
+        color=TEXT_SECONDARY,
+        zorder=6,
+        bbox={"facecolor": SURFACE, "edgecolor": "none", "pad": 2.0} if state != ABSTAINS else None,
+    )
 
 
 def render_frame(
@@ -286,11 +313,30 @@ def render_frame(
     game: int,
     frame: int,
     window: tuple[float, ...],
+    plain: bool = False,
 ) -> Image.Image:
     fig.clear()
     axes = fig.subplots(1, 2)
     for ax, (cam, run) in zip(axes, runs.items(), strict=True):
-        draw_panel(ax, cam, frame_view(run, clip, frame), window)
+        draw_panel(ax, cam, frame_view(run, clip, frame), window, plain=plain)
+    if plain:
+        handles = [
+            Line2D(
+                [],
+                [],
+                marker="o",
+                ls="none",
+                ms=9,
+                color=TEXT_SECONDARY,
+                mec=SURFACE,
+                label="estimated position",
+            ),
+            Patch(facecolor=TEXT_SECONDARY, alpha=0.16, edgecolor=TEXT_SECONDARY, label="90 % zone"),
+            Line2D([], [], marker="o", ls="none", ms=4.5, color=TEXT, label="true position"),
+        ]
+        fig.legend(handles=handles, loc="outside lower center", ncols=3, frameon=False, fontsize=16,
+                   handletextpad=0.4, columnspacing=1.6)  # fmt: skip
+        return _image(fig)
     t = (frame - 1) / NATIVE_FPS
     fig.suptitle(
         f"SN-GSR dev clip {clip} (game {game}, quantiles fitted on the five other games) · t = {t:4.1f} s",
@@ -305,6 +351,10 @@ def render_frame(
         Patch(facecolor=SURFACE, edgecolor=PITCH_LINE, hatch="////", label="not evaluated (no labels)"),
     ]
     fig.legend(handles=handles, loc="outside lower center", ncols=5, frameon=False, fontsize=7.5)
+    return _image(fig)
+
+
+def _image(fig: Figure) -> Image.Image:
     canvas = fig.canvas
     assert isinstance(canvas, FigureCanvasAgg)
     canvas.draw()
@@ -326,6 +376,19 @@ def save_gif(images: list[Image.Image], path: Path, fps: float, colours: int = 6
     atomic_write_bytes(path, buffer.getvalue())
 
 
+def write_plain(
+    images: list[Image.Image], still: Image.Image, gif: Path, mp4: Path, poster: Path, ffmpeg: str | None
+) -> None:
+    """The plain style's MP4 (H.264, the GIF's 5 fps) and JPEG poster; the GIF is already written."""
+    frames = [np.asarray(im)[..., ::-1] for im in images]  # RGB → BGR
+    render_demo.write_mp4(frames, mp4, NATIVE_FPS / STEP_FRAMES, crf=24, tune="animation", ffmpeg=ffmpeg)
+    buffer = io.BytesIO()
+    still.save(buffer, format="JPEG", quality=88, optimize=True)
+    atomic_write_bytes(poster, buffer.getvalue())
+    for path in (gif, mp4, poster):
+        typer.echo(f"{path} ({path.stat().st_size / 1e3:.0f} kB)")
+
+
 SELECTION = (
     ("speed_ptz", "Image speed of the smoothed camera (px/s, median)", "{:.0f}"),
     ("step_none", "Common-mode step RMS, per-frame camera (m)", "{:.2f}"),
@@ -345,11 +408,18 @@ def main(
     clip: str = typer.Option("auto", help="Dev clip id, or auto (see the module docstring)."),
     start: str = typer.Option("auto", help="First second of the window, or auto."),
     seconds: float = typer.Option(15.0, help="Length of the window (s)."),
-    gif: Path = typer.Option(DEFAULT_GIF, help="Animation path."),  # noqa: B008
-    png: Path = typer.Option(DEFAULT_PNG, help="Still path."),  # noqa: B008
-    report: Path = typer.Option(DEFAULT_REPORT, help="Markdown report of the choices."),  # noqa: B008
+    gif: Path | None = typer.Option(None, help="Animation path (default by style)."),  # noqa: B008
+    png: Path | None = typer.Option(None, help="Still path, report style (PNG)."),  # noqa: B008
+    report: Path = typer.Option(DEFAULT_REPORT, help="Markdown report of the choices (report style)."),  # noqa: B008
     width: float = typer.Option(8.8, help="Figure width (inches, 100 dpi)."),
+    style: str = typer.Option("report", help="report (the dev figure) or plain (showcase, no numbers)."),
+    mp4: Path | None = typer.Option(None, help="H.264 animation path, plain style (default by style)."),  # noqa: B008
+    poster: Path | None = typer.Option(None, help="Still path, plain style (JPEG; default by style)."),  # noqa: B008
+    ffmpeg: str | None = typer.Option(None, help="ffmpeg executable for the MP4 (default: on PATH)."),
 ) -> None:
+    if style not in ("report", "plain"):
+        raise typer.BadParameter(f"--style {style}: expected report or plain")
+    plain = style == "plain"
     runs = {"none": load_run(none_run), "ptz": load_run(ptz_run)}
     table = clip_table(runs)
     chosen = choose_clip(table) if clip == "auto" else clip
@@ -368,10 +438,12 @@ def main(
     )
     window_frames = frames[k0 : k0 + n]
     t0, t1 = (window_frames[0] - 1) / NATIVE_FPS, (window_frames[-1] - 1) / NATIVE_FPS
-    fig = Figure(figsize=(width, width * 0.47), dpi=100, facecolor=SURFACE, layout="constrained")
+    height = round(width * 0.5 * 50) / 50 if plain else width * 0.47  # plain: even pixel sizes, for H.264
+    fig = Figure(figsize=(width, height), dpi=100, facecolor=SURFACE, layout="constrained")
     FigureCanvasAgg(fig)
     window = crop(runs, chosen, window_frames)
-    images = [render_frame(fig, runs, chosen, game, int(fr), window) for fr in window_frames]
+    images = [render_frame(fig, runs, chosen, game, int(fr), window, plain=plain) for fr in window_frames]
+    gif = gif or (PLAIN_GIF if plain else DEFAULT_GIF)
     save_gif(images, gif, fps=NATIVE_FPS / STEP_FRAMES)
     # The still: the frame of the window where the per-frame camera's median error is largest.
     err = (
@@ -381,8 +453,16 @@ def main(
         .sort("e", descending=True)
     )
     still = int(err["frame"][0]) if err.height else int(window_frames[len(window_frames) // 2])
+    still_image = images[int(np.flatnonzero(window_frames == still)[0])]
+    if plain:
+        write_plain(images, still_image, gif, mp4 or PLAIN_MP4, poster or PLAIN_POSTER, ffmpeg)
+        typer.echo(
+            f"plain style: clip {chosen} (game {game}), window {t0:.1f}-{t1:.1f} s, {len(images)} frames"
+        )
+        return
+    png = png or DEFAULT_PNG
     buffer = io.BytesIO()
-    images[int(np.flatnonzero(window_frames == still)[0])].save(buffer, format="PNG", optimize=True)
+    still_image.save(buffer, format="PNG", optimize=True)
     atomic_write_bytes(png, buffer.getvalue())
 
     command = (
