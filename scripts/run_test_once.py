@@ -1,6 +1,6 @@
 """The single preregistered evaluation on the locked SN-GSR test games (ticket T6.1).
 
-    uv run python scripts/run_test_once.py              # stages A, B, C in order (A and B resume)
+    uv run python scripts/run_test_once.py              # stages A, B, C in order (A and B resume, C asks)
     uv run python scripts/run_test_once.py --stage b    # one stage
     uv run python scripts/run_test_once.py --dry-run --calib-from runs/<per-frame dev run>/calib.npz
 
@@ -24,13 +24,14 @@ of another lock is never reused or evaluated.
   SHA-256 recorded by stage A.
 - C, evaluation, the only stage that reads test labels (``index/test/``), exactly once. Every label-free input
   is checked and loaded first (stage records, caches, saved cameras, clip lists, frame counts), and both label
-  tables must exist with the columns stage C reads (their parquet schemas, no label); then the markers
-  (``PREDFOOT_DATA_DIR/test_once/`` and ``runs/test_once/``) are written before any label is read, so a second
-  C is refused even after a crash. Every endpoint for both cameras and both references, the success criteria
-  evaluated as written, into ``reports/test_run.md`` (aggregate numbers) and the lock's run folder (local). A
-  crash or an interruption after the markers (an exception, Ctrl-C, SIGTERM or SIGHUP) still writes
-  ``reports/test_run.md``, naming the failure, with every result computed before it; a hard kill (SIGKILL) or
-  a power loss leaves only the markers.
+  tables must exist with the columns stage C reads (their parquet schemas, no label); then stage C asks the
+  owner to confirm (``--yes`` skips the question) and writes the markers (``PREDFOOT_DATA_DIR/test_once/``
+  and ``runs/test_once/``) before any label is read, so a second C is refused even after a crash. Every
+  endpoint for both cameras and both references, the success criteria evaluated as written, into
+  ``reports/test_run.md`` (aggregate numbers) and the lock's run folder (local). A crash or an interruption
+  after the markers (an exception, Ctrl-C, SIGTERM or SIGHUP) still writes ``reports/test_run.md``, naming
+  the failure, with every result computed before it; a hard kill (SIGKILL) or a power loss leaves only the
+  markers.
 
 ``--dry-run`` exercises the same chain on dev clips standing in for test clips (``--dry-clips``, default three
 clips of game 4), in a scratch folder: a scratch freeze on a few clips of the five other dev games
@@ -52,7 +53,7 @@ import sys
 import time
 import traceback
 import zipfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -576,7 +577,21 @@ def signals_raise() -> Iterator[SignalGuard]:
             signal.signal(sig, signal.SIG_DFL if old is None else old)
 
 
-def stage_c(ctx: Context) -> dict[str, Any]:
+def confirm_stage_c() -> bool:
+    """The owner starts the evaluation knowingly: past the markers it can never run again."""
+    typer.echo(
+        "Stage C is ready: every label-free input is checked. It now writes its markers and reads the test"
+        " labels; from then on the evaluation can never run again, even after a crash or Ctrl-C."
+    )
+    try:
+        return typer.confirm("Start the single test evaluation?", default=False)
+    except typer.Abort:  # Ctrl-C or no input at the question
+        return False
+
+
+def stage_c(ctx: Context, confirm: Callable[[], bool] | None = None) -> dict[str, Any]:
+    """The evaluation, once. ``confirm`` (the real run's question to the owner) is asked after every
+    label-free check and before the markers; a no leaves the evaluation unclaimed."""
     lock = guard(ctx)  # nothing below runs without a matching lock
     if ctx.report.exists():  # a committed result, e.g. from another clone with its own data folder
         raise pr.PreregError(f"{ctx.report} exists: the test evaluation already ran, a second one is refused")
@@ -586,6 +601,8 @@ def stage_c(ctx: Context) -> dict[str, Any]:
         raise pr.PreregError(
             f"the test evaluation already started ({existing[0]}): a second evaluation is refused"
         )
+    if confirm is not None and not confirm():
+        raise pr.PreregError("stage C was not confirmed: no marker written, the evaluation is unclaimed")
     payload = {
         "started_utc": _now(),
         "lock_sha256": ctx.lock_sha,
@@ -775,6 +792,9 @@ def main(
         typer.Option(help="Dry run: per-frame dev calib.npz for the scratch freeze and the check."),
     ] = None,
     smoke_frames: Annotated[int, typer.Option(help="Dry run: frames of real network inference (≤ 10).")] = 10,
+    yes: Annotated[
+        bool, typer.Option("--yes", help="Real run: start stage C without asking (it runs once).")
+    ] = False,
 ) -> None:
     if stage not in ("a", "b", "c", "all"):
         raise typer.BadParameter("--stage is a, b, c or all")
@@ -795,7 +815,7 @@ def main(
             if dry_run and calib_from is not None:
                 compare_with_dev(ctx, calib_from)
         if stage in ("c", "all"):
-            res = stage_c(ctx)
+            res = stage_c(ctx, None if dry_run or yes else confirm_stage_c)
             crit = res["criteria"]
             typer.echo(
                 "criteria: " + ", ".join(f"{k} {'met' if v['pass'] else 'not met'}" for k, v in crit.items())

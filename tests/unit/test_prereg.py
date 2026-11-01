@@ -579,6 +579,47 @@ def test_stage_c_claims_before_reading_labels_and_a_crash_still_leaves_a_report(
     assert not world.report.exists()  # a refused second stage C writes no failure report
 
 
+def test_stage_c_asks_after_every_check_and_before_the_claim(world, monkeypatch):
+    run_test_once.stage_a(world)
+    run_test_once.stage_b(world)
+    asked = []
+
+    def answer(yes):
+        def confirm():
+            asked.append(not any(m.exists() for m in world.markers))
+            return yes
+
+        return confirm
+
+    monkeypatch.setattr(run_test_once.pl, "read_parquet", lambda *a, **k: pytest.fail("a label was read"))
+    with pytest.raises(pr.PreregError, match="not confirmed"):
+        run_test_once.stage_c(_fresh(world), answer(False))
+    assert asked == [True]
+    assert not any(m.exists() for m in world.markers)
+    assert not world.report.exists()
+    ctx = _fresh(world)
+    ctx.clips = [CLIP, ("SNGS-998", "test", 8)]
+    with pytest.raises(pr.PreregError, match="not the frozen one"):
+        run_test_once.stage_c(ctx, answer(True))
+    assert asked == [True]  # a failed check never reaches the question
+
+
+def test_the_real_run_asks_before_stage_c_unless_yes(world, monkeypatch):
+    run_test_once.stage_a(world)
+    run_test_once.stage_b(world)
+    monkeypatch.setattr(run_test_once, "real_context", lambda: _fresh(world))
+    for reply in (lambda *a, **k: False, lambda *a, **k: (_ for _ in ()).throw(typer.Abort())):
+        monkeypatch.setattr(run_test_once.typer, "confirm", reply)
+        with pytest.raises(typer.Exit) as exc:
+            run_test_once.main(stage="c")
+        assert exc.value.exit_code == 2  # refused, nothing claimed
+        assert not any(m.exists() for m in world.markers)
+    monkeypatch.setattr(run_test_once.typer, "confirm", lambda *a, **k: pytest.fail("--yes asks nothing"))
+    monkeypatch.setattr(run_test_once, "_evaluate", lambda *a: {"criteria": {"P1": {"pass": True}}})
+    run_test_once.main(stage="c", yes=True)
+    assert all(m.exists() for m in world.markers)
+
+
 @pytest.mark.parametrize("how", ["KeyboardInterrupt", "SIGTERM", "SIGHUP"])
 def test_an_interruption_after_the_claim_still_leaves_a_report(world, monkeypatch, how):
     if threading.current_thread() is not threading.main_thread():

@@ -167,8 +167,8 @@ All are reported; none is a success criterion.
    after a crash. Their outputs are tied to the lock: a re-freeze starts them from nothing, and stage C
    refuses outputs of another lock. Stage C, the only stage that reads test labels, first checks and loads
    every label-free input and checks that both label tables exist with the columns it reads (their schemas,
-   no label), then writes its markers before reading any label, and runs once: a second stage C is refused,
-   even after a crash. A crash or an interruption after the markers (an exception, Ctrl-C, SIGTERM or SIGHUP)
+   no label), asks the owner to confirm, then writes its markers before reading any label, and runs once: a
+   second stage C is refused, even after a crash. A crash or an interruption after the markers (an exception, Ctrl-C, SIGTERM or SIGHUP)
    still writes `reports/test_run.md`, naming the failure, with every result computed before it; after a hard
    kill (SIGKILL) or a power loss only the markers remain, and the owner writes the failure into
    `reports/test_run.md` by hand.
