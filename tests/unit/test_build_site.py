@@ -1,4 +1,4 @@
-"""scripts/build_site.py and scripts/deploy_space.py without media, network or a Hugging Face account."""
+"""scripts/build_site.py and scripts/deploy_space.py without network or a Hugging Face account."""
 
 import importlib.util
 import re
@@ -251,6 +251,27 @@ def test_showcase_page_builds_with_its_media(tmp_path):
     media = media_dir(tmp_path, dict.fromkeys(SHOWCASE_MEDIA, 100))
     planned = build_site.plan(page, media)
     assert {name.removeprefix("assets/") for name in planned.media} == SHOWCASE_MEDIA
+
+
+#: Every showcase file stays below this, under the 1 MB that pre-commit refuses.
+MAX_ASSET_BYTES = 900_000
+
+
+def test_showcase_page_builds_with_the_committed_media():
+    planned = build_site.plan(build_site.PAGE.read_text(encoding="utf-8"), build_site.MEDIA)
+    assert {name.removeprefix("assets/") for name in planned.media} == SHOWCASE_MEDIA
+    assert max(src.stat().st_size for src in planned.media.values()) < MAX_ASSET_BYTES
+    assert planned.total_bytes <= build_site.MAX_BYTES
+
+
+def test_readme_images_are_committed_and_light():
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    images = re.findall(r'<img\b[^>]*\bsrc="([^"]+)"', readme) + re.findall(r"!\[[^\]]*\]\(([^)\s]+)", readme)
+    local = [image for image in images if "://" not in image]
+    assert {"assets/showcase/hero.jpg", "assets/showcase/smoothing.gif"} <= set(local)
+    for image in local:
+        assert (REPO_ROOT / image).is_file(), image
+        assert (REPO_ROOT / image).stat().st_size < MAX_ASSET_BYTES, image
 
 
 def test_showcase_page_keeps_its_contract():
