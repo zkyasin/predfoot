@@ -760,6 +760,33 @@ def test_a_claim_lost_to_another_invocation_writes_no_failure_report(world, monk
     assert json.loads(world.markers[0].read_text()) == {"other": True}
 
 
+def test_a_race_lost_at_the_exclusive_create_writes_no_failure_report(world, monkeypatch):
+    run_test_once.stage_a(world)
+    run_test_once.stage_b(world)
+    monkeypatch.setattr(run_test_once.pl, "read_parquet", lambda *a, **k: pytest.fail("a label was read"))
+    real_open = pr.os.open
+
+    def the_other_one_creates_it_first(path, flags, *args):
+        if Path(path) == world.markers[1]:  # after this invocation's existence check, before its create
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            Path(path).write_text('{"other": true}')
+        return real_open(path, flags, *args)
+
+    monkeypatch.setattr(pr.os, "open", the_other_one_creates_it_first)
+    with pytest.raises(pr.AlreadyClaimed, match="already started"):
+        run_test_once.stage_c(_fresh(world))
+    assert not world.report.exists()
+    assert world.markers[0].exists()  # written by this invocation before it lost the race
+
+
+def test_markers_naming_the_same_file_are_refused_before_any_is_written(tmp_path):
+    marker = tmp_path / "test_once" / "STAGE_C_STARTED.json"
+    with pytest.raises(pr.PreregError, match="same file") as exc:
+        pr.claim_once([marker, tmp_path / "test_once" / ".." / "test_once" / marker.name], {"a": 1})
+    assert not isinstance(exc.value, pr.AlreadyClaimed)
+    assert not marker.exists()
+
+
 def test_a_second_signal_is_ignored_and_an_ignored_signal_stays_ignored():
     if threading.current_thread() is not threading.main_thread():
         pytest.skip("signal handlers belong to the main thread")
@@ -767,14 +794,17 @@ def test_a_second_signal_is_ignored_and_an_ignored_signal_stays_ignored():
     with pytest.raises(run_test_once.Interrupted, match="SIGTERM"):
         guard.handler(signal.SIGTERM, None)
     guard.handler(signal.SIGTERM, None)  # while the failure report is written
-    old = signal.signal(signal.SIGHUP, signal.SIG_IGN)  # as under nohup
+    hup = signal.getsignal(signal.SIGHUP)
+    old = signal.signal(signal.SIGINT, signal.SIG_IGN)  # as for a background job
     try:
         with run_test_once.signals_raise():
-            assert signal.getsignal(signal.SIGHUP) == signal.SIG_IGN
+            assert signal.getsignal(signal.SIGINT) == signal.SIG_IGN
             assert signal.getsignal(signal.SIGTERM) not in (signal.SIG_DFL, signal.SIG_IGN, None)
-        assert signal.getsignal(signal.SIGHUP) == signal.SIG_IGN
+            assert signal.getsignal(signal.SIGHUP) == signal.SIG_IGN
+        assert signal.getsignal(signal.SIGINT) == signal.SIG_IGN
+        assert signal.getsignal(signal.SIGHUP) == hup
     finally:
-        signal.signal(signal.SIGHUP, old)
+        signal.signal(signal.SIGINT, old)
 
 
 def test_a_claim_that_fails_between_its_markers_still_leaves_a_report(world, monkeypatch):
@@ -803,12 +833,15 @@ def test_a_claim_that_fails_between_its_markers_still_leaves_a_report(world, mon
     assert "OSError: run folder not writable" in world.report.read_text()
 
 
-def test_a_failure_after_the_results_puts_every_result_in_the_report(world, monkeypatch):
+@pytest.mark.parametrize("complete", [False, True])
+def test_a_failure_after_saved_results_puts_them_in_the_report(world, monkeypatch, complete):
     run_test_once.stage_a(world)
     run_test_once.stage_b(world)
 
     def results_then_crash(ctx, prepared, lock, payload):
-        results = {"criteria": {"P1": {"coverage": 0.91, "pass": True}}, "regions": {}}
+        results = {"criteria": {"P1": {"coverage": 0.91, "pass": True}}, "regions": {}, "complete": complete}
+        if complete:
+            results["endpoint_errors"] = {"kpi": "ValueError: no qualifying run"}
         run_test_once.write_json(ctx.work_dir / "results.json", results)
         raise TypeError("unsupported format string passed to NoneType.__format__")
 
@@ -818,14 +851,19 @@ def test_a_failure_after_the_results_puts_every_result_in_the_report(world, monk
     report = world.report.read_text()
     assert "TypeError: unsupported format string" in report
     assert '"coverage": 0.91' in report
-    assert "the secondary endpoints were not" in report  # results.json without "complete"
+    if complete:
+        assert "Every endpoint ran and the results were saved" in report
+        assert "Endpoints that raised, so missing (deviations): kpi." in report
+    else:
+        assert "secondary analyses 1 to 6 and 8) were computed and saved" in report
+        assert "secondary analyses 7, 9 and 10) were not" in report
 
 
 def test_an_interruption_after_the_primary_endpoints_keeps_them_in_the_report(world, monkeypatch):
     run_test_once.stage_a(world)
     run_test_once.stage_b(world)
 
-    def primary_then_interrupt(tables, art, on_primary):
+    def primary_then_interrupt(tables, art, on_primary, log):
         on_primary({"criteria": {"P1": {"coverage": 0.905, "pass": True}}, "regions": {}, "detector": {}})
         raise KeyboardInterrupt  # during the secondary endpoints
 
@@ -834,7 +872,7 @@ def test_an_interruption_after_the_primary_endpoints_keeps_them_in_the_report(wo
         run_test_once.stage_c(_fresh(world))
     report = world.report.read_text()
     assert "Stage C failed" in report
-    assert "primary endpoints (regions and failure detection) were computed and saved" in report
+    assert "secondary analyses 1 to 6 and 8) were computed and saved" in report
     assert '"coverage": 0.905' in report
     saved = json.loads((world.work_dir / "results.json").read_text())
     assert saved["complete"] is False
@@ -1227,13 +1265,21 @@ def test_a_failing_secondary_endpoint_is_a_deviation_and_the_primary_results_com
         raise ValueError("no qualifying run")
 
     monkeypatch.setattr(fz, "kpi_endpoint", no_qualifying_run)
-    primary = []
-    res = fz.evaluate(test, art, n_boot=50, on_primary=lambda r: primary.append(json.loads(fz.dump(r))))
+    primary, logged = [], []
+    res = fz.evaluate(
+        test, art, n_boot=50, on_primary=lambda r: primary.append(json.loads(fz.dump(r))), log=logged.append
+    )
     assert len(primary) == 1
     assert set(primary[0]) == {"clips", "games", "labelled_frames", "n_boot", "seed", "regions", "detector",
                                "criteria"}  # fmt: skip
-    assert primary[0]["criteria"] == json.loads(fz.dump(full["criteria"]))  # the draws come first, unchanged
+    assert primary[0]["criteria"] == json.loads(
+        fz.dump(full["criteria"])
+    )  # the criteria handed over are final
     assert res["endpoint_errors"] == {"kpi": "ValueError: no qualifying run"}
+    assert len(logged) == 1
+    assert logged[0].startswith("secondary endpoint kpi raised:")
+    assert "Traceback" in logged[0]
+    assert "Traceback" not in fz.dump(res)  # the traceback stays out of the results and the public report
     assert res["kpi"] is None
     assert fz.dump(res["residual"]) == fz.dump(full["residual"])
     md = fz.render_report(json.loads(fz.dump(res)), ["# Synthetic"])
