@@ -323,15 +323,16 @@ def region_endpoint(
     ref: str,
     rng: np.random.Generator,
     n_boot: int,
-    raw_ok: pl.DataFrame | None = None,
+    other: pl.DataFrame | None = None,
 ) -> dict[str, Any]:
     """Coverage and size of the frozen regions of one camera against one reference, with clip-bootstrap
     intervals; filled frames reported apart.
 
     Headline rows: player-frames whose raw calibration succeeded and for which this camera publishes a
-    position. ``raw_ok`` (the per-frame camera's rows: every raw-OK player-frame) gives the player-frames
-    where this camera abstains although the raw calibration succeeded; they are counted, and a secondary
-    coverage counts them as misses.
+    position. ``other`` (the other camera's player rows) gives the raw-OK player-frames that the other camera
+    publishes and this one does not: the smoothed camera's abstentions, and feet that the per-frame camera's
+    homography cannot place on the pitch (above its horizon). They are counted, and the coverage is also
+    given counting them as misses, player-frames pooled and clips weighted equally (no random draw).
     """
     d = players.filter(~pl.col("filled") & pl.col(f"ex_{ref}").is_not_nan()) if players.height else players
     if d.height == 0:
@@ -397,15 +398,26 @@ def region_endpoint(
             "coverage": float(np.mean(fs["score"] <= fq)),
             "coverage_const": float(np.mean(fs["norm"] <= rm.r_const)),
         }
-    if raw_ok is not None and raw_ok.height:
-        base = raw_ok.filter(pl.col(f"ex_{ref}").is_not_nan()).select(KEYS)
+    if other is not None and other.height:
+        base = other.filter(~pl.col("filled") & pl.col(f"ex_{ref}").is_not_nan()).select(KEYS)
         missing = base.join(d.select(KEYS), on=KEYS, how="anti")
-        n_ab = missing.height
-        out["abstained"] = {
-            "n": n_ab,
+        n_un = missing.height
+        per_clip = (
+            pl.concat(
+                [
+                    d.select("clip").with_columns(pl.Series("hit", hit.astype(np.float64))),
+                    missing.select("clip", pl.lit(0.0).alias("hit")),
+                ]
+            )
+            .group_by("clip")
+            .agg(pl.col("hit").mean())
+        )
+        out["unpublished"] = {
+            "n": n_un,
             "frames": missing.select("clip", "frame").unique().height,
-            "share": n_ab / (d.height + n_ab),
-            "coverage_as_misses": float(hit.sum()) / (d.height + n_ab),
+            "share": n_un / (d.height + n_un),
+            "coverage_as_misses": float(hit.sum()) / (d.height + n_un),
+            "coverage_clips_as_misses": _mean(per_clip["hit"]),
         }
     return out
 
@@ -555,9 +567,9 @@ def evaluate(
     """Every endpoint of the preregistration, the success criteria evaluated as written."""
     rng = np.random.default_rng(seed)
     players = {c: tables[c].players for c in CAMERAS}
-    raw_ok = {"perframe": None, "ptz": players["perframe"]}  # every per-frame row is a raw-OK player-frame
+    other = {"perframe": players["ptz"], "ptz": players["perframe"]}
     regions = {
-        c: {r: region_endpoint(players[c], art.regions[c, r], r, rng, n_boot, raw_ok[c]) for r in REFERENCES}
+        c: {r: region_endpoint(players[c], art.regions[c, r], r, rng, n_boot, other[c]) for r in REFERENCES}
         for c in CAMERAS
     }
     det = detector_endpoint(tables["perframe"].frames, art.detector, rng, n_boot)
@@ -631,8 +643,8 @@ def render_report(res: Mapping[str, Any], header: Sequence[str]) -> str:
         "",
         "## Coverage and size of the regions",
         "",
-        "Headline rows: player-frames whose raw calibration succeeded (frames filled by the smoother are"
-        " reported apart).",
+        "Headline rows: player-frames whose raw calibration succeeded and for which the camera publishes a"
+        " position (frames filled by the smoother are reported apart).",
         "",
         "| Camera | Reference | Player-frames | Clips | Mondrian coverage [95 % CI] |"
         " Mondrian coverage, clips weighted equally [95 % CI] | Constant circle [95 % CI] |"
@@ -654,13 +666,23 @@ def render_report(res: Mapping[str, Any], header: Sequence[str]) -> str:
                 f" {_pct(e['coverage_raw_laplace'])} | {e['median_area']:.2f} | {e['const_area']:.2f} |"
                 f" {e['area_ratio']:.2f} [{lo:.2f}, {hi:.2f}] | {_pct(e['simultaneous_coverage'])} |"
             )
-    ab = prim.get("abstained")
-    if ab:
+    unpublished = [(c, r, res["regions"][c][r].get("unpublished")) for c in CAMERAS for r in REFERENCES]
+    if any(u for _, _, u in unpublished):
         md += [
             "",
-            f"Raw-OK player-frames where the {CAMERA_TITLES[PRIMARY[0]]} abstains (not in the headline rows):"
-            f" {ab['n']} ({_pct(ab['share'])}, {ab['frames']} frames); P1 coverage counting them as misses:"
-            f" {_pct(ab['coverage_as_misses'])}.",
+            "Raw-OK player-frames that the other camera publishes and this camera does not (outside its"
+            " headline rows): the smoothed camera's abstentions, and feet that the per-frame camera's"
+            " homography cannot place on the pitch. Coverage counting them as misses:",
+            "",
+            "| Camera | Reference | Player-frames | Share | Frames | Coverage counting them as misses,"
+            " player-frames pooled | Same, clips weighted equally |",
+            "|---|---|---|---|---|---|---|",
+        ]
+        md += [
+            f"| {CAMERA_TITLES[c]} | {REF_TITLES[r]} | {u['n']} | {_pct(u['share'])} | {u['frames']} |"
+            f" {_pct(u['coverage_as_misses'])} | {_pct(u['coverage_clips_as_misses'])} |"
+            for c, r, u in unpublished
+            if u
         ]
     md += ["", "Per test game (Mondrian coverage [95 % CI], player-frames):", ""]
     md += ["| Camera | Reference | " + " | ".join(f"Game {g}" for g in res["games"]) + " |"]

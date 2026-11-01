@@ -959,10 +959,10 @@ def test_artifacts_endpoints_criteria_and_report_end_to_end(tmp_path, rng):
             assert art.regions[c, r].to_dict() == fitted.to_dict()
     assert art.params == tm.NoiseParams()
 
-    # test games: the smoothed camera keeps the dev error scale, the per-frame camera triples it, and the
-    # smoothed camera abstains on every tenth frame
+    # test games: the smoothed camera keeps the dev error scale, the per-frame camera triples it, the smoothed
+    # camera abstains on every tenth frame, and the per-frame camera cannot place the feet on frame 35
     test_games = fz.TEST_GAMES
-    perframe = _camera_players(np.random.default_rng(1), test_games, 3.0)
+    perframe = _camera_players(np.random.default_rng(1), test_games, 3.0).filter(pl.col("frame") != 35)
     ptz = _camera_players(np.random.default_rng(1), test_games, 1.0).filter(pl.col("frame") % 50 != 0)
     frames = _camera_frames(rng, test_games)
     res = fz.evaluate(
@@ -1000,11 +1000,27 @@ def test_artifacts_endpoints_criteria_and_report_end_to_end(tmp_path, rng):
     assert res["detector"]["best_single_dev"] == art.detector.best_single
     assert crit["P3"] == {"diff": pytest.approx(diff), "pass": diff > 0}
 
-    dropped = perframe.filter(pl.col("frame") % 50 == 0).height
-    ab = prim["abstained"]
-    assert ab["n"] == dropped
-    assert ab["coverage_as_misses"] == pytest.approx(prim["coverage"] * prim["n"] / (prim["n"] + dropped))
-    assert "abstained" not in res["regions"]["perframe"]["lab"]
+    abstained = perframe.filter(pl.col("frame") % 50 == 0)
+    un = prim["unpublished"]
+    assert (un["n"], un["frames"]) == (abstained.height, abstained.select("clip", "frame").unique().height)
+    n_all = prim["n"] + abstained.height
+    assert un["share"] == pytest.approx(abstained.height / n_all)
+    assert un["coverage_as_misses"] == pytest.approx(prim["coverage"] * prim["n"] / n_all)
+    misses = abstained.group_by("clip").len().rename({"len": "missing"})
+    clip_cov = (
+        per_clip.group_by("clip")
+        .agg(pl.col("hit").sum(), pl.len())
+        .join(misses, on="clip", how="left")
+        .select(pl.col("hit") / (pl.col("len") + pl.col("missing").fill_null(0)))
+    )
+    assert un["coverage_clips_as_misses"] == pytest.approx(clip_cov.to_series().mean())
+    pf_un = res["regions"]["perframe"]["lab"]["unpublished"]  # feet only the smoothed camera places
+    assert pf_un["n"] == ptz.filter(pl.col("frame") == 35).height
+    assert pf_un["frames"] == ptz.filter(pl.col("frame") == 35).select("clip", "frame").unique().height
+    assert (
+        res["regions"]["ptz"]["or"]["unpublished"]["n"]
+        == abstained.filter(pl.col("ex_or").is_not_nan()).height
+    )
 
     rs = res["residual"]
     both = frames.filter(pl.col("ok") & pl.col("ok_out"))
@@ -1013,5 +1029,9 @@ def test_artifacts_endpoints_criteria_and_report_end_to_end(tmp_path, rng):
 
     md = fz.render_report(json.loads(fz.dump(res)), ["# Synthetic"])
     assert "| P1 |" in md
-    assert "abstains" in md
+    assert "the other camera publishes and this camera does not" in md
+    assert (
+        f"| PTZ-smoothed camera | trusted line oracle | {res['regions']['ptz']['or']['unpublished']['n']} |"
+        in md
+    )
     assert md.count("**met**") + md.count("**not met**") == 3

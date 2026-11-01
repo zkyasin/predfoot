@@ -92,12 +92,16 @@
 | P3 | AUROC of the frozen gradient boosting minus AUROC of the frozen best single feature, on the per-frame calibrations of the test frames with self-consistent lines (failure: mean distance to the annotated lines above 10 px) | per-frame | annotated lines | Difference above 0 |
 
 P1 and P2 use the headline rows of their camera: player-frames whose raw calibration succeeded and for which
-that camera publishes a position. For the per-frame camera these are all raw-OK player-frames. The smoothed
-camera also abstains on some raw-OK frames (the smoother rejects the frame or cannot check it): those rows are
-not in its headline rows, so the two cameras' rows differ slightly (on dev, 2,788 raw-OK player-frames, 1.1 %,
-in 168 frames, with larger per-frame errors: p90 2.72 m against 2.02 m). Their number and share are reported
-next to P1, with P1's coverage counting them as misses. Frames that only the smoother fills (raw calibration
-failed) are reported apart. P2 and P3 are decided on the point estimate; their intervals are reported.
+that camera publishes a position. The two cameras' headline rows differ slightly. The smoothed camera abstains
+on some raw-OK frames (the smoother rejects the frame or cannot check it): on dev, 2,788 player-frames that the
+per-frame camera publishes (1.1 %, in 168 frames), with larger per-frame errors (p90 2.72 m against 2.02 m).
+The per-frame camera publishes no position for feet that its homography cannot place on the pitch (above its
+horizon): on dev, 501 player-frames that the smoothed camera publishes (0.2 %, in 39 frames). For each camera
+and reference, the raw-OK player-frames that the other camera publishes and this one does not are counted and
+reported next to its coverage, with that coverage also computed counting them as misses (player-frames pooled,
+and clips weighted equally); for the primary camera and reference this is P1's coverage counting them as
+misses. Frames that only the smoother fills (raw calibration failed) are reported apart. P2 and P3 are decided
+on the point estimate; their intervals are reported.
 
 P1 pools the headline player-frames, as every dev coverage quoted here does. The grouped conformal quantile
 weighs each calibration clip equally, so the coverage with every clip weighted equally (the mean of the clips'
@@ -112,9 +116,10 @@ small clips weigh less, and on dev its intervals are the narrower ones (against 
 
 All are reported; none is a success criterion.
 
-1. P1 and P2 for the per-frame camera (comparison arm), and for both cameras against R2; for the smoothed
-   camera, the raw-OK player-frames where it abstains and the coverage counting them as misses; for every
-   camera and reference, the coverage with every clip weighted equally, with its clip-bootstrap interval.
+1. P1 and P2 for the per-frame camera (comparison arm), and for both cameras against R2; for every camera and
+   reference, the raw-OK player-frames that the other camera publishes and this one does not, with the
+   coverage counting them as misses, and the coverage with every clip weighted equally, with its
+   clip-bootstrap interval.
 2. Coverage of the constant circle; coverage of the uncalibrated Laplace regions.
 3. Coverage by distance tercile (metres per pixel at the feet, terciles of the test rows).
 4. Simultaneous coverage: the share of frames in which every player is inside their region (the marginal
