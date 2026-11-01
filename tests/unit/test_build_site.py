@@ -39,7 +39,7 @@ body {{ background: var(--paper); }}
   <video poster="assets/clip.jpg" autoplay muted loop playsinline>
     <source src="assets/clip.mp4" type="video/mp4">
   </video>
-  <a href="https://github.com/zkyasin/predfoot">Code</a> <a href="#top">Top</a>
+  <a href="https://github.com/zkyasin/predfoot" target="_blank" rel="noopener">Code</a> <a href="#top">Top</a>
 </main>
 """
 
@@ -140,6 +140,9 @@ def test_check_references_maps_media_and_ignores_links(tmp_path):
         ('<a href="#nowhere">jump</a>', "no element on the page has this id"),
         ('<a href="javascript:alert(1)">x</a>', "unsupported URL scheme"),
         ('<a href="docs/technical.md">overview</a>', "under assets/"),
+        ('<a href="https://example.org">out</a>', "must open a new tab"),
+        ('<a href="https://example.org" target="_self">out</a>', "must open a new tab"),
+        ('<svg><a href="//example.org/x"><text>x</text></a></svg>', "must open a new tab"),
     ],
 )
 def test_check_references_refuses_what_breaks_on_the_space(tmp_path, snippet, message):
@@ -152,6 +155,15 @@ def test_check_references_lists_every_problem_at_once(tmp_path):
     with pytest.raises(build_site.SiteError) as caught:
         build_site.check_references(page, media_dir(tmp_path))
     assert str(caught.value).count("\n") == 2
+
+
+def test_scan_marks_the_links_that_open_a_new_tab():
+    refs, _ = build_site.scan(
+        '<a href="https://a.example" target="_blank">a</a><a href="https://b.example">b</a>'
+        '<img src="assets/clip.jpg" target="_blank">'
+    )
+    assert {r.url: r.new_tab for r in refs} == {"https://a.example": True, "https://b.example": False,
+                                                 "assets/clip.jpg": False}  # fmt: skip
 
 
 def test_check_references_accepts_data_uris_mail_links_and_queries(tmp_path):

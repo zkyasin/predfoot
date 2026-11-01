@@ -9,8 +9,9 @@ The page may only load media from ``assets/<name>``; the build copies each of th
 assets/showcase/<name>. It also writes the README.md whose front matter configures the static Space.
 
 The build refuses, before writing anything, a page that references a file that does not exist, loads anything
-from outside except Google Fonts (links to other sites are fine), links to an anchor that is not on the page,
-or weighs more than ``--max-bytes`` together with its media.
+from outside except Google Fonts, links to an anchor that is not on the page, links to another site without
+opening a new tab (the Space shows the page inside a frame, which GitHub and most sites refuse to load), or
+weighs more than ``--max-bytes`` together with its media.
 
 Usage:
     uv run python scripts/build_site.py                          # → site/dist/ (git-ignored)
@@ -93,11 +94,13 @@ class SiteError(Exception):
 
 @dataclass(frozen=True)
 class Reference:
-    """One URL the page uses: ``load`` when the browser fetches it, otherwise a link the visitor follows."""
+    """One URL the page uses: ``load`` when the browser fetches it, otherwise a link the visitor follows;
+    ``new_tab`` when that link opens a new browsing context (``target="_blank"``)."""
 
     where: str
     url: str
     load: bool
+    new_tab: bool = False
 
 
 class _Scan(HTMLParser):
@@ -111,6 +114,7 @@ class _Scan(HTMLParser):
         self._in_style = False
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        new_tab = tag in _NAVIGATION_TAGS and any(n == "target" and v == "_blank" for n, v in attrs)
         for name, value in attrs:
             if value is None:
                 continue
@@ -118,7 +122,7 @@ class _Scan(HTMLParser):
                 self.ids.add(value)
             elif name in _LOAD_ATTRS:
                 load = not (name == "href" and tag in _NAVIGATION_TAGS)
-                self.references.append(Reference(f"<{tag} {name}>", value.strip(), load))
+                self.references.append(Reference(f"<{tag} {name}>", value.strip(), load, new_tab))
             elif name in _SRCSET_ATTRS:
                 for candidate in value.split(","):
                     if candidate.strip():
@@ -175,6 +179,11 @@ def check_references(page: str, media_dir: Path) -> dict[str, Path]:
         elif parts.scheme in ("http", "https") or url.startswith("//"):
             if ref.load and parts.hostname not in FONT_HOSTS:
                 problems.append(f"{ref.where} {url}: the page may load only Google Fonts from outside")
+            elif not ref.load and not ref.new_tab:
+                problems.append(
+                    f'{ref.where} {url}: a link to another site must open a new tab (target="_blank"), since'
+                    " the Space shows the page inside a frame that most sites refuse to load"
+                )
         elif parts.scheme:
             if ref.load or parts.scheme.lower() == "javascript":
                 problems.append(f"{ref.where} {url}: unsupported URL scheme")
