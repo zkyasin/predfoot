@@ -45,6 +45,11 @@ CAMERA_TITLES = {"perframe": "per-frame camera", "ptz": "PTZ-smoothed camera"}
 REF_TITLES = {"lab": "SN-GSR raw labels", "or": "trusted line oracle", "sm": "smoothed labels"}
 #: Method under test and primary reference (P1, P2); everything else is secondary.
 PRIMARY = ("ptz", "lab")
+#: Weighting of P1's coverage: "player-frames" pools the headline player-frames (the dev headline); "clips"
+#: weighs every clip equally. The other one is reported as a secondary analysis.
+P1_WEIGHTING = "player-frames"
+P1_COVERAGE_KEYS = {"player-frames": "coverage", "clips": "coverage_clips"}
+P1_WEIGHTING_TITLES = {"player-frames": "player-frames pooled", "clips": "clips weighted equally"}
 N_BOOT = 2000
 BOOT_SEED = 0
 TEST_GAMES = (7, 8, 11)
@@ -71,6 +76,7 @@ def analysis_config() -> dict[str, Any]:
         "cameras": list(CAMERAS),
         "references": list(REFERENCES),
         "primary": {"camera": PRIMARY[0], "reference": PRIMARY[1]},
+        "p1_weighting": P1_WEIGHTING,
         "dev_games": list(DEV_GAMES),
         "test_games": list(TEST_GAMES),
         "test_clips": TEST_CLIPS,
@@ -339,11 +345,14 @@ def region_endpoint(
     a_const = float(np.pi * rm.r_const**2)
     groups, games = s["groups"], s["games"]
     raw_q = np.array([region_quantile(2, 1 - ps.ALPHA, v) for v in s["dof"]])
+    cov_clips, cov_clips_ci = ps.clip_weighted_coverage(hit, groups, rng, n_boot)
     out: dict[str, Any] = {
         "n": d.height,
         "clips": len(np.unique(groups)),
         "coverage": float(hit.mean()),
         "coverage_ci": ps.clip_bootstrap(hit, groups, rng, n_boot),
+        "coverage_clips": cov_clips,
+        "coverage_clips_ci": cov_clips_ci,
         "coverage_const": float(hit_c.mean()),
         "coverage_const_ci": ps.clip_bootstrap(hit_c, groups, rng, n_boot),
         "coverage_raw_laplace": float(np.mean(s["score"] <= raw_q)),
@@ -525,6 +534,21 @@ def kpi_endpoint(players: Mapping[str, pl.DataFrame]) -> dict[str, Any]:
     return {"ptz": players_kpi_proxy(a), "perframe": players_kpi_proxy(b)}
 
 
+def p1_criterion(prim: Mapping[str, Any]) -> dict[str, Any]:
+    """P1 as preregistered: the coverage of the primary camera and reference, weighted as ``P1_WEIGHTING``
+    says, is met when its 95 % interval contains the nominal level 1 − α."""
+    if not prim.get("n"):
+        return {"pass": None}
+    key = P1_COVERAGE_KEYS[P1_WEIGHTING]
+    lo, hi = prim[f"{key}_ci"]
+    return {
+        "weighting": P1_WEIGHTING,
+        "coverage": prim[key],
+        "ci": prim[f"{key}_ci"],
+        "pass": lo <= 1 - ps.ALPHA <= hi,
+    }
+
+
 def evaluate(
     tables: Mapping[str, CameraTables], art: Artifacts, n_boot: int = N_BOOT, seed: int = BOOT_SEED
 ) -> dict[str, Any]:
@@ -538,11 +562,7 @@ def evaluate(
     }
     det = detector_endpoint(tables["perframe"].frames, art.detector, rng, n_boot)
     prim = regions[PRIMARY[0]][PRIMARY[1]]
-    p1 = (
-        {"ci": prim["coverage_ci"], "pass": prim["coverage_ci"][0] <= 0.9 <= prim["coverage_ci"][1]}
-        if prim.get("n")
-        else {"pass": None}
-    )
+    p1 = p1_criterion(prim)
     p2 = (
         {"ratio": prim.get("area_ratio"), "pass": prim["area_ratio"] < 1} if prim.get("n") else {"pass": None}
     )
@@ -600,8 +620,8 @@ def render_report(res: Mapping[str, Any], header: Sequence[str]) -> str:
         "| # | Endpoint | Result | Criterion | Verdict |",
         "|---|---|---|---|---|",
         f"| P1 | Coverage of the 90 % Mondrian regions, {CAMERA_TITLES[PRIMARY[0]]},"
-        f" {REF_TITLES[PRIMARY[1]]} |"
-        f" {_pct(prim.get('coverage'))} {_ci(prim.get('coverage_ci'))} | 95 % CI contains 90 % |"
+        f" {REF_TITLES[PRIMARY[1]]}, {P1_WEIGHTING_TITLES[P1_WEIGHTING]} |"
+        f" {_pct(crit['P1'].get('coverage'))} {_ci(crit['P1'].get('ci'))} | 95 % CI contains 90 % |"
         f" {_verdict(crit['P1']['pass'])} |",
         f"| P2 | Median region area / constant circle at the same level, same camera and reference |"
         f" {prim.get('area_ratio', float('nan')):.2f} | below 1 | {_verdict(crit['P2']['pass'])} |",
@@ -615,21 +635,22 @@ def render_report(res: Mapping[str, Any], header: Sequence[str]) -> str:
         " reported apart).",
         "",
         "| Camera | Reference | Player-frames | Clips | Mondrian coverage [95 % CI] |"
-        " Constant circle [95 % CI] |"
+        " Mondrian coverage, clips weighted equally [95 % CI] | Constant circle [95 % CI] |"
         " Uncalibrated Laplace | Median area (m²) | Constant circle area (m²) | Area ratio [95 % CI] |"
         " All players of a frame covered |",
-        "|---|---|---|---|---|---|---|---|---|---|---|",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for c in CAMERAS:
         for r in REFERENCES:
             e = res["regions"][c][r]
             if not e.get("n"):
-                md.append(f"| {CAMERA_TITLES[c]} | {REF_TITLES[r]} | 0 | – | – | – | – | – | – | – | – |")
+                md.append(f"| {CAMERA_TITLES[c]} | {REF_TITLES[r]} | 0 |" + " – |" * 9)
                 continue
             lo, hi = e["area_ratio_ci"]
             md.append(
                 f"| {CAMERA_TITLES[c]} | {REF_TITLES[r]} | {e['n']} | {e['clips']} | {_pct(e['coverage'])}"
-                f" {_ci(e['coverage_ci'])} | {_pct(e['coverage_const'])} {_ci(e['coverage_const_ci'])} |"
+                f" {_ci(e['coverage_ci'])} | {_pct(e['coverage_clips'])} {_ci(e['coverage_clips_ci'])} |"
+                f" {_pct(e['coverage_const'])} {_ci(e['coverage_const_ci'])} |"
                 f" {_pct(e['coverage_raw_laplace'])} | {e['median_area']:.2f} | {e['const_area']:.2f} |"
                 f" {e['area_ratio']:.2f} [{lo:.2f}, {hi:.2f}] | {_pct(e['simultaneous_coverage'])} |"
             )

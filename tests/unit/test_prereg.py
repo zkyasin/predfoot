@@ -624,7 +624,46 @@ def test_region_endpoint_uses_the_frozen_models_and_reports_filled_rows_apart(rn
     assert out["filled"]["n"] == 4 * 120
     assert [g["game"] for g in out["per_game"]] == [7, 8, 11]
     assert out["coverage_ci"][0] <= out["coverage"] <= out["coverage_ci"][1]
+    assert out["coverage_clips_ci"][0] <= out["coverage_clips"] <= out["coverage_clips_ci"][1]
     assert out["area_ratio"] == pytest.approx(out["median_area"] / (np.pi * rm.r_const**2))
+
+
+def test_clip_weighted_coverage_weighs_every_clip_equally():
+    # one clip of 90 rows all covered, one of 10 rows none covered: pooled 90 %, clips weighted equally 50 %
+    hit = np.r_[np.ones(90, bool), np.zeros(10, bool)]
+    clips = np.array(["a"] * 90 + ["b"] * 10)
+    cov, (lo, hi) = ps.clip_weighted_coverage(hit, clips, np.random.default_rng(0), n_boot=200)
+    assert hit.mean() == pytest.approx(0.9)
+    assert cov == pytest.approx(0.5)
+    assert lo == 0.0
+    assert hi == 1.0  # a resample of two clips is (0, 0), (0, 1), (1, 0) or (1, 1)
+    # the order of the rows does not matter
+    perm = np.random.default_rng(1).permutation(100)
+    assert ps.clip_weighted_coverage(hit[perm], clips[perm], np.random.default_rng(0), 200)[0] == cov
+
+
+def test_p1_follows_the_preregistered_weighting(monkeypatch, rng):
+    df = synthetic_players(rng, games=(2, 3, 4, 5, 6, 9))
+    rm = ps.fit_frozen_regions(df, "lab")
+    test = synthetic_players(rng, games=(7, 8, 11))
+    out = fz.region_endpoint(test, rm, "lab", np.random.default_rng(0), n_boot=50)
+    assert set(fz.P1_COVERAGE_KEYS) == set(fz.P1_WEIGHTING_TITLES)
+    pooled = fz.p1_criterion(out)
+    assert (pooled["weighting"], pooled["coverage"], pooled["ci"]) == (
+        "player-frames",
+        out["coverage"],
+        out["coverage_ci"],
+    )
+    monkeypatch.setattr(fz, "P1_WEIGHTING", "clips")
+    clips = fz.p1_criterion(out)
+    assert (clips["weighting"], clips["coverage"], clips["ci"]) == (
+        "clips",
+        out["coverage_clips"],
+        out["coverage_clips_ci"],
+    )
+    assert clips["pass"] == (out["coverage_clips_ci"][0] <= 0.9 <= out["coverage_clips_ci"][1])
+    assert fz.analysis_config()["p1_weighting"] == "clips"  # the weighting is part of the digested plan
+    assert fz.p1_criterion({"n": 0}) == {"pass": None}
 
 
 def failure_frames(rng, games=(2, 3, 4), n=300):
@@ -758,7 +797,16 @@ def test_artifacts_endpoints_criteria_and_report_end_to_end(tmp_path, rng):
     q = art.regions["ptz", "lab"].quantile_for({k: s[k] for k in ps.FEATURE_NAMES}, s["source"])
     assert prim["coverage"] == pytest.approx(np.mean(s["score"] <= q))
     lo, hi = prim["coverage_ci"]
-    assert crit["P1"] == {"ci": prim["coverage_ci"], "pass": lo <= 0.9 <= hi}
+    assert fz.P1_WEIGHTING == "player-frames"
+    assert crit["P1"] == {
+        "weighting": "player-frames",
+        "coverage": prim["coverage"],
+        "ci": prim["coverage_ci"],
+        "pass": lo <= 0.9 <= hi,
+    }
+    per_clip = ptz.filter(~pl.col("filled")).with_columns(pl.Series("hit", s["score"] <= q))
+    clip_means = per_clip.group_by("clip").agg(pl.col("hit").mean())["hit"].to_numpy()
+    assert prim["coverage_clips"] == pytest.approx(clip_means.mean())
     area = np.pi * q * np.sqrt(np.linalg.det(s["cov"]))
     ratio = np.median(area) / (np.pi * art.regions["ptz", "lab"].r_const ** 2)
     assert crit["P2"]["ratio"] == pytest.approx(ratio)

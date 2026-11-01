@@ -596,6 +596,18 @@ def clip_bootstrap(
     return float(lo), float(hi)
 
 
+def clip_weighted_coverage(
+    hit: np.ndarray, clip_ids: np.ndarray, rng: np.random.Generator, n_boot: int
+) -> tuple[float, tuple[float, float]]:
+    """Coverage with every clip weighted equally (the mean of the clips' own coverage rates), as the grouped
+    conformal quantile weighs its calibration clips, with a 95 % interval resampling whole clips."""
+    _, inv = np.unique(clip_ids, return_inverse=True)
+    per_clip = np.bincount(inv, weights=np.asarray(hit, dtype=float)) / np.bincount(inv)
+    stats = [per_clip[rng.integers(0, len(per_clip), len(per_clip))].mean() for _ in range(n_boot)]
+    lo, hi = np.quantile(stats, [0.025, 0.975])
+    return float(per_clip.mean()), (float(lo), float(hi))
+
+
 def score_table(d: pl.DataFrame, ref: str) -> dict[str, np.ndarray]:
     """Conformal inputs of player rows against reference ``ref``: covariances, squared Mahalanobis scores,
     error norms, clips (groups), games, Mondrian features and covariance sources."""
