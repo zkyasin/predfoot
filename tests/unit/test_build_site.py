@@ -290,6 +290,8 @@ def test_showcase_page_keeps_its_contract():
             assert attr in video
     assert "Independent project, not affiliated with SkillCorner." in page
     assert "SoccerTrack v2, Scott et al., CC BY 4.0" in page
+    # ADR-0002: public pixels say how the frames were changed
+    assert all(change in page for change in ("cropped", "downscaled", "overlaid"))
 
 
 # Deploy

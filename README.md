@@ -92,7 +92,8 @@ uv run predfoot qa out-golden/    # rebuilds the run's one-page HTML report
 
 ## Licence and credits
 
-Apache-2.0. Footage: SoccerTrack v2, Scott et al., CC BY 4.0. Test data: SoccerNet SN-GSR, shown only as
-numbers, plots and pitch diagrams. Pitch-marking network: PnLCalib weights by Gutiérrez-Pérez and Agudo,
-CC BY 4.0. Every third-party resource is credited in [ATTRIBUTION.md](ATTRIBUTION.md). predfoot is an
-independent project, not affiliated with SkillCorner.
+Apache-2.0. Footage: SoccerTrack v2, Scott et al., CC BY 4.0, reprojected to a virtual camera, cropped,
+downscaled and overlaid. Test data: SoccerNet SN-GSR, shown only as numbers, plots and pitch diagrams.
+Pitch-marking network: PnLCalib weights by Gutiérrez-Pérez and Agudo, CC BY 4.0. Every third-party resource is
+credited in [ATTRIBUTION.md](ATTRIBUTION.md). predfoot is an independent project, not affiliated with
+SkillCorner.
