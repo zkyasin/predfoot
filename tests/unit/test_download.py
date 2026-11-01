@@ -142,3 +142,21 @@ def test_verify_data_fails_on_one_corrupted_byte(tmp_path, monkeypatch):
     result = runner.invoke(verify_data.app, [])
     assert result.exit_code == 1
     assert "SHA256" in result.output
+
+
+@pytest.mark.parametrize(
+    ("path", "parts", "wanted"),
+    [
+        ("raw/117092/117092_homography.npy", ["raw"], True),
+        ("raw/117092/117092_tracker_box_data.xml", ["raw"], False),  # 318 MB, never fetched
+        ("raw/117093/117093_homography.npy", ["raw"], False),
+        ("mot/117092.txt", ["mot"], True),
+        ("mot/117092.txt", ["raw", "clip"], False),
+        ("mot/clips/117092.mp4", ["clip"], True),
+        ("mot/clips/117093.mp4", ["clip"], False),
+        ("gsr/117092/117092_1st.json", ["raw", "mot", "clip"], False),
+        ("videos/117092/117092_panorama_1st_half.mp4", ["raw", "mot", "clip"], False),
+    ],
+)
+def test_soccertrack_selects_one_match_and_never_the_large_files(path, parts, wanted):
+    assert download_data.soccertrack_wanted(path, "117092", parts) is wanted

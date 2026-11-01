@@ -4,9 +4,10 @@ compare two cameras (per-frame calibration against temporal smoothing).
 Reads ``players.parquet`` written by scripts/eval_dev.py (frames one in five, so 5 fps). For each clip the
 errors are split into a common part (per-frame median over players: mostly the camera) and an individual
 part. For each reference (labels, trusted line oracle, smoothed labels when present) and part: the marginal
-standard deviation per axis, the autocorrelation at lags 1-5 (0.2-1.0 s, pooled over series and weighted by
-their number of pairs), the RMS of the lag-1 steps, and a bracket of the 25 Hz lag-one correlation under an
-exponential decay, ρ₂₅ ∈ [ρ(0.2 s)^(1/5), ρ(1 s)^(1/25)].
+standard deviation per axis, the autocorrelation at lags 1-5 (0.2-1.0 s) of the pooled process, 1 − γ(k)/σ²
+with γ the semi-variogram pooled over every pair of every series (so 2σ²(1 − ρ(0.2 s)) is the squared RMS
+of the lag-1 steps), the RMS and median absolute value of the lag-1 steps, and a bracket of the 25 Hz
+lag-one correlation under an exponential decay, ρ₂₅ ∈ [ρ(0.2 s)^(1/5), ρ(1 s)^(1/25)].
 
 KPI proxy (model-free, the primary evidence for the KPI cost): per track, runs of at least 8 consecutive
 cached frames with every error against the labels below 10 m; Savitzky-Golay positions (window 5, order 2)
@@ -19,20 +20,26 @@ Usage:
     uv run python scripts/error_process.py runs/<ptz>/players.parquet --compare runs/<none>/players.parquet \\
         --out runs/error_process_smoothed.md
 With ``--compare``, both tables are restricted to the player-frames where both have finite errors.
+``--json`` also writes the numbers (per camera, reference, part and axis: σ, ACF with pair counts, lag-1 step
+RMS and median, series lengths, marginal quantiles and kurtosis, the normal-score ACF, and the KPI proxy with
+its run lengths) for scripts/kpi_spectral.py.
 """
 
 from __future__ import annotations
 
+import json
 import subprocess
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import polars as pl
 import typer
-from scipy.signal import savgol_filter
+from scipy.special import ndtri
 
 from predfoot.kpi.errors import split_common_mode
+from predfoot.kpi.proxy import PROXY_MIN_RUN, ProxyTotals
 
 app = typer.Typer(add_completion=False)
 STEP_FRAMES = 5  # cached frames are one in five of the native 25 fps
@@ -40,9 +47,12 @@ DT_S = STEP_FRAMES / 25.0
 MAX_ERROR_M = 10.0  # errors this large are calibration failures, handled by abstention, not by the budget
 LAGS = (1, 2, 3, 4, 5)
 MIN_SERIES = 10
-MIN_RUN = 8
-SG_WINDOW, SG_ORDER = 5, 2
-HSR_MS = 5.56  # 20 km/h
+MIN_RUN = PROXY_MIN_RUN
+AXES = ("x", "y")
+# Probabilities at which the marginal of the errors is stored (dense in the tails).
+_TAIL_PROBS = (0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025)
+_PROBS = np.concatenate([_TAIL_PROBS, np.linspace(0.05, 0.95, 91), 1.0 - np.array(_TAIL_PROBS[::-1])])
+MARGINAL_PROBS = tuple(float(p) for p in _PROBS.round(6))
 KEYS = ["clip", "frame", "track_id"]
 TITLES = {"lab": "labels", "or": "trusted line oracle", "sm": "smoothed labels"}
 
@@ -64,71 +74,119 @@ def clip_tensor(d: pl.DataFrame, ref: str) -> np.ndarray:
 
 
 class _Pool:
-    """Accumulates pooled statistics over many 1-D series."""
+    """Pooled statistics of one error component over many 1-D series (sums over series, not averages).
+
+    σ² is the pooled variance around each series' mean. The lag-k semi-variogram γ(k) = ½·E[(x_{t+k} − x_t)²]
+    is pooled over every finite pair (it needs no centring), and the ACF is ρ(k) = 1 − γ(k)/σ². One
+    homogeneous process with this σ and ρ therefore reproduces the pooled step variances exactly,
+    2σ²(1 − ρ(k)) = E[(x_{t+k} − x_t)²], which is what speed and distance errors depend on. A mean of
+    per-series correlations does not: on SN-GSR dev the series with larger variance are also smoother, so
+    that mean understates the pooled autocorrelation, and a process fitted to it has too much 0.2 s jitter.
+    (The per-series centring biases σ², hence ρ, slightly low; the pair (σ, ρ) still matches the measured
+    steps at the five lags.)
+    """
 
     def __init__(self) -> None:
-        self.sd: list[tuple[float, int]] = []
-        self.acf: dict[int, list[tuple[float, int]]] = {lag: [] for lag in LAGS}
-        self.step_sq, self.step_n = 0.0, 0
+        self.sq_sum, self.n_values = 0.0, 0
+        self.diff_sq = dict.fromkeys(LAGS, 0.0)
+        self.pairs = dict.fromkeys(LAGS, 0)
+        self.steps: list[np.ndarray] = []  # lag-1 steps, for their median
+        self.lengths: Counter[int] = Counter()
 
     def add(self, x: np.ndarray) -> None:
         n = int(np.isfinite(x).sum())
         if n < MIN_SERIES:
             return
-        self.sd.append((float(np.nanstd(x)), n))
+        self.lengths[n] += 1
+        self.sq_sum += float(np.nansum((x - np.nanmean(x)) ** 2))
+        self.n_values += n
         for lag in LAGS:
-            a, b = x[:-lag], x[lag:]
-            ok = np.isfinite(a) & np.isfinite(b)
-            if ok.sum() > 2 and np.std(a[ok]) > 0 and np.std(b[ok]) > 0:
-                self.acf[lag].append((float(np.corrcoef(a[ok], b[ok])[0, 1]), int(ok.sum())))
-        d1 = np.diff(x)
-        d1 = d1[np.isfinite(d1)]
-        self.step_sq += float(np.sum(d1**2))
-        self.step_n += d1.size
+            d = x[lag:] - x[:-lag]
+            d = d[np.isfinite(d)]
+            self.diff_sq[lag] += float(np.sum(d**2))
+            self.pairs[lag] += d.size
+            if lag == 1:
+                self.steps.append(d)
 
     def summary(self) -> dict[str, Any]:
-        sd = np.array(self.sd) if self.sd else np.full((1, 2), np.nan)
-        acf = {}
-        for lag, rows in self.acf.items():
-            arr = np.array(rows) if rows else np.full((1, 2), np.nan)
-            acf[lag] = float(np.average(arr[:, 0], weights=arr[:, 1])) if rows else float("nan")
+        var = self.sq_sum / self.n_values if self.n_values else float("nan")
+        acf = {
+            lag: 1.0 - self.diff_sq[lag] / (2.0 * self.pairs[lag] * var)
+            if self.pairs[lag] and var > 0
+            else float("nan")
+            for lag in LAGS
+        }
+        steps = np.concatenate(self.steps) if self.steps else np.empty(0)
         r1, r5 = (max(acf[lag], 0.0) for lag in (1, 5))
         return {
-            "sigma": float(np.sqrt(np.average(sd[:, 0] ** 2, weights=sd[:, 1]))) if self.sd else float("nan"),
+            "sigma": float(np.sqrt(var)),
             "acf": acf,
-            "step_rms": float(np.sqrt(self.step_sq / self.step_n)) if self.step_n else float("nan"),
+            "n_pairs": dict(self.pairs),
+            "step_rms": float(np.sqrt(self.diff_sq[1] / self.pairs[1])) if self.pairs[1] else float("nan"),
+            "step_abs_median": float(np.median(np.abs(steps))) if steps.size else float("nan"),
             "rho25": (r1 ** (1 / 5), r5 ** (1 / 25)),
-            "n_series": len(self.sd),
+            "n_series": sum(self.lengths.values()),
+            "series_lengths": dict(sorted(self.lengths.items())),
         }
 
 
 def measure(players: pl.DataFrame, ref: str) -> dict[str, Any]:
     d = players.filter(pl.col(f"ex_{ref}").is_not_nan() & pl.col(f"ex_{ref}").is_not_null())
     d = d.filter((pl.col(f"ex_{ref}") ** 2 + pl.col(f"ey_{ref}") ** 2) < MAX_ERROR_M**2)
-    pools = {"common": _Pool(), "individual": _Pool()}
+    parts = ("common", "individual")
+    series: dict[tuple[str, str], list[np.ndarray]] = {(part, axis): [] for part in parts for axis in AXES}
     for (_clip,), g in d.partition_by("clip", as_dict=True).items():
         e = clip_tensor(g, ref)
         if e.shape[0] < MIN_SERIES:
             continue
         common, indiv = split_common_mode(e)
-        for axis in range(2):
-            pools["common"].add(common[:, axis])
-            for t in range(indiv.shape[1]):
-                pools["individual"].add(indiv[:, t, axis])
+        for axis, name in enumerate(AXES):
+            series["common", name].append(common[:, axis])
+            series["individual", name].extend(indiv[:, t, axis] for t in range(indiv.shape[1]))
     out: dict[str, Any] = {"n_player_frames": d.height, "n_clips": d["clip"].n_unique()}
-    for part, pool in pools.items():
-        out[part] = pool.summary()
+    for part in parts:
+        pooled = _Pool()
+        per_axis: dict[str, Any] = {}
+        for name in AXES:
+            pool, scores = _Pool(), _Pool()
+            kept = [x for x in series[part, name] if np.isfinite(x).sum() >= MIN_SERIES]
+            for x in kept:
+                pool.add(x)
+                pooled.add(x)
+            # Marginal of the errors around each series' mean (the σ above uses the same centring), and the
+            # ACF of their normal scores Φ⁻¹(F̂(e)): the correlation of a Gaussian copula with that marginal.
+            centred = [x - np.nanmean(x) for x in kept]
+            values = np.sort(np.concatenate([x[np.isfinite(x)] for x in centred]))
+            for x in centred:
+                scores.add(normal_scores(x, values))
+            per_axis[name] = pool.summary()
+            per_axis[name]["quantiles"] = np.quantile(values, MARGINAL_PROBS).tolist()
+            per_axis[name]["kurtosis"] = float(np.mean(values**4) / np.mean(values**2) ** 2)
+            ns = scores.summary()
+            per_axis[name]["acf_nscore"], per_axis[name]["n_pairs_nscore"] = ns["acf"], ns["n_pairs"]
+        out[part] = pooled.summary()  # both axes pooled, as in the tables
+        out[part].update(per_axis)
+    out["marginal_probs"] = list(MARGINAL_PROBS)
     return out
 
 
-def kpi_proxy(players: pl.DataFrame) -> dict[str, float] | None:
+def normal_scores(x: np.ndarray, sorted_values: np.ndarray) -> np.ndarray:
+    """Φ⁻¹ of the pooled empirical CDF (mid-ranks) at each value of ``x``; NaN stays NaN."""
+    n = sorted_values.size
+    lo = np.searchsorted(sorted_values, x, side="left")
+    hi = np.searchsorted(sorted_values, x, side="right")
+    u = (0.5 * (lo + hi)) / n
+    out = ndtri(np.clip(u, 0.5 / n, 1.0 - 0.5 / n))
+    return np.where(np.isfinite(x), out, np.nan)
+
+
+def kpi_proxy(players: pl.DataFrame) -> dict[str, Any] | None:
     """Distance, HSR distance and speed of the prediction against the smoothed labels (5 fps, SG filters)."""
     if not {"x_pred", "y_pred", "ex_sm", "ey_sm"} <= set(players.columns):
         return None
     d = players.filter(pl.col("ex_lab").is_not_nan() & pl.col("ex_sm").is_not_nan()).sort(KEYS)
-    tot = {"pred": 0.0, "sm": 0.0, "raw": 0.0, "hsr_pred": 0.0, "hsr_sm": 0.0, "hsr_raw": 0.0}
-    speed_err: list[np.ndarray] = []
-    n_runs = n_samples = 0
+    pred_vs_sm, raw_vs_sm = ProxyTotals(), ProxyTotals()
+    run_lengths: Counter[int] = Counter()
     for (_clip, _track), g in d.partition_by("clip", "track_id", as_dict=True).items():
         frames = g["frame"].to_numpy()
         pred = g.select("x_pred", "y_pred").to_numpy()
@@ -140,32 +198,26 @@ def kpi_proxy(players: pl.DataFrame) -> dict[str, float] | None:
             idx = idx[good[idx]]
             if len(idx) < MIN_RUN:
                 continue
-            n_runs += 1
-            n_samples += len(idx)
-            speeds = {}
-            for name, p in (("pred", pred[idx]), ("sm", sm[idx]), ("raw", raw[idx])):
-                pos = savgol_filter(p, SG_WINDOW, SG_ORDER, axis=0)
-                vel = savgol_filter(p, SG_WINDOW, SG_ORDER, deriv=1, delta=DT_S, axis=0)
-                speed = np.linalg.norm(vel, axis=1)
-                steps = np.linalg.norm(np.diff(pos, axis=0), axis=1)
-                fast = 0.5 * (speed[1:] + speed[:-1]) >= HSR_MS
-                tot[name] += float(steps.sum())
-                tot[f"hsr_{name}"] += float(steps[fast].sum())
-                speeds[name] = speed
-            speed_err.append(speeds["pred"] - speeds["sm"])
-    if not n_runs:
+            run_lengths[len(idx)] += 1
+            pred_vs_sm.add(pred[idx], sm[idx], DT_S)
+            raw_vs_sm.add(raw[idx], sm[idx], DT_S)
+    if not pred_vs_sm.runs:
         return None
-    err = np.concatenate(speed_err)
+    p, r = pred_vs_sm.summary(), raw_vs_sm.summary()
     return {
-        "runs": n_runs,
-        "samples": n_samples,
-        "distance_bias": tot["pred"] / tot["sm"] - 1,
-        "raw_distance_bias": tot["raw"] / tot["sm"] - 1,
-        "hsr_bias": tot["hsr_pred"] / tot["hsr_sm"] - 1 if tot["hsr_sm"] > 0 else float("nan"),
-        "raw_hsr_bias": tot["hsr_raw"] / tot["hsr_sm"] - 1 if tot["hsr_sm"] > 0 else float("nan"),
-        "hsr_sm_m": tot["hsr_sm"],
-        "speed_rms": float(np.sqrt(np.mean(err**2))),
-        "speed_p90": float(np.quantile(np.abs(err), 0.9)),
+        "runs": pred_vs_sm.runs,
+        "samples": pred_vs_sm.samples,
+        "distance_bias": p["distance_bias"],
+        "raw_distance_bias": r["distance_bias"],
+        "hsr_bias": p["hsr_bias"],
+        "raw_hsr_bias": r["hsr_bias"],
+        "hsr_sm_m": p["ref_hsr_m"],
+        "sm_distance_m": p["ref_distance_m"],
+        "sm_duration_s": p["duration_s"],
+        "sm_mean_speed_ms": p["ref_mean_speed_ms"],
+        "speed_rms": p["speed_rms"],
+        "speed_p90": p["speed_p90"],
+        "run_lengths": dict(sorted(run_lengths.items())),
     }
 
 
@@ -195,6 +247,19 @@ def camera_labels(paths: list[Path]) -> list[str]:
     return [f"{p} ({i + 1})" for i, p in enumerate(paths)]
 
 
+def to_jsonable(obj: Any) -> Any:
+    """Plain JSON types: dict keys as strings, tuples as lists, NaN as null."""
+    if isinstance(obj, dict):
+        return {str(k): to_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, list | tuple):
+        return [to_jsonable(v) for v in obj]
+    if isinstance(obj, float | np.floating):
+        return None if not np.isfinite(obj) else float(obj)
+    if isinstance(obj, np.integer):
+        return int(obj)
+    return obj
+
+
 def git_sha() -> str:
     return subprocess.run(
         ["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True
@@ -207,16 +272,26 @@ def main(
     compare: Path | None = typer.Option(None, help="players.parquet of another camera (e.g. per-frame)."),  # noqa: B008
     include_filled: bool = typer.Option(False, help="Keep frames whose raw calibration failed (filled)."),
     out: Path = Path("reports/error_process_dev.md"),
+    json_out: Path | None = typer.Option(None, "--json", help="Also write the numbers as JSON here."),  # noqa: B008
+    name: str | None = typer.Option(None, help="Camera label of PLAYERS_PATH (default: its folder)."),
+    compare_name: str | None = typer.Option(None, help="Camera label of --compare (default: its folder)."),
 ) -> None:
     main_t = _load(players_path, include_filled)
-    tables = {camera_labels([players_path])[0]: main_t}
+    sources = {name or camera_labels([players_path])[0]: players_path}
+    tables = {next(iter(sources)): main_t}
     if compare is not None:
         main_t, other_t = _restrict(main_t, _load(compare, include_filled))
         name_other, name_main = camera_labels([compare, players_path])
+        name_other, name_main = compare_name or name_other, name or name_main
+        if name_other == name_main:
+            raise typer.BadParameter("the two cameras need distinct labels (--name / --compare-name)")
         tables = {name_other: other_t, name_main: main_t}
+        sources = {name_other: compare, name_main: players_path}
     cmd = f"uv run python scripts/error_process.py {players_path}"
     cmd += f" --compare {compare}" if compare is not None else ""
     cmd += " --include-filled" if include_filled else ""
+    cmd += f" --name {name}" if name else ""
+    cmd += f" --compare-name {compare_name}" if compare_name else ""
     md = [
         "# Position-error process on SN-GSR dev (T4.2)",
         "",
@@ -224,9 +299,10 @@ def main(
         "",
         "Errors of predfoot's positions (ground-truth boxes, our calibration), split into a common part",
         "shared by the players of a frame (mostly the camera) and an individual part. σ is the marginal",
-        "standard deviation per axis; ACF the autocorrelation at 0.2-1.0 s (frames are one in five);",
-        "ρ₂₅ the 25 Hz lag-one correlation implied by the 0.2 s and by the 1 s lag under an exponential",
-        "decay.",
+        "standard deviation per axis; ACF the autocorrelation at 0.2-1.0 s (frames are one in five) of",
+        "the pooled process, 1 − γ(k)/σ² with γ the semi-variogram pooled over all series, so that",
+        "σ·√(2(1 − ACF(0.2 s))) is the lag-1 step RMS; ρ₂₅ the 25 Hz lag-one correlation implied by the",
+        "0.2 s and by the 1 s lag under an exponential decay.",
         f"Errors above {MAX_ERROR_M:.0f} m are calibration failures, left to abstention, and excluded here."
         + (
             " Frames filled by the smoother (raw calibration failed) are excluded."
@@ -305,6 +381,26 @@ def main(
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("\n".join(md) + "\n")
     typer.echo("\n".join(md))
+    if json_out is not None:
+        payload = {
+            "command": cmd,
+            "git_sha": git_sha(),
+            "include_filled": include_filled,
+            "dt_s": DT_S,
+            "lags_s": [round(lag * DT_S, 6) for lag in LAGS],
+            "max_error_m": MAX_ERROR_M,
+            "cameras": {
+                cam: {
+                    "path": str(sources[cam]),
+                    "references": measured.get(cam, {}),
+                    "kpi_proxy": proxies[cam],
+                }
+                for cam in tables
+            },
+        }
+        json_out.parent.mkdir(parents=True, exist_ok=True)
+        json_out.write_text(json.dumps(to_jsonable(payload), indent=1) + "\n")
+        typer.echo(f"json: {json_out}")
 
 
 if __name__ == "__main__":

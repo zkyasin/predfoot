@@ -44,6 +44,23 @@ def test_cells_map_to_frame_pixels():
     np.testing.assert_allclose(px, [[960.0, 540.0]])
 
 
+def test_detections_are_decoded_from_heatmaps_of_any_runtime():
+    # numpy heatmaps stand in for an ONNX Runtime output: decoding needs neither torch nor the networks
+    from predfoot.keypoints.pnlcalib import N_KEYPOINTS, N_LINES, decode_detections
+
+    hk = np.zeros((1, N_KEYPOINTS, 270, 480))
+    hk[0, 4] = gaussian_map(270, 480, [(240.0, 135.0)])  # keypoint id 5 at the frame centre
+    hk[0, 9] = 0.2 * gaussian_map(270, 480, [(100.0, 50.0)])  # below the detection threshold
+    hl = np.zeros((1, N_LINES, 270, 480))
+    hl[0, 2] = gaussian_map(270, 480, [(50.0, 60.0), (300.0, 200.0)])  # line id 3, both ends visible
+    [(kps, lines)] = decode_detections(hk, hl, (1920, 1080))
+    np.testing.assert_array_equal(kps.ids, [5])
+    np.testing.assert_allclose(kps.uv, [[960.0, 540.0]], atol=1e-6)
+    np.testing.assert_array_equal(lines.line_ids, [3])
+    ends = sorted(map(tuple, np.round(lines.uv[0], 3)))
+    assert ends == [(200.0, 240.0), (1200.0, 800.0)]
+
+
 WEIGHTS = Path(os.environ.get("PREDFOOT_DATA_DIR", "data")) / "weights" / "pnlcalib"
 
 
@@ -59,3 +76,74 @@ def test_networks_load_and_run_on_a_blank_frame():
     assert hl.shape == (1, 23, 270, 480)
     assert np.isfinite(hk).all()
     assert np.isfinite(hl).all()
+
+
+def parity_heatmaps(kp_centre=(100.0, 50.0), line_ends=((20.0, 30.0), (200.0, 150.0))):
+    """Heatmaps of one frame with keypoint id 1 at ``kp_centre`` and line id 5 at ``line_ends`` (cells)."""
+    from predfoot.keypoints.pnlcalib import N_KEYPOINTS, N_LINES
+
+    hk = np.zeros((1, N_KEYPOINTS, 270, 480), dtype=np.float32)
+    hk[0, 0] = gaussian_map(270, 480, [kp_centre])
+    hl = np.zeros((1, N_LINES, 270, 480), dtype=np.float32)
+    if line_ends:
+        hl[0, 4] = gaussian_map(270, 480, line_ends)
+    return hk, hl
+
+
+def test_parity_measures_decoded_shifts_in_frame_pixels():
+    # the ONNX parity check on synthetic heatmaps: no runtime needed
+    from predfoot.keypoints.onnx_models import parity
+
+    reference = parity_heatmaps()
+    same = parity(reference, reference, (1920, 1080))
+    assert same.ok
+    assert same.problems() == []
+    assert (same.max_abs_heatmap, same.max_keypoint_px, same.max_line_end_px, same.n_flips) == (0, 0, 0, 0)
+    assert same.n_points == 3  # one keypoint, two line ends
+    # a keypoint 0.25 cell away is 1 px away in a 1920 × 1080 frame (stride 2, input 960 × 540): too far
+    moved = parity(reference, parity_heatmaps((100.25, 50.0), ((200.0, 150.0), (20.0, 30.0))), (1920, 1080))
+    assert moved.max_keypoint_px == pytest.approx(1.0, abs=0.05)
+    assert moved.max_line_end_px == pytest.approx(0.0, abs=1e-6)  # the order of the two ends does not matter
+    assert not moved.ok
+    assert any("move by" in p for p in moved.problems())
+
+
+@pytest.mark.parametrize("broken", ["zeros", "nan", "scaled by 0.3", "keypoint network zeroed"])
+def test_parity_fails_an_export_that_loses_or_corrupts_detections(broken):
+    from predfoot.keypoints.onnx_models import parity
+
+    reference = parity_heatmaps()
+    hk, hl = (h.copy() for h in reference)
+    if broken == "zeros":
+        hk[:], hl[:] = 0.0, 0.0
+    elif broken == "nan":
+        hk[:], hl[:] = np.nan, np.nan
+    elif broken == "scaled by 0.3":
+        hk *= 0.3
+        hl *= 0.3
+    else:
+        hk[:] = 0.0
+    result = parity(reference, (hk, hl), (1920, 1080))
+    assert not result.ok, result
+    assert result.problems()
+
+
+def test_parity_fails_nan_where_nothing_is_detected():
+    from predfoot.keypoints.onnx_models import parity
+
+    reference = parity_heatmaps(line_ends=())  # no line detected: NaN lines lose no detection
+    hk, hl = (h.copy() for h in reference)
+    hl[:] = np.nan
+    result = parity(reference, (hk, hl), (1920, 1080))
+    assert (result.n_flips, result.n_points) == (0, 1)
+    assert not result.ok
+    assert np.isnan(result.max_abs_heatmap)
+
+
+def test_parity_needs_something_to_compare():
+    from predfoot.keypoints.onnx_models import parity
+
+    blank = parity_heatmaps(kp_centre=(100.0, 50.0), line_ends=())
+    blank[0][:] = 0.0
+    result = parity(blank, blank, (1920, 1080))
+    assert result.problems() == ["no detection to compare"]

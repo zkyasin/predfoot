@@ -8,7 +8,11 @@ region {e : eᵀ Σp⁻¹ e ≤ q̂}, and ``p90_radius_m`` = √(q̂ · λmax(Σ
 
 from __future__ import annotations
 
+import hashlib
+import logging
+import math
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -25,11 +29,14 @@ from predfoot.calib.temporal import (
 )
 from predfoot.contracts import CalibResult, CalibStatus, FootObs, Localization
 from predfoot.geometry import homography as hg
+from predfoot.keypoints.cache import load_detections
 from predfoot.pipeline import stub
-from predfoot.pipeline.clip import ClipFrame
-from predfoot.pipeline.run import Stages
+from predfoot.pipeline.clip import ClipFrame, ClipInput
+from predfoot.pipeline.run import ClipMismatch, Stages
 from predfoot.uncertainty.conformal import MondrianConformal
 from predfoot.uncertainty.delta import CHI2_2_90, position_covariance
+
+log = logging.getLogger(__name__)
 
 
 def real_stages(
@@ -114,5 +121,97 @@ def real_stages(
         return out
 
     return Stages(
-        version=version, calibrate=calibrate, detect=stub.detect, localize=localize, health=stub.health
+        version=version,
+        calibrate=calibrate,
+        detect=stub.detect,
+        localize=localize,
+        health=stub.health,
+        description=_description(conformal, smoothed=temporal is not None),
+        conformal=None if conformal is None else conformal_provenance(conformal),
+        check_clip=lambda clip: check_detection_frames(detections, clip),
     )
+
+
+def check_detection_frames(detections: Mapping[int, Any], clip: ClipInput) -> None:
+    """Detections are keyed by the 0-based index of the clip's frames (``frame`` in ``predfoot-clip/1``).
+
+    Raises :class:`ClipMismatch` when a key is beyond the clip's last frame, as with a file keyed by image
+    number (the detection cache numbers SN-GSR images from 1, one in five). Logs a warning when frame 0 has no
+    entry: a file keyed from 1 would give every frame the camera of the next one.
+    """
+    n = len(clip.frames)
+    beyond = sorted(f for f in detections if f >= n)
+    if beyond:
+        shown = ", ".join(map(str, beyond[:5])) + (", …" if len(beyond) > 5 else "")
+        raise ClipMismatch(
+            f"the detections name frames beyond the {n} frames of clip {clip.clip_id!r} ({shown}): they must "
+            "be keyed by the 0-based index of the clip's frames, not by image number"
+        )
+    if detections and 0 not in detections:
+        log.warning(
+            "the detections have no entry for frame 0 of clip %r: check that they are keyed by the 0-based "
+            "index of the clip's frames (a file keyed from 1 gives every frame the camera of the next one)",
+            clip.clip_id,
+        )
+
+
+def conformal_provenance(model: MondrianConformal) -> dict[str, Any]:
+    """What meta.json records about a conformal model: enough to recognise it and to recompute every q̂.
+
+    meta.json is strict JSON, so a non-finite quantile (an empty calibration set gives +inf) or bin edge is
+    written as a string, "inf".
+    """
+
+    def number(value: float) -> float | str:
+        return float(value) if math.isfinite(value) else str(float(value))
+
+    return {
+        "kind": "mondrian",
+        "sha256": hashlib.sha256(model.to_json().encode("utf-8")).hexdigest(),
+        "alpha": model.alpha,
+        "pooled": number(model.pooled),
+        "edges": {
+            name: [e if math.isfinite(e) else number(e) for e in es] for name, es in model.edges.items()
+        },
+        "quantiles": {key: number(q) for key, q in model.quantiles.items()},
+    }
+
+
+def _description(conformal: MondrianConformal | None, smoothed: bool = False) -> dict[str, str]:
+    regions = (
+        "scaled by the Mondrian conformal quantile of each player's bin (metres per pixel at the feet, "
+        "RANSAC inliers)"
+        if conformal is not None
+        else "uncalibrated Laplace regions (q = χ²₂(0.90))"
+    )
+    return {
+        "calibration": "RANSAC + soft-L1 Levenberg-Marquardt on the cached keypoint and line detections; "
+        "Laplace covariance of the 8 homography parameters"
+        + (
+            "; then fixed-centre pan-tilt-zoom Kalman/RTS smoothing over the clip (predfoot.calib.temporal)"
+            if smoothed
+            else ""
+        ),
+        "detection": "foot points read from the input",
+        "localization": f"inverse homography; delta-method covariance from the calibration, {regions}",
+        "health": "none: calib_health is null; a frame abstains when its calibration failed",
+    }
+
+
+def stages_from_files(
+    detections: Path, conformal: MondrianConformal | None = None, solver: SolverConfig | None = None
+) -> Stages:
+    """Real stages over a detections file (``predfoot-detections/1``, keyed by the clip's frame index).
+
+    The version names the detection model, a hash of the file and the conformal model, so that a resumed run
+    never reuses blocks computed from other detections or other quantiles.
+    """
+    path = Path(detections)
+    dets, model_version = load_detections(path)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()[:12]
+    tag = (
+        "laplace"
+        if conformal is None
+        else f"mondrian@{hashlib.sha256(conformal.to_json().encode('utf-8')).hexdigest()[:12]}"
+    )
+    return real_stages(dets, conformal, f"real+{model_version or 'unknown'}+det@{digest}+{tag}", solver)
