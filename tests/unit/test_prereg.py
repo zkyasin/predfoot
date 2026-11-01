@@ -904,7 +904,7 @@ def test_saved_output_cameras_round_trip_exactly(tmp_path, rng):
 
 def _camera_players(rng, games, scale, filled_rows=False):
     """Synthetic player rows of one camera: both references (the oracle on about half of the rows) and the
-    smoothed labels, errors scaled by ``scale``."""
+    smoothed labels, errors scaled by ``scale``; every player runs along x at 2 m/s."""
     df = synthetic_players(rng, games=games, clips_per_game=4, n=60)
     if filled_rows:
         df = pl.concat([df, synthetic_players(rng, games=games, clips_per_game=4, n=10, filled=True)])
@@ -917,6 +917,8 @@ def _camera_players(rng, games, scale, filled_rows=False):
         pl.Series("ey_or", np.where(has_or, scale * rng.standard_normal(n), np.nan)),
         pl.Series("ex_sm", 0.5 * scale * rng.standard_normal(n)),
         pl.Series("ey_sm", 0.5 * scale * rng.standard_normal(n)),
+        (pl.col("frame") * 0.08).alias("x_pred"),  # 25 fps frame numbers: 2 m/s
+        pl.lit(0.0).alias("y_pred"),
     )
 
 
@@ -999,6 +1001,12 @@ def test_artifacts_endpoints_criteria_and_report_end_to_end(tmp_path, rng):
     diff = roc_auc_score(y, scores["boosting"]) - roc_auc_score(y, scores[art.detector.best_single])
     assert res["detector"]["best_single_dev"] == art.detector.best_single
     assert crit["P3"] == {"diff": pytest.approx(diff), "pass": diff > 0}
+    singles = {f: roc_auc_score(y, scores[f]) for f in FEATURES}  # frozen scores carry the dev signs
+    best = max(singles, key=lambda f: singles[f])
+    assert res["detector"]["best_single_test"] == best
+    assert res["detector"]["auroc_diff_best_test"] == pytest.approx(
+        roc_auc_score(y, scores["boosting"]) - singles[best]
+    )
 
     abstained = perframe.filter(pl.col("frame") % 50 == 0)
     un = prim["unpublished"]
@@ -1035,3 +1043,25 @@ def test_artifacts_endpoints_criteria_and_report_end_to_end(tmp_path, rng):
         in md
     )
     assert md.count("**met**") + md.count("**not met**") == 3
+    for c in fz.CAMERAS:  # each camera's KPI row carries the noise floor of its own runs
+        p = res["kpi"][c]
+        row = next(
+            line for line in md.splitlines() if line.startswith(f"| {fz.CAMERA_TITLES[c]} | {p['runs']} |")
+        )
+        assert f"| {fz._num(p['raw_distance_bias'], '+.1%')} / {fz._num(p['raw_hsr_bias'], '+.1%')} |" in row
+
+    # one non-finite covariance among the primary rows: P2 is not evaluable rather than failed, and the
+    # report still renders from results.json, where NaN is null
+    broken = ptz.with_columns(
+        pl.when(pl.col("frame") == 5).then(np.nan).otherwise(pl.col("c11")).alias("c11")
+    )
+    tables_nan = {"perframe": fz.CameraTables(perframe, frames), "ptz": fz.CameraTables(broken, frames)}
+    with np.errstate(invalid="ignore"):  # the determinant of the NaN covariance
+        res_nan = fz.evaluate(tables_nan, art, n_boot=20)
+    assert res_nan["regions"]["ptz"]["lab"]["nonfinite_areas"] == broken.filter(pl.col("frame") == 5).height
+    assert res_nan["criteria"]["P2"]["pass"] is None
+    md_nan = fz.render_report(json.loads(fz.dump(res_nan)), ["# Synthetic"])
+    assert "| below 1 | not evaluable |" in md_nan
+    assert "region area is not finite" in md_nan
+    # no smoothed player row at all: the error table is empty instead of a crash
+    assert fz.error_endpoint({"ptz": pl.DataFrame(), "perframe": perframe}) == {"n": 0}

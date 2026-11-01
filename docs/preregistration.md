@@ -102,7 +102,9 @@ and reference, the raw-OK player-frames that the other camera publishes and this
 reported next to its coverage, with that coverage also computed counting them as misses (player-frames pooled,
 and clips weighted equally); for the primary camera and reference this is P1's coverage counting them as
 misses. Frames that only the smoother fills (raw calibration failed) are reported apart. P2 and P3 are decided
-on the point estimate; their intervals are reported.
+on the point estimate; their intervals are reported. A criterion whose estimate cannot be computed (for P1 and
+P2, no headline rows; for P2 also a region area that is not finite, which makes the median not finite; for P3,
+test frames without both failures and non-failures) is reported as not evaluable.
 
 P1 pools the headline player-frames, as every dev coverage quoted here does. The grouped conformal quantile
 weighs each calibration clip equally, so the coverage with every clip weighted equally (the mean of the clips'
@@ -131,7 +133,8 @@ All are reported; none is a success criterion.
    labels.
 8. Failure detection: AUROC, average precision and the share of failures removed at 5 % and 10 % abstention
    for every frozen detector; clip-bootstrap interval of the AUROC difference of P3; AUROC per game; and the
-   best single feature on the test frames (post hoc, a stricter comparison than P3).
+   best frozen single feature on the test frames, its dev sign kept, with boosting's AUROC minus its AUROC
+   (post hoc, a stricter comparison than P3).
 9. Residual failures of the smoothed camera, descriptive: the share of frames with self-consistent lines
    whose camera is more than 10 px from the annotated lines, for both cameras on the same frames (raw and
    output cameras both calibrated, as on dev); frames filled by the smoother and raw-OK frames where it
@@ -141,8 +144,8 @@ All are reported; none is a success criterion.
     of at least 8 frames with every error against R1 below 10 m), with the distance bias and the
     high-speed-running (≥ 20 km/h) distance bias against the smoothed labels, for both cameras from the same
     input player-frames. Each camera's runs break at its own errors above 10 m, so the two cameras' runs can
-    differ slightly (their counts are reported). The raw labels' own bias against the smoothed labels is the
-    noise floor of that reference.
+    differ slightly (their counts are reported). The raw labels' own bias against the smoothed labels, on each
+    camera's runs, is the noise floor of that reference.
 
 ## 6. Unit of analysis and intervals
 

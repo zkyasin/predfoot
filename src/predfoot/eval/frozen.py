@@ -358,6 +358,7 @@ def region_endpoint(
         "coverage_const_ci": ps.clip_bootstrap(hit_c, groups, rng, n_boot),
         "coverage_raw_laplace": float(np.mean(s["score"] <= raw_q)),
         "median_area": float(np.median(area)),
+        "nonfinite_areas": int((~np.isfinite(area)).sum()),
         "const_area": a_const,
         "area_ratio": float(np.median(area)) / a_const,
         "area_ratio_ci": _boot_stat(area, groups, rng, n_boot, lambda a: float(np.median(a)) / a_const),
@@ -427,7 +428,8 @@ def detector_endpoint(
 ) -> dict[str, Any]:
     """Failure detection on the per-frame calibrations: AUROC of every frozen detector, the preregistered
     comparison (boosting against the single feature chosen on dev) with a clip-bootstrap interval of the
-    difference, and the best single feature on these frames (post hoc, stricter)."""
+    difference, and the best frozen single feature on these frames, its dev sign kept, with boosting's AUROC
+    minus its AUROC (post hoc, stricter; no random draw)."""
     df = failure_table(frames)
     y = df["fail"].to_numpy().astype(bool)
     out: dict[str, Any] = {"frames": len(df), "failures": int(y.sum()), "best_single_dev": det.best_single}
@@ -460,8 +462,10 @@ def detector_endpoint(
             )
     out["auroc_diff_ci"] = tuple(float(v) for v in np.quantile(diffs, [0.025, 0.975])) if diffs else None
     out["auroc_diff_draws"] = len(diffs)
-    singles = {f: out["detectors"][f]["auroc"] for f in FEATURES}
+    singles = {f: out["detectors"][f]["auroc"] for f in FEATURES}  # frozen, each with its dev sign
     out["best_single_test"] = max(singles, key=lambda f: singles[f])
+    out["auroc_best_single_test"] = singles[out["best_single_test"]]
+    out["auroc_diff_best_test"] = out["auroc_boosting"] - out["auroc_best_single_test"]
     games = df["game"].to_numpy()
     out["per_game"] = [
         {
@@ -522,9 +526,11 @@ def residual_endpoint(frames_perframe: pl.DataFrame, frames_ptz: pl.DataFrame) -
 
 def error_endpoint(players: Mapping[str, pl.DataFrame]) -> dict[str, Any]:
     """Error quantiles (p50, p90, p99, m) of both cameras on the same player-frames, per reference."""
+    if not players["ptz"].height or not players["perframe"].height:  # an empty table has no columns
+        return {"n": 0}
     a = players["ptz"].filter(~pl.col("filled"))
     b = players["perframe"]
-    if not a.height or not b.height:
+    if not a.height:
         return {"n": 0}
     cols = [f"e{x}_{r}" for r in ("lab", "or", "sm") for x in "xy"]
     joined = a.select(*KEYS, *cols).join(b.select(*KEYS, *cols), on=KEYS, suffix="_pf")
@@ -575,9 +581,10 @@ def evaluate(
     det = detector_endpoint(tables["perframe"].frames, art.detector, rng, n_boot)
     prim = regions[PRIMARY[0]][PRIMARY[1]]
     p1 = p1_criterion(prim)
-    p2 = (
-        {"ratio": prim.get("area_ratio"), "pass": prim["area_ratio"] < 1} if prim.get("n") else {"pass": None}
-    )
+    ratio = prim.get("area_ratio")
+    p2: dict[str, Any] = {"pass": None}
+    if prim.get("n"):  # a non-finite area makes the median, so the ratio, non-finite: not evaluable
+        p2 = {"ratio": ratio, "pass": bool(ratio < 1) if ratio is not None and math.isfinite(ratio) else None}
     p3 = (
         {"diff": det["auroc_diff"], "pass": det["auroc_diff"] > 0}
         if det.get("auroc_diff") is not None
@@ -602,12 +609,19 @@ def evaluate(
 # --- report -------------------------------------------------------------------------------------------------
 
 
+def _num(v: Any, spec: str) -> str:
+    """``v`` formatted with ``spec``; "–" when it is missing or not finite (NaN is null in results.json)."""
+    return "–" if v is None or not np.isfinite(v) else format(v, spec)
+
+
 def _pct(v: float | None) -> str:
-    return "–" if v is None or not np.isfinite(v) else f"{v:.1%}"
+    return _num(v, ".1%")
 
 
-def _ci(ci: Sequence[float] | None) -> str:
-    return "–" if ci is None else f"[{ci[0]:.1%}, {ci[1]:.1%}]"
+def _ci(ci: Sequence[float | None] | None, spec: str = ".1%") -> str:
+    if ci is None or any(v is None or not np.isfinite(v) for v in ci):
+        return "–"
+    return f"[{format(ci[0], spec)}, {format(ci[1], spec)}]"
 
 
 def _verdict(p: bool | None) -> str:
@@ -615,7 +629,8 @@ def _verdict(p: bool | None) -> str:
 
 
 def render_report(res: Mapping[str, Any], header: Sequence[str]) -> str:
-    """Markdown report of :func:`evaluate` (aggregate numbers only)."""
+    """Markdown report of :func:`evaluate` (aggregate numbers only); also renders the results as read back
+    from ``results.json``, where non-finite numbers are null."""
     crit = res["criteria"]
     prim = res["regions"][PRIMARY[0]][PRIMARY[1]]
     det = res["detector"]
@@ -636,9 +651,9 @@ def render_report(res: Mapping[str, Any], header: Sequence[str]) -> str:
         f" {_pct(crit['P1'].get('coverage'))} {_ci(crit['P1'].get('ci'))} | 95 % CI contains 90 % |"
         f" {_verdict(crit['P1']['pass'])} |",
         f"| P2 | Median region area / constant circle at the same level, same camera and reference |"
-        f" {prim.get('area_ratio', float('nan')):.2f} | below 1 | {_verdict(crit['P2']['pass'])} |",
+        f" {_num(prim.get('area_ratio'), '.2f')} | below 1 | {_verdict(crit['P2']['pass'])} |",
         f"| P3 | AUROC of gradient boosting − AUROC of `{det.get('best_single_dev')}` (best single feature on"
-        f" dev), per-frame calibrations | {det.get('auroc_diff', float('nan')):+.3f} | above 0 |"
+        f" dev), per-frame calibrations | {_num(det.get('auroc_diff'), '+.3f')} | above 0 |"
         f" {_verdict(crit['P3']['pass'])} |",
         "",
         "## Coverage and size of the regions",
@@ -658,14 +673,27 @@ def render_report(res: Mapping[str, Any], header: Sequence[str]) -> str:
             if not e.get("n"):
                 md.append(f"| {CAMERA_TITLES[c]} | {REF_TITLES[r]} | 0 |" + " – |" * 9)
                 continue
-            lo, hi = e["area_ratio_ci"]
             md.append(
                 f"| {CAMERA_TITLES[c]} | {REF_TITLES[r]} | {e['n']} | {e['clips']} | {_pct(e['coverage'])}"
                 f" {_ci(e['coverage_ci'])} | {_pct(e['coverage_clips'])} {_ci(e['coverage_clips_ci'])} |"
                 f" {_pct(e['coverage_const'])} {_ci(e['coverage_const_ci'])} |"
-                f" {_pct(e['coverage_raw_laplace'])} | {e['median_area']:.2f} | {e['const_area']:.2f} |"
-                f" {e['area_ratio']:.2f} [{lo:.2f}, {hi:.2f}] | {_pct(e['simultaneous_coverage'])} |"
+                f" {_pct(e['coverage_raw_laplace'])} | {_num(e['median_area'], '.2f')} |"
+                f" {_num(e['const_area'], '.2f')} | {_num(e['area_ratio'], '.2f')}"
+                f" {_ci(e['area_ratio_ci'], '.2f')} | {_pct(e['simultaneous_coverage'])} |"
             )
+    nonfinite = [
+        f"{CAMERA_TITLES[c]}, {REF_TITLES[r]}: {n}"
+        for c in CAMERAS
+        for r in REFERENCES
+        if (n := res["regions"][c][r].get("nonfinite_areas"))
+    ]
+    if nonfinite:
+        md += [
+            "",
+            "Headline rows whose region area is not finite (their median area is not): "
+            + "; ".join(nonfinite)
+            + ".",
+        ]
     unpublished = [(c, r, res["regions"][c][r].get("unpublished")) for c in CAMERAS for r in REFERENCES]
     if any(u for _, _, u in unpublished):
         md += [
@@ -728,7 +756,7 @@ def render_report(res: Mapping[str, Any], header: Sequence[str]) -> str:
         ]
         for c in ("perframe", "ptz"):
             cells = [
-                " / ".join(f"{v:.2f}" for v in q) if (q := err.get(f"{c}_{r}")) else "–"
+                " / ".join(_num(v, ".2f") for v in q) if (q := err.get(f"{c}_{r}")) else "–"
                 for r in ("lab", "or", "sm")
             ]
             md.append(f"| {CAMERA_TITLES[c]} | " + " | ".join(cells) + " |")
@@ -739,19 +767,20 @@ def render_report(res: Mapping[str, Any], header: Sequence[str]) -> str:
         f" annotated lines > {FAIL_LINE_PX:.0f} px): {det['failures']}."
     )
     if det.get("detectors"):
-        lo_hi = det.get("auroc_diff_ci")
         md += [
-            f"Boosting − `{det['best_single_dev']}`: {det['auroc_diff']:+.3f}"
-            + (f" [{lo_hi[0]:+.3f}, {lo_hi[1]:+.3f}]" if lo_hi else "")
-            + f" ({det['auroc_diff_draws']} bootstrap draws with both classes). Best single feature on these"
-            f" frames (post hoc, stricter): `{det['best_single_test']}`.",
+            f"Boosting − `{det['best_single_dev']}`: {_num(det['auroc_diff'], '+.3f')}"
+            f" {_ci(det.get('auroc_diff_ci'), '+.3f')} ({det['auroc_diff_draws']} bootstrap draws with both"
+            " classes). Best frozen single feature on these frames, its dev sign kept (post hoc, stricter):"
+            f" `{det['best_single_test']}`, AUROC {_num(det.get('auroc_best_single_test'), '.3f')};"
+            f" boosting − it: {_num(det.get('auroc_diff_best_test'), '+.3f')}.",
             "",
             "| Detector | AUROC | Average precision | Failures removed at 5 % / 10 % abstention |",
             "|---|---|---|---|",
         ]
-        rows = sorted(det["detectors"].items(), key=lambda kv: -kv[1]["auroc"])
+        rows = sorted(det["detectors"].items(), key=lambda kv: -(kv[1]["auroc"] or 0.0))
         md += [
-            f"| {n} | {d['auroc']:.3f} | {d['ap']:.3f} | {_pct(d['removed_5'])} / {_pct(d['removed_10'])} |"
+            f"| {n} | {_num(d['auroc'], '.3f')} | {_num(d['ap'], '.3f')} |"
+            f" {_pct(d['removed_5'])} / {_pct(d['removed_10'])} |"
             for n, d in rows
         ]
         md += [
@@ -759,22 +788,21 @@ def render_report(res: Mapping[str, Any], header: Sequence[str]) -> str:
             "| Game | Frames | Failure rate | AUROC boosting | AUROC best single (dev) |",
             "|---|---|---|---|---|",
         ]
-        for pg in det["per_game"]:
-            ab, bs = pg["auroc_boosting"], pg["auroc_best_single"]
-            md.append(
-                f"| {pg['game']} | {pg['frames']} | {_pct(pg['failure_rate'])} |"
-                f" {'–' if ab is None else f'{ab:.3f}'} | {'–' if bs is None else f'{bs:.3f}'} |"
-            )
+        md += [
+            f"| {pg['game']} | {pg['frames']} | {_pct(pg['failure_rate'])} |"
+            f" {_num(pg['auroc_boosting'], '.3f')} | {_num(pg['auroc_best_single'], '.3f')} |"
+            for pg in det["per_game"]
+        ]
     rs = res["residual"]
     md += ["", "## Residual failures of the smoothed camera", ""]
     if rs.get("frames"):
         md += [
             f"{rs['frames']} frames with self-consistent lines where both cameras are calibrated: above"
             f" {FAIL_LINE_PX:.0f} px, per-frame camera {_pct(rs['fail_share_perframe'])}, smoothed camera"
-            f" {_pct(rs['fail_share_ptz'])} (line distance p90 {rs['line_px_p90_perframe']:.1f} and"
-            f" {rs['line_px_p90_ptz']:.1f} px). Apart: {rs['filled_frames']} frames filled by the smoother"
-            f" (above {FAIL_LINE_PX:.0f} px {_pct(rs['fail_share_filled'])}) and {rs['abstained_frames']}"
-            " raw-OK frames where it abstains. Published-position rate: per-frame"
+            f" {_pct(rs['fail_share_ptz'])} (line distance p90 {_num(rs['line_px_p90_perframe'], '.1f')} and"
+            f" {_num(rs['line_px_p90_ptz'], '.1f')} px). Apart: {rs['filled_frames']} frames filled by the"
+            f" smoother (above {FAIL_LINE_PX:.0f} px {_pct(rs['fail_share_filled'])}) and"
+            f" {rs['abstained_frames']} raw-OK frames where it abstains. Published-position rate: per-frame"
             f" {_pct(rs['published_rate_perframe'])}, smoothed {_pct(rs['published_rate_ptz'])}.",
             "",
         ]
@@ -790,22 +818,21 @@ def render_report(res: Mapping[str, Any], header: Sequence[str]) -> str:
             "## KPI proxy (5 fps, against the smoothed labels, same input player-frames; each camera's runs"
             " break at its own errors above 10 m)",
             "",
-            "| Camera | Runs | Distance bias | HSR-distance bias | Speed error RMS / p90 (m/s) |",
-            "|---|---|---|---|---|",
+            "The noise floor is the raw labels' own bias against the smoothed labels, on the same runs.",
+            "",
+            "| Camera | Runs | Distance bias | HSR-distance bias | Noise floor: distance / HSR-distance"
+            " bias | Speed error RMS / p90 (m/s) |",
+            "|---|---|---|---|---|---|",
         ]
         for c in ("perframe", "ptz"):
             p = kpi.get(c)
             if p is None:
-                md.append(f"| {CAMERA_TITLES[c]} | – | – | – | – |")
+                md.append(f"| {CAMERA_TITLES[c]} | – | – | – | – | – |")
                 continue
             md.append(
-                f"| {CAMERA_TITLES[c]} | {p['runs']} | {p['distance_bias']:+.1%} | {p['hsr_bias']:+.1%} |"
-                f" {p['speed_rms']:.2f} / {p['speed_p90']:.2f} |"
-            )
-        p0 = kpi.get("ptz") or kpi.get("perframe")
-        if p0:
-            md.append(
-                f"\nNoise floor: the raw labels' own distance bias against the smoothed labels is"
-                f" {p0['raw_distance_bias']:+.1%} (HSR distance {p0['raw_hsr_bias']:+.1%})."
+                f"| {CAMERA_TITLES[c]} | {p['runs']} | {_num(p['distance_bias'], '+.1%')} |"
+                f" {_num(p['hsr_bias'], '+.1%')} | {_num(p['raw_distance_bias'], '+.1%')} /"
+                f" {_num(p['raw_hsr_bias'], '+.1%')} | {_num(p['speed_rms'], '.2f')} /"
+                f" {_num(p['speed_p90'], '.2f')} |"
             )
     return "\n".join(md) + "\n"

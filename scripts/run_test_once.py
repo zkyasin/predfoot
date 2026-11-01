@@ -817,9 +817,13 @@ def main(
                 compare_with_dev(ctx, calib_from)
         if stage in ("c", "all"):
             res = stage_c(ctx, None if dry_run or yes else confirm_stage_c)
-            crit = res["criteria"]
+            verdicts = {k: v["pass"] for k, v in res["criteria"].items()}
             typer.echo(
-                "criteria: " + ", ".join(f"{k} {'met' if v['pass'] else 'not met'}" for k, v in crit.items())
+                "criteria: "
+                + ", ".join(
+                    f"{k} {'not evaluable' if p is None else 'met' if p else 'not met'}"
+                    for k, p in verdicts.items()
+                )
             )
             if dry_run:  # the report is set aside so that the marker alone has to refuse
                 aside = ctx.report.with_name(ctx.report.name + ".aside")
