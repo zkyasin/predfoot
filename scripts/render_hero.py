@@ -1,6 +1,9 @@
 """Hero loop of the showcase page: predfoot on real public footage, SoccerTrack v2 match 117093.
 
-    uv run python scripts/render_hero.py --mp4 assets/showcase/hero.mp4 --poster assets/showcase/hero.jpg
+    uv run python scripts/render_hero.py --start 13.0 --seconds 8 --show-from 14.2 \
+        --mp4 assets/showcase/hero.mp4 --poster assets/showcase/hero.jpg
+
+(reports/showcase_visuals.md: how the committed loop was made and what it does not show.)
 
 What it shows, without words. Top: a virtual broadcast camera that follows the play inside SoccerTrack v2's
 fixed panorama (CC BY 4.0, Scott et al.; :mod:`predfoot.demo.virtual_camera`, as scripts/render_demo.py),
@@ -24,8 +27,8 @@ The loop illustrates the output on real pixels; it is not evidence of accuracy (
 the dataset's own calibration is metres off, so there is no reference to score against here).
 
 Writes runs/<date>_<sha>_hero/ (metrics.json and detections.json, the keyframe detections) and the MP4 and
-poster asked for. ``--detections`` reuses the detections of an earlier run (same match and keyframes): no
-network runs.
+poster asked for. ``--detections`` reuses the detections an earlier run saved for the same views (same match,
+virtual camera settings and followed span): the network only runs on the keyframes they lack.
 """
 
 from __future__ import annotations
@@ -497,7 +500,7 @@ def main(
     ] = None,
     render_step: Annotated[int, typer.Option(help="Clip frames between frames of the MP4 (1: 25 fps).")] = 1,
     width: Annotated[int, typer.Option(help="Width of the MP4 (px).")] = 720,
-    crf: Annotated[int, typer.Option(help="x264 constant rate factor (higher: smaller, blurrier).")] = 27,
+    crf: Annotated[int, typer.Option(help="x264 constant rate factor (higher: smaller, blurrier).")] = 29,
     device: Annotated[str, typer.Option(help="Torch device for PnLCalib.")] = "auto",
     calibration: Annotated[
         Path, typer.Option(help="Dev noise parameters and conformal models (JSON).")
