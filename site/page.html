@@ -369,7 +369,7 @@ footer .wrap { display: grid; gap: 22px; padding-block: clamp(32px, 5vw, 52px); 
           <li><b>1.2<span class="unit"> m</span></b><span>9 players in 10 placed this close, against 1.8&nbsp;m without smoothing</span></li>
           <li><b>3.4<span class="unit"> %</span></b><span>extra distance covered from camera wobble, down from 26&nbsp;%</span></li>
           <li><b>93.1<span class="unit"> %</span></b><span>of true spots inside zones built for 90&nbsp;%: <em>target missed</em>, on the cautious side</span></li>
-          <li><b>55<span class="unit"> %</span></b><span>of the frames with a wrong camera estimate caught by the alarm</span></li>
+          <li><b>55<span class="unit"> %</span></b><span>of wrong camera estimates caught when the alarm sets aside 1 frame in 10</span></li>
         </ul>
       </div>
       <figure class="screen">
@@ -438,7 +438,7 @@ footer .wrap { display: grid; gap: 22px; padding-block: clamp(32px, 5vw, 52px); 
       <article class="metric" aria-labelledby="m-stats">
         <div class="metric-head"><h3 class="kicker" id="m-stats">Physical stats</h3></div>
         <p class="figure">3.4<span class="unit"> %</span></p>
-        <p class="claim">extra distance covered that camera wobble still adds with smoothing. Without it, wobble adds 26.1&nbsp;% and makes players look far faster than they are.</p>
+        <p class="claim">extra distance covered that camera wobble still adds with smoothing. Without it, wobble adds 26.1&nbsp;% to distance and 72.4&nbsp;% to high-speed running.</p>
         <div class="bars">
           <div class="bar-group">
             <p class="bar-title">Distance covered, extra from wobble <span class="dir">(lower is better)</span></p>
