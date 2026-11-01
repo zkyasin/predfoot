@@ -30,12 +30,14 @@ another lock is never reused or evaluated.
   owner to confirm (``--yes`` skips the question) and writes the markers (``PREDFOOT_DATA_DIR/test_once/``
   and ``runs/test_once/``) before any label is read, so a second C is refused even after a crash. Every
   endpoint for both cameras and both references, the success criteria evaluated as written, into
-  ``reports/test_run.md`` (aggregate numbers) and the lock's run folder (local). The criteria and the primary
-  endpoints are saved (``results.json``) as soon as they are computed; a secondary endpoint that raises is
-  reported as a deviation with the other results. A crash or an interruption after the markers (an exception,
-  Ctrl-C or SIGTERM) still writes ``reports/test_run.md``, naming the failure, with the results saved before
-  it; a closed terminal (SIGHUP) does not stop stage C; a hard kill (SIGKILL) or a power loss leaves only the
-  markers.
+  ``reports/test_run.md`` (aggregate numbers) and the lock's run folder (local). The criteria and every region
+  and failure-detection result (the primary endpoints, secondary analyses 1 to 6 and 8) are saved
+  (``results.json``) as soon as they are computed; the position errors, the residual failures and the KPI
+  proxy (secondary analyses 7, 9 and 10) run after them, each on its own, and one that raises is reported as a
+  deviation with every other result. A crash or an interruption after the markers (an exception, Ctrl-C or
+  SIGTERM) still writes ``reports/test_run.md``, naming the failure, with the results saved before it; a
+  closed terminal (SIGHUP) does not stop stage C. A hard kill (SIGKILL) or a power loss writes no report: the
+  markers remain, with ``results.json`` if the criteria were saved before it.
 
 ``--dry-run`` exercises the same chain on dev clips standing in for test clips (``--dry-clips``, default three
 clips of game 4), in a scratch folder: a scratch freeze on a few clips of the five other dev games
@@ -72,6 +74,7 @@ from predfoot.contracts import CalibResult
 from predfoot.eval import frozen as fz
 from predfoot.eval import positions as ps
 from predfoot.eval import prereg as pr
+from predfoot.io.files import atomic_write_text
 from predfoot.io.manifest import sha256_file
 from predfoot.io.sngsr import DEV_SPLITS
 from predfoot.keypoints.cache import cache_path, cached_detections
@@ -193,15 +196,7 @@ def check_clips(ctx: Context) -> None:
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
-    write_text_atomic(path, fz.dump(payload))
-
-
-def write_text_atomic(path: Path, text: str) -> None:
-    """``text`` into ``path`` through a temporary file renamed over it, so an existing file is complete."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    tmp.replace(path)
+    atomic_write_text(path, fz.dump(payload))
 
 
 def read_stage(ctx: Context, name: str) -> dict[str, Any]:
@@ -498,9 +493,9 @@ def check_label_tables(ctx: Context) -> None:
 
 def prepare_c(ctx: Context) -> Prepared:
     """Check and load everything stage C needs except the labels, so that nothing label-free can fail after
-    the claim: the clip list, the two label tables (their schemas, no label), both stage records, the
-    detection caches, the frozen artifacts, the two camera files (lock, parameters, clips) and every clip's
-    frame count."""
+    the claim: the clip list, the two label tables (their schemas and row counts, no label value), both stage
+    records, the detection caches, the frozen artifacts, the two camera files (lock, parameters, clips) and
+    every clip's frame count."""
     check_clips(ctx)
     check_label_tables(ctx)
     verify_caches(ctx, read_stage(ctx, "stage_a.json"))
@@ -668,7 +663,7 @@ def _failure_report(ctx: Context, lock: pr.Lock, payload: dict[str, Any], err: B
         "",
         *_computed_results(ctx),
     ]
-    write_text_atomic(ctx.report, "\n".join(md) + "\n")
+    atomic_write_text(ctx.report, "\n".join(md) + "\n")
     ctx.log(f"stage C failed after the claim ({what}); failure report {ctx.report}")
 
 
@@ -679,12 +674,17 @@ def _computed_results(ctx: Context) -> list[str]:
         res = json.loads((ctx.work_dir / "results.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return ["No result was saved before the failure."]
-    what = (
-        "Every endpoint was computed and saved before the failure, but the report could not be rendered."
-        if res.get("complete")
-        else "The success criteria and the primary endpoints (regions and failure detection) were computed"
-        " and saved before the failure; the secondary endpoints were not."
-    )
+    if res.get("complete"):
+        what = "Every endpoint ran and the results were saved before the failure, but the report could not be"
+        what += " rendered."
+        if failed := sorted(res.get("endpoint_errors") or {}):
+            what += f" Endpoints that raised, so missing (deviations): {', '.join(failed)}."
+    else:
+        what = (
+            "The success criteria, the region endpoints and the failure detection (the primary endpoints and"
+            " secondary analyses 1 to 6 and 8) were computed and saved before the failure; the position"
+            " errors, the residual failures and the KPI proxy (secondary analyses 7, 9 and 10) were not."
+        )
     return [
         f"{what} As saved in `results.json` (aggregate numbers):",
         "",
@@ -724,13 +724,13 @@ def _evaluate(ctx: Context, prepared: Prepared, lock: pr.Lock, payload: dict[str
         write_json(ctx.work_dir / "results.json", {**primary, "provenance": provenance, "complete": False})
         ctx.log("criteria and primary endpoints computed and saved (results.json); secondary endpoints next")
 
-    res = fz.evaluate(tables, prepared.art, on_primary=save_primary)
+    res = fz.evaluate(tables, prepared.art, on_primary=save_primary, log=ctx.log_lines.append)
     res["provenance"], res["complete"] = provenance, True
     write_json(ctx.work_dir / "results.json", res)
     if res["endpoint_errors"]:
         ctx.log(f"secondary endpoints that raised, reported as deviations: {res['endpoint_errors']}")
     ctx.log("every endpoint computed and saved (results.json); writing the report")
-    write_text_atomic(ctx.report, fz.render_report(res, report_header(ctx, lock, payload["started_utc"])))
+    atomic_write_text(ctx.report, fz.render_report(res, report_header(ctx, lock, payload["started_utc"])))
     write_json(ctx.work_dir / "stage_c.json", {"finished_utc": _now(), "report": str(ctx.report)})
     ctx.log(f"stage C done: report {ctx.report}")
     return res

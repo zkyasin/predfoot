@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import traceback
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -575,13 +576,16 @@ def evaluate(
     n_boot: int = N_BOOT,
     seed: int = BOOT_SEED,
     on_primary: Callable[[dict[str, Any]], None] | None = None,
+    log: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Every endpoint of the preregistration, the success criteria evaluated as written.
 
-    The region endpoints, the failure detection and the criteria come first and are handed to ``on_primary``
-    (stage C saves them) before the secondary endpoints run. A secondary endpoint that raises is recorded in
-    ``endpoint_errors`` (a deviation the report lists) and does not take the other results with it. Only the
-    region and detector endpoints draw from the generator.
+    The region endpoints (the primary endpoints and secondary analyses 1 to 6), the failure detection (P3 and
+    secondary analysis 8) and the criteria come first and are handed to ``on_primary`` (stage C saves them).
+    The position errors, the residual failures and the KPI proxy (secondary analyses 7, 9 and 10) run after
+    them, each on its own: one that raises is recorded in ``endpoint_errors`` (a deviation the report lists,
+    its traceback sent to ``log``) and does not take the other results with it. Only the region and detector
+    endpoints draw from the generator, so a failure among the later three cannot disturb any draw.
     """
     rng = np.random.default_rng(seed)
     players = {c: tables[c].players for c in CAMERAS}
@@ -627,6 +631,8 @@ def evaluate(
         except Exception as err:  # a secondary endpoint must not take the primary results with it
             res[name] = None
             failed[name] = f"{type(err).__name__}: {err}"
+            if log is not None:
+                log(f"secondary endpoint {name} raised:\n{traceback.format_exc().rstrip()}")
     res["endpoint_errors"] = failed
     return res
 

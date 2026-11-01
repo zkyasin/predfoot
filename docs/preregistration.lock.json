@@ -1,0 +1,74 @@
+{
+  "artifacts": {
+    "artifacts/prereg/v1/analysis.json": "6e804fd041866b237ea21ec788f8a0d4a85185dc49806fc5025eb9df18bd985e",
+    "artifacts/prereg/v1/detector.json": "2643f3d3bfed6d3d4fe88944687820359566ec7e76b01c4b6bd8ed799576ab31",
+    "artifacts/prereg/v1/regions_perframe_lab.json": "7e42ba61a3028664d96ba4d0a767df4349de2422f32b89541f5ce9dd08be75f3",
+    "artifacts/prereg/v1/regions_perframe_or.json": "5fca7eb66f805de6ad21edef9789665dbb1659d3826b9fe545759559afe62547",
+    "artifacts/prereg/v1/regions_ptz_lab.json": "c77363d634777356d6e1167d361eed2f5eaea37d8b9bb87d0d2716b0db4a8173",
+    "artifacts/prereg/v1/regions_ptz_or.json": "ffc02d042e1ea1435ab817b2dea46fe0cd9d98798394de09c297ff50d60d83ab",
+    "artifacts/prereg/v1/smoother.json": "0cb97647ecfd863a200b91c2ca4200309766ea45433407e4336c1ab7b48cc339"
+  },
+  "artifacts_dir": "artifacts/prereg/v1",
+  "code_commit": "a46c15aaaea4f8f80d2de874658438b617e94726",
+  "config_digests": {
+    "analysis": "46d79b83162a",
+    "detection_model": "pnlcalib-sv@7ea78fa76aaf+d72f4ed71734",
+    "noise_params": "03288cf6c64a",
+    "smoother_config": "ad7d4fc89136",
+    "solver": "24457eee96fa"
+  },
+  "environment": {
+    "numpy": "2.5.4",
+    "opencv-python-headless": "5.0.0.93",
+    "polars": "2.1.0",
+    "python": "3.12.13",
+    "scikit-learn": "1.9.1",
+    "scipy": "1.18.1",
+    "torch": "2.15.0",
+    "torchvision": "0.29.2"
+  },
+  "format": "predfoot-prereg-lock/1",
+  "frozen_at_utc": "2026-11-01T11:56:11+00:00",
+  "inputs": {
+    "calib_from": {
+      "git_sha": "c3861c7",
+      "name": "calib.npz",
+      "sha256": "bb10757fb0dcaaded8e0bbada5cf78dda62cd9bfb6635e235e0f91411cb7db4a"
+    },
+    "index/clips.parquet": "7b9ea59364d03eb37e75d6d0b4a3a8ff0540726599979e22ccc171bd2daf3747",
+    "index/lines.parquet": "a2c5f79f0118bf476d2aea6d085e349962fb75481ae8dda1ea9bda244faff421",
+    "index/persons.parquet": "08d68f48212159e02b8ddbde873f9090dcca1ad44b5aa9924533cca2efe8a64d",
+    "weights": {
+      "SV_kp": "7ea78fa76aaf94976a8eca428d6e3c59697a93430cba1a4603e20284b61f5113",
+      "SV_lines": "d72f4ed71734a2e3df9fa084f666e9b8adaef21bf69bac8952d6d3f970ff7455"
+    }
+  },
+  "preregistration": {
+    "path": "docs/preregistration.md",
+    "sha256": "25bf24bf31da3027799e6934d5d1137d3a1251746f20e364c1aaefc9bddb68fb",
+    "version": 1
+  },
+  "protected_paths": [
+    "src",
+    "scripts",
+    "configs",
+    "pyproject.toml",
+    "uv.lock",
+    ".python-version"
+  ],
+  "test_split": {
+    "clip_ids_sha256": "63e67af3b0afa5416a8e073af44ee37d24d3eecd2c3d14b5ef48d71fd8397abc",
+    "clips": 49,
+    "clips_per_game": {
+      "11": 14,
+      "7": 16,
+      "8": 19
+    },
+    "games": [
+      7,
+      8,
+      11
+    ],
+    "split": "test"
+  }
+}

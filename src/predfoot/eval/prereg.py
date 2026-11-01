@@ -360,8 +360,12 @@ def verify_lock(root: Path, lock_path: Path = LOCK_PATH, *, require_clean: bool 
 def claim_once(markers: Sequence[Path], payload: Mapping[str, Any]) -> None:
     """Write every evaluation marker, refusing when any already exists (a second evaluation).
 
-    Markers are created exclusively (O_EXCL), so two concurrent invocations cannot both pass.
+    Markers are created exclusively (O_EXCL), so two concurrent invocations cannot both pass, and synced to
+    disk with their folder. Two markers naming the same file are refused before anything is written: the
+    second one would look like a claim lost to another invocation.
     """
+    if len({m.resolve() for m in markers}) != len(markers):
+        raise PreregError(f"two evaluation markers name the same file: {[str(m) for m in markers]}")
     existing = [m for m in markers if m.exists()]
     if existing:
         raise AlreadyClaimed(
@@ -376,3 +380,10 @@ def claim_once(markers: Sequence[Path], payload: Mapping[str, Any]) -> None:
             raise AlreadyClaimed(f"the test evaluation already started ({marker})") from err
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        folder = os.open(marker.parent, os.O_RDONLY)
+        try:
+            os.fsync(folder)
+        finally:
+            os.close(folder)
