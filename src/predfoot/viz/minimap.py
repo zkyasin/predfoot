@@ -82,26 +82,38 @@ def select_panels(abstain: Sequence[bool], n_panels: int) -> list[int]:
     return picks
 
 
-def _outline(patch: Patch) -> Patch:
-    patch.set(fill=False, edgecolor=PITCH_LINE, linewidth=0.8, zorder=1)
+def _outline(
+    patch: Patch, colour: str = PITCH_LINE, linewidth: float = 0.8, alpha: float | None = None
+) -> Patch:
+    patch.set(fill=False, edgecolor=colour, linewidth=linewidth, alpha=alpha, zorder=1)
     return patch
 
 
 def draw_pitch(
-    ax: Axes, length: float = DEFAULT_PITCH_LENGTH_M, width: float = DEFAULT_PITCH_WIDTH_M
+    ax: Axes,
+    length: float = DEFAULT_PITCH_LENGTH_M,
+    width: float = DEFAULT_PITCH_WIDTH_M,
+    *,
+    colour: str = PITCH_LINE,
+    linewidth: float = 0.8,
+    alpha: float | None = None,
 ) -> None:
-    """Pitch markings centred on the centre spot, in metres."""
+    """Pitch markings centred on the centre spot, in metres (``colour``, ``linewidth`` in points and ``alpha``
+    of the lines; the spots scale with the lines)."""
     half_l, half_w = length / 2, width / 2
-    ax.add_patch(_outline(Rectangle((-half_l, -half_w), length, width)))
-    ax.plot([0.0, 0.0], [-half_w, half_w], color=PITCH_LINE, linewidth=0.8, zorder=1)
-    ax.add_patch(_outline(Circle((0.0, 0.0), CENTRE_CIRCLE_R)))
+    spot_size = 1.5 * linewidth / 0.8
+    ax.add_patch(_outline(Rectangle((-half_l, -half_w), length, width), colour, linewidth, alpha))
+    ax.plot([0.0, 0.0], [-half_w, half_w], color=colour, linewidth=linewidth, alpha=alpha, zorder=1)
+    ax.add_patch(_outline(Circle((0.0, 0.0), CENTRE_CIRCLE_R), colour, linewidth, alpha))
     for sign in (-1.0, 1.0):
         goal_line = sign * half_l
         for depth, box_width in (PENALTY_AREA, GOAL_AREA):
             x0 = goal_line if sign < 0 else goal_line - depth
-            ax.add_patch(_outline(Rectangle((x0, -box_width / 2), depth, box_width)))
+            ax.add_patch(
+                _outline(Rectangle((x0, -box_width / 2), depth, box_width), colour, linewidth, alpha)
+            )
         spot = goal_line - sign * PENALTY_SPOT
-        ax.plot([spot], [0.0], marker="o", markersize=1.5, color=PITCH_LINE, zorder=1)
+        ax.plot([spot], [0.0], marker="o", markersize=spot_size, color=colour, alpha=alpha, zorder=1)
         # The penalty arc is the part of the 9.15 m circle around the spot outside the penalty area.
         half_angle = math.degrees(math.acos((PENALTY_AREA[0] - PENALTY_SPOT) / CENTRE_CIRCLE_R))
         centre_angle = 0.0 if sign < 0 else 180.0
@@ -112,12 +124,13 @@ def draw_pitch(
                 2 * CENTRE_CIRCLE_R,
                 theta1=centre_angle - half_angle,
                 theta2=centre_angle + half_angle,
-                edgecolor=PITCH_LINE,
-                linewidth=0.8,
+                edgecolor=colour,
+                linewidth=linewidth,
+                alpha=alpha,
                 zorder=1,
             )
         )
-    ax.plot([0.0], [0.0], marker="o", markersize=1.5, color=PITCH_LINE, zorder=1)
+    ax.plot([0.0], [0.0], marker="o", markersize=spot_size, color=colour, alpha=alpha, zorder=1)
 
 
 def draw_frame(
