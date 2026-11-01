@@ -35,11 +35,9 @@ from __future__ import annotations
 import json
 import subprocess
 import time
-import warnings
-from collections.abc import Iterator, Sequence
-from dataclasses import asdict, dataclass, field
+from collections.abc import Sequence
+from dataclasses import asdict
 from datetime import UTC, datetime
-from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -48,657 +46,67 @@ import polars as pl
 import typer
 
 from predfoot.calib import temporal as tm
-from predfoot.calib.lines import line_oracle, line_reprojection_px
-from predfoot.calib.observations import observations_from_detections
-from predfoot.calib.solver import SolverConfig, calibrate
-from predfoot.contracts import CalibResult, CalibStatus
-from predfoot.geometry import homography as hg
-from predfoot.geometry.pitch import pnlcalib_keypoints
-from predfoot.health.features import calibration_features, calibration_jump_px
-from predfoot.keypoints.cache import cache_path, cached_detections
-from predfoot.paths import data_dir, index_dir
-from predfoot.uncertainty.conformal import MondrianConformal, grouped_quantile
-from predfoot.uncertainty.delta import (
-    circumscribed_radius,
-    mahalanobis2,
-    position_covariance,
-    region_quantile,
+from predfoot.calib.solver import SolverConfig
+from predfoot.eval.positions import (
+    ALPHA,
+    FAIL_LINE_PX,
+    FLAGS,
+    IMAGE_SIZE,
+    MIN_SOURCE_CLIPS,
+    MONDRIAN_BINS,
+    NATIVE_FPS,
+    ORACLE_MAX_PX,
+    POOLED_SOURCES,
+    RAW_GAP_MAX_M,
+    ClipCalib,
+    FitScope,
+    Output,
+    Smooth,
+    SmoothingInfo,
+    calibrate_clip,
+    cov_sources,
+    frame_rows_out,
+    load_calib,
+    logo,
+    min_source_clips,
+    player_rows,
+    q3,
+    save_calib,
+    smooth_outputs,
 )
+from predfoot.eval.positions import clip_bootstrap as _clip_bootstrap
+from predfoot.eval.positions import error_norm as _err
+from predfoot.eval.positions import flag_arrays as _flag_arrays
+from predfoot.eval.positions import mondrian_by_source as _mondrian_by_source
+from predfoot.paths import index_dir
+from predfoot.uncertainty.conformal import MondrianConformal
+
+__all__ = [  # re-exported for tests and for other scripts
+    "ALPHA",
+    "IMAGE_SIZE",
+    "MIN_SOURCE_CLIPS",
+    "MONDRIAN_BINS",
+    "NATIVE_FPS",
+    "ORACLE_MAX_PX",
+    "POOLED_SOURCES",
+    "RAW_GAP_MAX_M",
+    "ClipCalib",
+    "MondrianConformal",
+    "_clip_bootstrap",
+    "_mondrian_by_source",
+    "cov_sources",
+    "load_calib",
+    "logo",
+    "min_source_clips",
+    "save_calib",
+]
 
 app = typer.Typer(add_completion=False)
-KP = pnlcalib_keypoints()
-ORACLE_MAX_PX = 3.0
-RAW_GAP_MAX_M = 5.0
-ALPHA = 0.1
-NATIVE_FPS = 25.0
-IMAGE_SIZE = (1920, 1080)
-FAIL_LINE_PX = 10.0
 STEP_MAX_ERROR_M = 10.0  # as scripts/error_process.py: larger errors are calibration failures (abstention)
-FLAGS = (
-    "smoothed", "repaired", "filled", "bridged", "projected", "passthrough", "duplicate", "rejected",
-    "unchecked",
-)  # fmt: skip
 DEFAULT_REPORT = Path("reports/m2_logo_dev.md")
-#: Mondrian bins of a covariance source; the sources in POOLED_SOURCES (few rows) get one pooled quantile.
-MONDRIAN_BINS = {"mpp": 3, "n_inliers": 2}
-POOLED_SOURCES = frozenset({"gap"})
-#: Fewest calibration clips G for which the clip-level conformal level (1 − α)(1 + 1/G) is below 1 (10 at
-#: α = 0.1). A source with fewer calibration clips gets the model fitted on all sources: its own quantile
-#: would be its largest score.
-MIN_SOURCE_CLIPS = next(g for g in range(1, 10_000) if (1 - ALPHA) * (1 + 1 / g) < 1)
-
-
-class Smooth(StrEnum):
-    none = "none"
-    proj = "proj"
-    ptz = "ptz"
-
-
-class FitScope(StrEnum):
-    fold = "fold"
-    all = "all"
-
-
-@dataclass
-class ClipCalib:
-    """Per-frame calibrations of one clip and what the evaluation needs from its labels."""
-
-    clip_id: str
-    game: int
-    split: str
-    frames: np.ndarray  # (T,) every cached frame (native index)
-    results: list[CalibResult]
-    duplicate: np.ndarray  # (T,) same detections as the previous cached frame
-    frame_rows: list[dict[str, Any]]  # raw calibration: health features, oracle, line_px (labelled frames)
-    persons_by_frame: dict[int, pl.DataFrame] = field(default_factory=dict)  # filtered person rows
-    oracle_by_frame: dict[int, np.ndarray | None] = field(default_factory=dict)  # trusted line oracle
-    lines_by_frame: dict[int, dict[str, np.ndarray]] = field(default_factory=dict)
-    n_corr: dict[int, int] = field(default_factory=dict)
-
-
-def calibrate_clip(
-    clip_id: str,
-    split: str,
-    game: int,
-    persons: pl.DataFrame,
-    lines: pl.DataFrame,
-    cached: Sequence[CalibResult] | None = None,
-) -> ClipCalib | None:
-    """Calibrate every cached frame (seeded by frame and clip) unless ``cached`` calibrations are given."""
-    clip_dir = data_dir() / "sn-gsr" / split / clip_id
-    n = len(list((clip_dir / "img1").glob("*.jpg")))
-    if not cache_path(clip_id, n).exists():
-        return None
-    dets, _, _ = cached_detections(clip_dir, clip_id)
-    frames = np.array(sorted(dets), dtype=np.int64)
-    if cached is not None and len(cached) != len(frames):
-        raise typer.BadParameter(
-            f"{clip_id}: {len(cached)} saved calibrations for {len(frames)} cached frames"
-        )
-    cfg = SolverConfig()
-    cc = ClipCalib(clip_id, game, split, frames, [], np.zeros(len(frames), dtype=bool), [])
-    p_by_frame = persons.partition_by("frame", as_dict=True)
-    l_by_frame = lines.partition_by("frame", as_dict=True)
-    cc.duplicate[:] = tm.duplicate_mask([dets[f] for f in frames.tolist()])
-    prev_h = None
-    for i, frame in enumerate(frames.tolist()):
-        det = dets[frame]
-        xy, uv, w, obs = observations_from_detections(det)
-        if cached is None:
-            rng = np.random.default_rng(frame * 7919 + int(clip_id.split("-")[1]))
-            res, _ = calibrate(xy, uv, rng, weights=w, config=cfg, lines=obs)
-        else:
-            res = cached[i]
-        cc.results.append(res)
-        p = p_by_frame.get((frame,))
-        if p is None:
-            continue
-        # Ground truth from a failed raw camera (raw and smoothed labels more than 5 m apart) is dropped.
-        p = p.filter(
-            ~pl.col("truncated")
-            & pl.col("x_raw").is_not_null()
-            & (
-                ((pl.col("x") - pl.col("x_raw")) ** 2 + (pl.col("y") - pl.col("y_raw")) ** 2)
-                <= RAW_GAP_MAX_M**2
-            )
-        )
-        frame_lines = {}
-        lf = l_by_frame.get((frame,))
-        if lf is not None:
-            for (cls,), g in lf.filter(pl.col("is_planar")).partition_by("line_class", as_dict=True).items():
-                if g.height >= 2:
-                    frame_lines[cls] = g.sort("point_idx").select("u", "v").to_numpy()
-        h_or = line_oracle(frame_lines)
-        oracle_px = line_reprojection_px(h_or, frame_lines)
-        trusted = h_or is not None and oracle_px <= ORACLE_MAX_PX
-        evidence = np.vstack([uv.reshape(-1, 2), *[o.uv for o in obs]]) if obs else uv
-        n_kp = int(sum(KP[int(k)][2] for k in det["kp_ids"]))
-        feats = calibration_features(res, evidence, n_kp, len(obs), det["kp_conf"], prev_h)
-        prev_h = res.H if res.ok else None
-        line_px = line_reprojection_px(res.H, frame_lines) if res.ok else float("nan")
-        base = {
-            "clip": clip_id,
-            "game": game,
-            "frame": frame,
-            "ok": res.ok,
-            "n_corr": len(xy) + len(obs),
-            "n_inliers": res.n_inliers,
-        }
-        cc.frame_rows.append(
-            {**base, **feats, "line_px": line_px, "oracle_px": oracle_px, "trusted": trusted}
-        )
-        cc.persons_by_frame[frame] = p
-        cc.oracle_by_frame[frame] = h_or if trusted else None
-        cc.lines_by_frame[frame] = frame_lines
-        cc.n_corr[frame] = len(xy) + len(obs)
-    return cc
-
-
-def camera_speed_px_s(frames: np.ndarray, results: Sequence[CalibResult]) -> np.ndarray:
-    """Image motion (px/s) of a ground grid between consecutive output cameras; NaN without both."""
-    out = np.full(len(frames), np.nan)
-    for i in range(1, len(frames)):
-        a, b = results[i - 1], results[i]
-        if a.ok and b.ok and a.H is not None and b.H is not None:
-            dt = (frames[i] - frames[i - 1]) / NATIVE_FPS
-            out[i] = calibration_jump_px(b.H, a.H, IMAGE_SIZE) / dt
-    return out
-
-
-def _flag_arrays(flags: tm.FrameFlags | None, n: int) -> dict[str, np.ndarray]:
-    if flags is None:
-        return {name: np.zeros(n, dtype=bool) for name in FLAGS}
-    return {name: np.asarray(getattr(flags, name), dtype=bool) for name in FLAGS}
-
-
-def cov_sources(flags: tm.FrameFlags | None, n: int) -> np.ndarray:
-    """Model behind each output covariance, so that each gets its own conformal quantiles:
-
-    - "smoother": smoothed and repaired frames, the RTS state pooled over a segment;
-    - "gap": filled and bridged frames, the state across a gap without a measurement, whose steps carry the
-      gap factor λ: relative to its error, that covariance is about two orders of magnitude wider than a
-      smoothed frame's;
-    - "frame": one frame's own calibration, passed through or per-frame, or projected on the PTZ manifold in
-      the projection ablation (κ² Σθ and A κ² Σφ Aᵀ, Σφ being Σθ projected on the manifold: the same
-      single-frame information and scale).
-
-    A duplicate takes the source of the frame it copies.
-    """
-    out = np.full(n, "frame", dtype=object)
-    if flags is None:
-        return out
-    for k in range(n):
-        if k and flags.duplicate[k]:
-            out[k] = out[k - 1]
-        elif flags.smoothed[k] or flags.repaired[k]:
-            out[k] = "smoother"
-        elif flags.filled[k] or flags.bridged[k]:
-            out[k] = "gap"
-    return out
-
-
-def player_rows(
-    cc: ClipCalib, results: Sequence[CalibResult], flags: tm.FrameFlags | None, fold: int | None
-) -> pl.DataFrame:
-    """Per-player rows (errors against the three references, covariances) of one clip's output cameras."""
-    fl = _flag_arrays(flags, len(cc.frames))
-    source = cov_sources(flags, len(cc.frames))
-    speed = camera_speed_px_s(cc.frames, results)
-    blocks: dict[str, list[np.ndarray]] = {}
-
-    def add(name: str, values: np.ndarray) -> None:
-        blocks.setdefault(name, []).append(values)
-
-    for i, frame in enumerate(cc.frames.tolist()):
-        p = cc.persons_by_frame.get(frame)
-        res = results[i]
-        if p is None or p.height == 0 or not res.ok or res.H is None or res.cov_theta is None:
-            continue
-        feet = p.select("foot_u", "foot_v").to_numpy()
-        gt = p.select("x_raw", "y_raw").to_numpy()
-        sm = p.select("x", "y").to_numpy()
-        h_or = cc.oracle_by_frame[frame]
-        pred, cov, valid = position_covariance(res.H, res.cov_theta, feet)
-        ref_or = hg.backproject(h_or, feet)[0] if h_or is not None else np.full_like(gt, np.nan)
-        mpp = np.sqrt(np.abs(np.linalg.det(hg.jacobian_backproject_uv(res.H, feet))))
-        v = np.flatnonzero(valid)
-        m = len(v)
-        if not m:
-            continue
-        add("clip", np.full(m, cc.clip_id, dtype=object))
-        add("game", np.full(m, cc.game, dtype=np.int64))
-        add("frame", np.full(m, frame, dtype=np.int64))
-        add("ok", np.ones(m, dtype=bool))
-        add("n_corr", np.full(m, cc.n_corr[frame], dtype=np.int64))
-        add("n_inliers", np.full(m, res.n_inliers, dtype=np.int64))
-        add("track_id", p["track_id"].to_numpy()[v].astype(np.int64))
-        add("ex_lab", pred[v, 0] - gt[v, 0])
-        add("ey_lab", pred[v, 1] - gt[v, 1])
-        add("ex_or", pred[v, 0] - ref_or[v, 0])
-        add("ey_or", pred[v, 1] - ref_or[v, 1])
-        add("c00", cov[v, 0, 0])
-        add("c01", cov[v, 0, 1])
-        add("c11", cov[v, 1, 1])
-        add("mpp", mpp[v])
-        add("rms_px", np.full(m, np.nan if res.rms_px is None else res.rms_px))
-        add("dof", np.full(m, np.nan if res.dof is None else res.dof))
-        add("fold", np.full(m, -1 if fold is None else fold, dtype=np.int64))
-        for name in FLAGS:
-            add(name, np.full(m, bool(fl[name][i])))
-        add("cov_source", np.full(m, source[i], dtype=object))
-        add("x_pred", pred[v, 0])
-        add("y_pred", pred[v, 1])
-        add("ex_sm", pred[v, 0] - sm[v, 0])
-        add("ey_sm", pred[v, 1] - sm[v, 1])
-        add("cam_speed_px_s", np.full(m, speed[i]))
-    if not blocks:
-        return pl.DataFrame()
-    df = pl.DataFrame({name: np.concatenate(parts) for name, parts in blocks.items()})
-    df = df.with_columns(pl.col("clip").cast(pl.String), pl.col("cov_source").cast(pl.String))
-    return df.with_columns(pl.when(pl.col("fold") >= 0).then(pl.col("fold")).otherwise(None).alias("fold"))
-
-
-def frame_rows_out(
-    cc: ClipCalib,
-    results: Sequence[CalibResult],
-    flags: tm.FrameFlags | None,
-    diag: dict[str, np.ndarray],
-    fold: int | None,
-) -> list[dict[str, Any]]:
-    """Today's frame rows (raw calibration) plus what the output camera did on each labelled frame."""
-    fl = _flag_arrays(flags, len(cc.frames))
-    speed = camera_speed_px_s(cc.frames, results)
-    index = {f: i for i, f in enumerate(cc.frames.tolist())}
-    rows = []
-    for row in cc.frame_rows:
-        frame = row["frame"]
-        i = index[frame]
-        res, raw = results[i], cc.results[i]
-        p = cc.persons_by_frame[frame]
-        h_or = cc.oracle_by_frame[frame]
-        e90_lab = e90_or = line_out = jump = log_sigma = np.nan
-        if res.ok and res.H is not None and res.cov_theta is not None:
-            line_out = line_reprojection_px(res.H, cc.lines_by_frame[frame])
-            if raw.ok and raw.H is not None:
-                jump = calibration_jump_px(res.H, raw.H, IMAGE_SIZE)
-            centre = np.array([[IMAGE_SIZE[0] / 2, IMAGE_SIZE[1] * 0.75]])
-            _, c, ok = position_covariance(res.H, res.cov_theta, centre)
-            if ok[0]:
-                log_sigma = float(np.log(np.sqrt(max(np.linalg.eigvalsh(c[0])[-1], 1e-12))))
-            if p.height:
-                feet = p.select("foot_u", "foot_v").to_numpy()
-                pred, _, valid = position_covariance(res.H, res.cov_theta, feet)
-                e_lab = np.linalg.norm(pred - p.select("x_raw", "y_raw").to_numpy(), axis=1)[valid]
-                e90_lab = float(np.quantile(e_lab, 0.9)) if len(e_lab) else np.nan
-                if h_or is not None and len(e_lab):
-                    e_or = np.linalg.norm(pred - hg.backproject(h_or, feet)[0], axis=1)[valid]
-                    e90_or = float(np.quantile(e_or, 0.9))
-        out = {**row, "err_p90_lab": e90_lab, "err_p90_or": e90_or, "fold": fold, "ok_out": res.ok}
-        out |= {name: bool(fl[name][i]) for name in FLAGS}
-        out |= {name: float(v[i]) for name, v in diag.items()}
-        out |= {"line_px_out": line_out, "jump_out_raw_px": jump, "log_sigma_out": log_sigma}
-        out |= {"cam_speed_px_s": float(speed[i])}
-        rows.append(out)
-    return rows
-
-
-# --- saved calibrations ---------------------------------------------------------------------------------
-
-
-def _opt(values: list[float | None]) -> tuple[np.ndarray, np.ndarray]:
-    has = np.array([v is not None for v in values], dtype=bool)
-    return np.array([np.nan if v is None else v for v in values], dtype=np.float64), has
-
-
-def save_calib(path: Path, ccs: Sequence[ClipCalib], meta: dict[str, Any]) -> None:
-    """Every clip's per-frame calibrations, exactly (None fields are stored with a mask)."""
-    arrays: dict[str, np.ndarray] = {
-        "meta": np.array(json.dumps({**meta, "clips": [c.clip_id for c in ccs]}))
-    }
-    for cc in ccs:
-        n = len(cc.frames)
-        h = np.full((n, 3, 3), np.nan)
-        cov = np.full((n, 8, 8), np.nan)
-        has_h, has_cov = np.zeros(n, dtype=bool), np.zeros(n, dtype=bool)
-        for i, r in enumerate(cc.results):
-            if r.H is not None:
-                h[i], has_h[i] = r.H, True
-            if r.cov_theta is not None:
-                cov[i], has_cov[i] = r.cov_theta, True
-        key = f"{cc.clip_id}__"
-        arrays |= {key + "frames": cc.frames, key + "duplicate": cc.duplicate, key + "H": h, key + "cov": cov}
-        arrays |= {key + "has_H": has_h, key + "has_cov": has_cov}
-        arrays[key + "status"] = np.array([r.status.value for r in cc.results])
-        arrays[key + "n_inliers"] = np.array([r.n_inliers for r in cc.results], dtype=np.int64)
-        for name in ("s2", "rms_px", "cond", "dof"):
-            arrays[key + name], arrays[key + "has_" + name] = _opt([getattr(r, name) for r in cc.results])
-    path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(path, **arrays)
-
-
-def load_calib(path: Path) -> tuple[dict[str, list[CalibResult]], dict[str, Any]]:
-    z = np.load(path, allow_pickle=False)
-    meta = json.loads(str(z["meta"]))
-    out = {}
-    for clip_id in meta["clips"]:
-        key = f"{clip_id}__"
-        results = []
-        for i, status in enumerate(z[key + "status"].tolist()):
-            opt = {
-                name: float(z[key + name][i]) if z[key + "has_" + name][i] else None
-                for name in ("s2", "rms_px", "cond", "dof")
-            }
-            results.append(
-                CalibResult(
-                    CalibStatus(status),
-                    H=z[key + "H"][i].copy() if z[key + "has_H"][i] else None,
-                    cov_theta=z[key + "cov"][i].copy() if z[key + "has_cov"][i] else None,
-                    n_inliers=int(z[key + "n_inliers"][i]),
-                    **opt,
-                )
-            )
-        out[clip_id] = results
-    return out, meta
-
-
-# --- temporal smoothing ----------------------------------------------------------------------------------
-
-
-@dataclass
-class Output:
-    """Output cameras of one clip under one fold's parameters (fold None: no folds)."""
-
-    cc: ClipCalib
-    fold: int | None
-    results: list[CalibResult]
-    flags: tm.FrameFlags | None
-    diag: dict[str, np.ndarray]
-    track: tm.SmoothedTrack | None = None
-
-
-@dataclass
-class SmoothingInfo:
-    fits: dict[str, dict[str, Any]] = field(default_factory=dict)
-    own: dict[str, tm.CentreEstimate | None] = field(default_factory=dict)
-    chosen: dict[str, tm.CentreEstimate | None] = field(default_factory=dict)
-    refused: dict[str, bool] = field(default_factory=dict)  # the game centre did not explain the clip
-    game: dict[int, tm.CentreEstimate | None] = field(default_factory=dict)
-    meas: dict[str, tm.ClipMeasurements] = field(default_factory=dict)
-    seconds: dict[str, float] = field(default_factory=dict)
-
-
-def _diag(meas: tm.ClipMeasurements | None, track: tm.SmoothedTrack | None, n: int) -> dict[str, np.ndarray]:
-    nan = np.full(n, np.nan)
-    if meas is None:
-        return {}
-    with np.errstate(invalid="ignore", divide="ignore"):
-        rel = meas.d2 / meas.kappa2_clip if np.isfinite(meas.kappa2_clip) else nan
-    return {
-        "segment": track.segment.astype(float) if track is not None else np.full(n, -1.0),
-        "d2_rel": rel,
-        "deletion": track.deletion if track is not None else nan,
-        "nis": track.nis if track is not None else nan,
-    }
-
-
-def smooth_outputs(
-    ccs: Sequence[ClipCalib], smooth: Smooth, fit_scope: FitScope, cfg: tm.SmootherConfig, info: SmoothingInfo
-) -> Iterator[Output]:
-    """Output cameras of every clip (and every fold for the fold-wise fit); fills ``info`` on the way."""
-    if smooth is Smooth.none:
-        for cc in ccs:
-            yield Output(cc, None, cc.results, None, {})
-        return
-    t0 = time.perf_counter()
-    for cc in ccs:
-        info.own[cc.clip_id] = tm.estimate_centre(cc.results, cc.duplicate, cfg)
-    for g in sorted({cc.game for cc in ccs}):
-        info.game[g] = tm.game_centre([info.own[cc.clip_id] for cc in ccs if cc.game == g])
-    for cc in ccs:
-        meas, refused = tm.measure_at_centre(
-            cc.clip_id, cc.frames, cc.results, cc.duplicate, info.own[cc.clip_id], info.game[cc.game], cfg
-        )
-        info.meas[cc.clip_id], info.chosen[cc.clip_id], info.refused[cc.clip_id] = meas, meas.centre, refused
-    info.seconds["centres_and_measurements"] = time.perf_counter() - t0
-    if smooth is Smooth.proj:
-        for cc in ccs:
-            meas = info.meas[cc.clip_id]
-            res, flags = tm.projection_results(cc.results, meas, cfg)
-            yield Output(cc, None, res, flags, _diag(meas, None, len(cc.frames)))
-        return
-    games = sorted({cc.game for cc in ccs})
-    folds: list[int | None] = [None] if fit_scope is FitScope.all else list(games)
-    for fold in folds:
-        t0 = time.perf_counter()
-        train = [info.meas[cc.clip_id] for cc in ccs if fold is None or cc.game != fold]
-        params, fit = tm.fit_noise(train, cfg)
-        info.seconds[f"fit_{fold}"] = time.perf_counter() - t0
-        info.fits["all" if fold is None else str(fold)] = {
-            "params": params.to_dict(),
-            "params_digest": params.digest(),
-            "training_clips": len(train),
-            "training_games": [g for g in games if fold is None or g != fold],
-            **fit,
-        }
-        t0 = time.perf_counter()
-        for cc in ccs:
-            meas = info.meas[cc.clip_id]
-            if meas.accepted.any():
-                track = tm.smooth_clip(meas, params, cfg)
-            else:
-                track = tm.empty_track(meas, params, cfg)
-            res, flags = tm.to_calib_results(cc.results, meas, track, params, cfg)
-            yield Output(cc, fold, res, flags, _diag(meas, track, len(cc.frames)), track)
-        info.seconds[f"smooth_{fold}"] = time.perf_counter() - t0
-
-
-# --- LOGO conformal ----------------------------------------------------------------------------------------
-
-
-def _clip_bootstrap(
-    hit: np.ndarray, clip_ids: np.ndarray, rng: np.random.Generator, n_boot: int
-) -> tuple[float, float]:
-    """95 % interval of a coverage rate, resampling whole clips."""
-    uniq = np.unique(clip_ids)
-    idx = {c: np.flatnonzero(clip_ids == c) for c in uniq}
-    stats = [
-        np.mean(np.concatenate([hit[idx[c]] for c in rng.choice(uniq, size=len(uniq), replace=True)]))
-        for _ in range(n_boot)
-    ]
-    lo, hi = np.quantile(stats, [0.025, 0.975])
-    return float(lo), float(hi)
-
-
-def _scores(d: pl.DataFrame, ref: str) -> dict[str, np.ndarray]:
-    e = d.select(f"ex_{ref}", f"ey_{ref}").to_numpy()
-    cov = np.stack([d["c00"], d["c01"], d["c01"], d["c11"]], axis=1).reshape(-1, 2, 2)
-    return {
-        "cov": cov,
-        "score": mahalanobis2(e, cov),
-        "norm": np.linalg.norm(e, axis=1),
-        "groups": d["clip"].to_numpy(),
-        "games": d["game"].to_numpy(),
-        "mpp": d["mpp"].to_numpy(),
-        "n_inliers": d["n_inliers"].to_numpy().astype(float),
-        "dof": d["dof"].cast(pl.Float64).fill_null(np.nan).to_numpy(),
-        "source": d["cov_source"].to_numpy() if "cov_source" in d.columns else np.full(d.height, "frame"),
-    }
-
-
-def logo(
-    df: pl.DataFrame,
-    ref: str,
-    rng: np.random.Generator,
-    n_boot: int = 300,
-    fold_col: str | None = None,
-    extra: pl.DataFrame | None = None,
-) -> tuple[list[dict[str, Any]], dict[str, Any], pl.DataFrame, pl.DataFrame | None]:
-    """Leave-one-game-out coverage and size of our ellipses against a constant circle.
-
-    Returns one row per held-out game, a summary over all held-out predictions (each player-frame is predicted
-    with quantiles fitted on the other games), including coverage by distance tercile, the held-out rows with
-    their hits, and ``extra`` rows (e.g. filled frames) scored with the same fold models. With ``fold_col``,
-    fold g calibrates on rows (fold == g) & (game != g) and tests on rows (fold == g) & (game == g).
-    Mondrian models are fitted within each covariance source (column ``cov_source``, see :func:`cov_sources`
-    and :func:`_mondrian_by_source`); the ``extra`` rows of the other games calibrate their own source and
-    nothing else. The pooled quantile, the constant circle and the fallback model use the ``df`` rows only.
-    """
-    d = df.filter(pl.col(f"ex_{ref}").is_not_nan())
-    s = _scores(d, ref)
-    score, norm, groups, games, cov = s["score"], s["norm"], s["groups"], s["games"], s["cov"]
-    feats = {"mpp": s["mpp"], "n_inliers": s["n_inliers"]}
-    source = s["source"]
-    raw_q = np.array([region_quantile(2, 1 - ALPHA, v) for v in s["dof"]])
-    folds = d[fold_col].to_numpy() if fold_col else None
-    hit_mond, hit_const = np.zeros(len(d), bool), np.zeros(len(d), bool)
-    rad_mond, area_mond, r_const_all = np.zeros(len(d)), np.zeros(len(d)), np.zeros(len(d))
-    held = np.zeros(len(d), bool)
-    x = extra.filter(pl.col(f"ex_{ref}").is_not_nan()) if extra is not None else None
-    xs = _scores(x, ref) if x is not None and x.height else None
-    x_mond = np.zeros(x.height if x is not None else 0, bool)
-    x_const, x_held, x_area = x_mond.copy(), x_mond.copy(), np.zeros(len(x_mond))
-    x_folds = x[fold_col].to_numpy() if fold_col and x is not None else None
-    # Calibration pool of the per-source models: the df rows, then the extra rows (base marks the df rows).
-    pool = {"score": score, "groups": groups, "source": source, "games": games, **feats}
-    if xs is not None:
-        pool = {k: np.concatenate([v, xs[k]]) for k, v in pool.items()}
-    base = np.arange(len(pool["score"])) < len(score)
-    pool_folds = None if folds is None else np.concatenate([folds, x_folds]) if x_folds is not None else folds
-    pool_feats = {k: pool[k] for k in feats}
-    rows = []
-    for g in np.unique(games):
-        if folds is None:
-            cal, tst = games != g, games == g
-            cal_pool = pool["games"] != g
-        else:
-            cal, tst = (folds == g) & (games != g), (folds == g) & (games == g)
-            cal_pool = (pool_folds == g) & (pool["games"] != g)
-        if not cal.any() or not tst.any():
-            warnings.warn(f"fold {g}: empty calibration or test set, skipped", stacklevel=2)
-            continue
-        held |= tst
-        q_pool = grouped_quantile(score[cal], groups[cal], ALPHA)
-        models = _mondrian_by_source(
-            pool["score"], pool["groups"], pool_feats, pool["source"], cal_pool, base
-        )
-        q_mond = np.full(len(d), np.nan)
-        for src in np.unique(source[tst]):
-            sel = tst & (source == src)
-            model = models.get(str(src), models[None])
-            q_mond[sel] = model.quantile_for({k: v[sel] for k, v in feats.items()})
-        q_mond = q_mond[tst]
-        r_const = grouped_quantile(norm[cal], groups[cal], ALPHA)
-        hit_mond[tst] = score[tst] <= q_mond
-        hit_const[tst] = norm[tst] <= r_const
-        rad_mond[tst] = np.sqrt(q_mond * np.linalg.eigvalsh(cov[tst])[:, -1])
-        area_mond[tst] = np.pi * q_mond * np.sqrt(np.clip(np.linalg.det(cov[tst]), 0, None))
-        r_const_all[tst] = r_const
-        if xs is not None:
-            xt = (xs["games"] == g) & ((x_folds == g) if x_folds is not None else True)
-            if xt.any():
-                qx = np.full(len(xt), np.nan)
-                for src in np.unique(xs["source"][xt]):
-                    sel = xt & (xs["source"] == src)
-                    model = models.get(str(src), models[None])
-                    qx[sel] = model.quantile_for({k: xs[k][sel] for k in feats})
-                x_mond[xt], x_const[xt] = xs["score"][xt] <= qx[xt], xs["norm"][xt] <= r_const
-                x_held[xt] = True
-                x_area[xt] = np.pi * qx[xt] * np.sqrt(np.clip(np.linalg.det(xs["cov"][xt]), 0, None))
-        rows.append(
-            {
-                "game": int(g),
-                "clips": len(np.unique(groups[tst])),
-                "n": int(tst.sum()),
-                "cov_raw": float(np.mean(score[tst] <= raw_q[tst])),
-                "cov_pool": float(np.mean(score[tst] <= q_pool)),
-                "cov_mond": float(hit_mond[tst].mean()),
-                "cov_mond_ci": _clip_bootstrap(hit_mond[tst], groups[tst], rng, n_boot),
-                "cov_const": float(hit_const[tst].mean()),
-                "r_pool": float(np.median(circumscribed_radius(cov[tst], q_pool))),
-                "r_mond": float(np.median(rad_mond[tst])),
-                "a_mond": float(np.median(area_mond[tst])),
-                "r_const": float(r_const),
-                "a_const": float(np.pi * r_const**2),
-            }
-        )
-    h = held
-    terciles = np.quantile(feats["mpp"][h], [1 / 3, 2 / 3])
-    bins = np.searchsorted(terciles, feats["mpp"][h])
-    summary = {
-        "n": int(h.sum()),
-        "clips": len(np.unique(groups[h])),
-        "cov_raw": float(np.mean(score[h] <= raw_q[h])),
-        "cov_mond": float(hit_mond[h].mean()),
-        "cov_mond_ci": _clip_bootstrap(hit_mond[h], groups[h], rng, n_boot),
-        "cov_const": float(hit_const[h].mean()),
-        "cov_const_ci": _clip_bootstrap(hit_const[h], groups[h], rng, n_boot),
-        "r_mond": float(np.median(rad_mond[h])),
-        "a_mond": float(np.median(area_mond[h])),
-        "a_const": float(np.median(np.pi * r_const_all[h] ** 2)),
-        "by_tercile": [
-            (float(hit_mond[h][bins == b].mean()), float(hit_const[h][bins == b].mean())) for b in range(3)
-        ],
-        "tercile_edges": terciles.tolist(),
-    }
-    held_df = d.with_columns(
-        pl.Series("hit_mond", hit_mond), pl.Series("hit_const", hit_const), pl.Series("area_mond", area_mond)
-    ).filter(pl.Series(held))
-    extra_df = None
-    if x is not None and xs is not None:
-        extra_df = x.with_columns(
-            pl.Series("hit_mond", x_mond), pl.Series("hit_const", x_const), pl.Series("area_mond", x_area)
-        ).filter(pl.Series(x_held))
-    return rows, summary, held_df, extra_df
-
-
-def _mondrian_by_source(
-    score: np.ndarray,
-    groups: np.ndarray,
-    feats: dict[str, np.ndarray],
-    source: np.ndarray,
-    cal: np.ndarray,
-    base: np.ndarray | None = None,
-) -> dict[str | None, MondrianConformal]:
-    """Mondrian models fitted on the calibration rows of each covariance source, plus one on the calibration
-    rows of ``base`` (default: all rows; key None) for a source without a model of its own.
-
-    A source gets its own model when its calibration rows come from at least ``MIN_SOURCE_CLIPS`` clips: with
-    fewer, the clip-level level (1 − α)(1 + 1/G) reaches 1 and the quantile would be the source's largest
-    score (the PTZ-projected source of the first full run had 5-9 calibration clips per fold, hence regions
-    of 60,000 m²). Sources in ``POOLED_SOURCES`` get one pooled quantile instead of bins. With a single source
-    and no ``base`` restriction the two models are the same fit.
-    """
-    keep = np.ones(len(score), dtype=bool) if base is None else np.asarray(base, dtype=bool)
-
-    def fit(sel: np.ndarray, bins: dict[str, int]) -> MondrianConformal:
-        return MondrianConformal.fit(
-            score[sel], groups[sel], {k: v[sel] for k, v in feats.items()}, bins, alpha=ALPHA
-        )
-
-    present = np.unique(source[cal])
-    if len(present) == 1 and keep[cal].all():
-        model = fit(cal, MONDRIAN_BINS)
-        return {None: model, str(present[0]): model}
-    models: dict[str | None, MondrianConformal] = {None: fit(cal & keep, MONDRIAN_BINS)}
-    for src in present:
-        sel = cal & (source == src)
-        if len(np.unique(groups[sel])) >= MIN_SOURCE_CLIPS:
-            models[str(src)] = fit(sel, {} if src in POOLED_SOURCES else MONDRIAN_BINS)
-    return models
 
 
 # --- report ------------------------------------------------------------------------------------------------
-
-
-def q3(x: np.ndarray) -> str:
-    v = np.asarray(x, dtype=np.float64)
-    if not np.isfinite(v).any():
-        return "– | – | –"
-    return " | ".join(f"{np.nanquantile(v, p):.2f}" for p in (0.5, 0.9, 0.99))
-
-
-def _err(d: pl.DataFrame, ref: str) -> np.ndarray:
-    return np.hypot(d[f"ex_{ref}"].to_numpy(), d[f"ey_{ref}"].to_numpy())
 
 
 def common_steps(d: pl.DataFrame, ref: str = "sm", max_error_m: float | None = None) -> np.ndarray:
@@ -1126,7 +534,10 @@ def main(
             raise typer.BadParameter(f"{cid} is not in {calib_from}")
         cp = persons.filter(pl.col("clip_id") == cid)
         cl = lines.filter(pl.col("clip_id") == cid)
-        cc = calibrate_clip(cid, c["split"], int(c["game_id"]), cp, cl, saved.get(cid))
+        try:
+            cc = calibrate_clip(cid, c["split"], int(c["game_id"]), cp, cl, saved.get(cid))
+        except ValueError as err:  # saved calibrations that do not match the cached frames
+            raise typer.BadParameter(str(err)) from err
         if cc is not None:
             ccs.append(cc)
     if not ccs:

@@ -33,12 +33,14 @@ def _read_rgb(path: Path) -> NDArray[np.uint8]:
     return np.asarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), dtype=np.uint8)
 
 
-def cache_path(clip_id: str, n_frames: int) -> Path:
-    return cache_dir() / "kp" / MODEL_FAMILY / f"{clip_id}_{n_frames}.npz"
+def cache_path(clip_id: str, n_frames: int, root: Path | None = None) -> Path:
+    """Cache file of a clip; ``root`` replaces the default ``cache/kp`` folder (the test run has its own)."""
+    base = root if root is not None else cache_dir() / "kp"
+    return base / MODEL_FAMILY / f"{clip_id}_{n_frames}.npz"
 
 
 def cached_detections(
-    clip_dir: Path, clip_id: str, device: str = "auto", batch: int = 1
+    clip_dir: Path, clip_id: str, device: str = "auto", batch: int = 1, root: Path | None = None
 ) -> tuple[dict[int, dict[str, Any]], float, str]:
     """Detections for every frame image of ``clip_dir/img1``, computed once and cached as .npz.
 
@@ -46,9 +48,10 @@ def cached_detections(
     image number (the stem of the file name: 1, 6, 11, … for SN-GSR frames downloaded one in five); the real
     stages want the 0-based index of the clip's frames, see :func:`by_clip_index`.
     Batch 1 is the fastest setting on a 24 GB Apple GPU: larger batches of two HRNet-W48 run out of memory.
+    ``root``: another cache folder (see :func:`cache_path`).
     """
     frame_files = sorted((clip_dir / "img1").glob("*.jpg"))
-    path = cache_path(clip_id, len(frame_files))
+    path = cache_path(clip_id, len(frame_files), root=root)
     if path.exists():
         z = np.load(path, allow_pickle=True)
         return z["dets"].item(), float(z["seconds"]), str(z["version"])

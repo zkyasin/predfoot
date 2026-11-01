@@ -39,12 +39,20 @@ import typer
 from scipy.special import ndtri
 
 from predfoot.kpi.errors import split_common_mode
-from predfoot.kpi.proxy import PROXY_MIN_RUN, ProxyTotals
+from predfoot.kpi.proxy import (
+    PLAYER_KEYS,
+    PROXY_MAX_ERROR_M,
+    PROXY_MIN_RUN,
+    PROXY_STEP_FRAMES,
+)
+from predfoot.kpi.proxy import players_kpi_proxy as kpi_proxy
+from predfoot.kpi.proxy import restrict_shared as _restrict
+from predfoot.kpi.proxy import table_references as references
 
 app = typer.Typer(add_completion=False)
-STEP_FRAMES = 5  # cached frames are one in five of the native 25 fps
+STEP_FRAMES = PROXY_STEP_FRAMES  # cached frames are one in five of the native 25 fps
 DT_S = STEP_FRAMES / 25.0
-MAX_ERROR_M = 10.0  # errors this large are calibration failures, handled by abstention, not by the budget
+MAX_ERROR_M = PROXY_MAX_ERROR_M  # errors this large are calibration failures, handled by abstention
 LAGS = (1, 2, 3, 4, 5)
 MIN_SERIES = 10
 MIN_RUN = PROXY_MIN_RUN
@@ -53,12 +61,9 @@ AXES = ("x", "y")
 _TAIL_PROBS = (0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025)
 _PROBS = np.concatenate([_TAIL_PROBS, np.linspace(0.05, 0.95, 91), 1.0 - np.array(_TAIL_PROBS[::-1])])
 MARGINAL_PROBS = tuple(float(p) for p in _PROBS.round(6))
-KEYS = ["clip", "frame", "track_id"]
+KEYS = PLAYER_KEYS
 TITLES = {"lab": "labels", "or": "trusted line oracle", "sm": "smoothed labels"}
-
-
-def references(players: pl.DataFrame) -> list[str]:
-    return [r for r in ("lab", "or", "sm") if f"ex_{r}" in players.columns]
+__all__ = ["kpi_proxy", "references"]  # re-exported for tests
 
 
 def clip_tensor(d: pl.DataFrame, ref: str) -> np.ndarray:
@@ -180,62 +185,11 @@ def normal_scores(x: np.ndarray, sorted_values: np.ndarray) -> np.ndarray:
     return np.where(np.isfinite(x), out, np.nan)
 
 
-def kpi_proxy(players: pl.DataFrame) -> dict[str, Any] | None:
-    """Distance, HSR distance and speed of the prediction against the smoothed labels (5 fps, SG filters)."""
-    if not {"x_pred", "y_pred", "ex_sm", "ey_sm"} <= set(players.columns):
-        return None
-    d = players.filter(pl.col("ex_lab").is_not_nan() & pl.col("ex_sm").is_not_nan()).sort(KEYS)
-    pred_vs_sm, raw_vs_sm = ProxyTotals(), ProxyTotals()
-    run_lengths: Counter[int] = Counter()
-    for (_clip, _track), g in d.partition_by("clip", "track_id", as_dict=True).items():
-        frames = g["frame"].to_numpy()
-        pred = g.select("x_pred", "y_pred").to_numpy()
-        sm = pred - g.select("ex_sm", "ey_sm").to_numpy()
-        raw = pred - g.select("ex_lab", "ey_lab").to_numpy()
-        good = np.hypot(*(pred - raw).T) < MAX_ERROR_M
-        breaks = np.flatnonzero((np.diff(frames) != STEP_FRAMES) | ~good[1:] | ~good[:-1]) + 1
-        for idx in np.split(np.arange(len(frames)), breaks):
-            idx = idx[good[idx]]
-            if len(idx) < MIN_RUN:
-                continue
-            run_lengths[len(idx)] += 1
-            pred_vs_sm.add(pred[idx], sm[idx], DT_S)
-            raw_vs_sm.add(raw[idx], sm[idx], DT_S)
-    if not pred_vs_sm.runs:
-        return None
-    p, r = pred_vs_sm.summary(), raw_vs_sm.summary()
-    return {
-        "runs": pred_vs_sm.runs,
-        "samples": pred_vs_sm.samples,
-        "distance_bias": p["distance_bias"],
-        "raw_distance_bias": r["distance_bias"],
-        "hsr_bias": p["hsr_bias"],
-        "raw_hsr_bias": r["hsr_bias"],
-        "hsr_sm_m": p["ref_hsr_m"],
-        "sm_distance_m": p["ref_distance_m"],
-        "sm_duration_s": p["duration_s"],
-        "sm_mean_speed_ms": p["ref_mean_speed_ms"],
-        "speed_rms": p["speed_rms"],
-        "speed_p90": p["speed_p90"],
-        "run_lengths": dict(sorted(run_lengths.items())),
-    }
-
-
 def _load(path: Path, include_filled: bool) -> pl.DataFrame:
     d = pl.read_parquet(path)
     if "filled" in d.columns and not include_filled:
         d = d.filter(~pl.col("filled"))
     return d
-
-
-def _restrict(a: pl.DataFrame, b: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
-    """Both tables on the player-frames where both have finite errors for every shared reference."""
-    refs = [r for r in references(a) if r in references(b)]
-    finite = [pl.col(f"ex_{r}").is_not_nan() for r in refs if r != "or"]
-    ka = a.filter(*finite).select(KEYS)
-    kb = b.filter(*finite).select(KEYS)
-    both = ka.join(kb, on=KEYS)
-    return a.join(both, on=KEYS), b.join(both, on=KEYS)
 
 
 def camera_labels(paths: list[Path]) -> list[str]:

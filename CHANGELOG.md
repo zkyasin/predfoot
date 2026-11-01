@@ -36,7 +36,7 @@ the project uses [semantic versioning](https://semver.org/).
   error injection and a sensitivity study; measured error-process estimation on SN-GSR.
 - Real pipeline stages for `predfoot run` (cached detections → calibration → calibrated ellipses).
 - Scripts: spike S0, dev evaluation with leave-one-game-out coverage, failure detection, error process.
-- Preregistration draft for the locked test run.
+- Preregistration draft for the locked test run (now final, below).
 - Temporal camera smoothing (PTZ-RTS): fixed-centre pan-tilt-zoom camera model, label-free projection centre
   per clip (game centre when the clip's own is unreliable, refused when it does not explain the clip), Kalman
   filter and RTS smoother inside shot segments; outlier deletion under one process-noise model (shrink, then
@@ -93,6 +93,36 @@ the project uses [semantic versioning](https://semver.org/).
   PSV-99 at their nominal 90 % (90 to 91 %, against 57 to 69 % with the spread of one dose); distance KPIs
   stay below (32 to 51 %) because of the remaining extrapolation bias, and only leave-one-match-out
   calibrated intervals reach about 90 % for every KPI.
+- Portfolio README with the development results of both cameras, coverage with player-frames pooled and with
+  each clip weighted equally, and what the evidence does not show. `scripts/render_minimap_demo.py` animates
+  one dev clip, per-frame against PTZ-smoothed camera (`assets/minimap_demo.gif`, abstentions greyed, frames
+  without position labels hatched); `scripts/make_figures.py` draws the dev reliability (coverage minus the
+  nominal level), region area, coverage by distance and by clip size, and the KPI proxy
+  (`reports/dev_figures.md`, `reports/minimap_demo.md`). An index of the reports, serving and Docker details
+  in `docs/serving.md` and `docs/docker.md`, and ARCHITECTURE.md brought up to date. `eval_dev.logo` takes the
+  level α and returns each held-out row's Mondrian quantile.
+- Preregistered test run (T6.1). `docs/preregistration.md`, version 1, final: SN-GSR raw labels as the
+  primary reference, the PTZ-smoothed camera under test with the per-frame camera as the comparison arm,
+  coverage (player-frames pooled, clips weighted equally reported next to it), region size against a constant
+  circle, gradient boosting against the best dev single feature, KPI proxy biases as a secondary endpoint.
+  `scripts/freeze_prereg.py` fits every frozen artifact on the six dev games (conformal regions per camera
+  and reference, constant circles, smoother noise, failure detectors exported as JSON and checked against
+  scikit-learn) and writes `docs/preregistration.lock.json` (SHA-256 of the text and the artifacts, code
+  commit, configuration digests, interpreter and packages, network weights, detection model version, pinned
+  test clip list). `scripts/run_test_once.py` runs stage A (test frames, keypoint networks) and stage B
+  (per-frame calibration, smoothing with the frozen noise) without labels and resumably, then stage C once
+  behind markers. Every stage refuses what does not match the lock: an edited text or artifact, a change of
+  code or dependencies since the freeze, a dirty tree, another environment or clip list, outputs of another
+  lock. Stage C checks every label-free input and asks before its claim, saves the primary results as soon as
+  they are computed, and writes `reports/test_run.md` even after a crash or an interruption. `--dry-run`
+  rehearses the whole chain on dev clips with a scratch freeze.
+
+### Changed
+- The dev evaluation core moved from `scripts/eval_dev.py` into `predfoot.eval.positions`, the failure
+  detectors into `predfoot.health.detector` and the players-table KPI proxy into `predfoot.kpi.proxy`; the
+  scripts give identical results. The gradient boosting of the failure detector runs with early stopping
+  off: scikit-learn switches it on above 10,000 rows, which the six-game fit of the freeze reaches and no dev
+  fold does.
 
 ### Fixed
 - Temporal smoothing tails: a run of misfit frames lasting at most 0.5 s strictly inside a segment gets the
@@ -125,3 +155,5 @@ the project uses [semantic versioning](https://semver.org/).
   did not run when `README.md`, `LICENSE` or `ATTRIBUTION.md`, which the images copy, changed.
 - `predfoot qa` never returned on an absurd `export_fps` in `meta.json` (it now falls back to 10 fps outside
   1e-3 to 1e3) and crashed on a line nested thousands deep, which the validator now reports as invalid JSON.
+- ATTRIBUTION.md credited SoccerNet Calibration 2023 for a health critic that does not exist; nothing uses
+  that dataset.
