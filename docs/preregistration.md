@@ -36,8 +36,9 @@
   frame, used only where it fits those lines within 3 px (about 60 % of the player-frames on dev: 61 % for the
   per-frame camera, 62 % for the smoothed one).
 - The two references are not symmetric, and neither is exact:
-  - R1 comes from the annotators' camera, which sits 3.9 px (median) from the annotated lines on dev: coverage
-    against R1 mixes predfoot's error with the labels' own.
+  - R1 comes from the annotators' camera, which sits 3.9 px (median) from the annotated lines on five dev clips
+    (`reports/spike_s0.md`, 2.6 to 9.6 px per clip): coverage against R1 mixes predfoot's error with the
+    labels' own.
   - R2 is fitted frame by frame. Its own jitter counts as error, more so for a camera that does not jitter: on
     dev both cameras over-cover against R2 (94.4 % [92.9, 96.0] for the smoothed camera, 94.4 % [92.7, 96.0]
     for the per-frame one), and the smoothed camera's regions calibrated against R2 are twice those of the
@@ -148,7 +149,9 @@ All are reported; none is a success criterion.
 - Unit: the clip. Frames are correlated within a clip, so the effective sample is closer to the number of
   clips (49) than to the number of player-frames.
 - Intervals: 95 % percentile bootstrap over clips, 2,000 draws, one generator seeded with 0 for the whole
-  evaluation, used in a fixed order.
+  evaluation, used in a fixed order. Each draw resamples the 49 test clips with replacement, across the three
+  games: the number of clips per game varies between draws, and games are never resampled. A per-game interval
+  resamples that game's clips. The dev intervals quoted here were drawn the same way, over the dev clips.
 
 ## 7. Procedure
 
@@ -186,8 +189,9 @@ All are reported; none is a success criterion.
 - Between-game spread: on dev, the smoothed camera's coverage per held-out game ranges from 84.0 % (game 6)
   to 95.6 % (game 3). With three test games, one atypical game can move the pooled coverage by several points,
   and P1 can fail through between-game variability alone.
-- The clip bootstrap resamples clips within the three test games and treats the games as fixed: it does not
-  capture between-game variability, so its interval is narrower than the uncertainty about a new game.
+- The clip bootstrap resamples the test clips across the three games, never the games themselves: its interval
+  describes these three games, not a new one. Three games cannot estimate the variability between games, so
+  the interval is narrower than the uncertainty about a new game.
 - Both references carry their own errors (section 2): coverage against R1 includes the labels' error; R2
   covers about 60 % of the player-frames, penalises a smooth camera and fails grossly on about 1.5 % of its
   player-frames.
