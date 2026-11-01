@@ -2,13 +2,13 @@
 
     uv run python scripts/freeze_prereg.py --calib-from runs/<per-frame dev run>/calib.npz
 
-Refuses a dirty working tree, a preregistration that still carries a draft marker ("DRAFT", "pending owner
-approval"), an existing lock, an existing artifact folder and an environment without the packages every stage
-needs (torch included: the lock pins the versions stage A runs the networks with). Then, from the per-frame
-calibrations of every dev clip (recomputed from the detection cache, or read from ``--calib-from`` after
-checking that the solver settings match and that recalibrating every clip from its detections reproduces them
-exactly) and the dev labels, it fits (:mod:`predfoot.eval.frozen`, the code of ``scripts/eval_dev.py`` and
-``scripts/eval_health.py``):
+Refuses an existing lock, an existing artifact folder (each refusal says what to delete), a dirty working
+tree, a preregistration that still carries a draft marker ("DRAFT", "pending owner approval") and an
+environment without the packages every stage needs (torch included: the lock pins the versions stage A runs
+the networks with). Then, from the per-frame calibrations of every dev clip (recomputed from the detection
+cache, or read from ``--calib-from`` after checking that the solver settings match and that recalibrating
+every clip from its detections reproduces them exactly) and the dev labels, it fits
+(:mod:`predfoot.eval.frozen`, the code of ``scripts/eval_dev.py`` and ``scripts/eval_health.py``):
 
 - the PTZ smoother's noise parameters, label-free, on all six dev games;
 - the Mondrian conformal regions for each camera (per-frame, PTZ-smoothed), reference (raw labels, trusted
@@ -22,13 +22,15 @@ of the dev caches and the SHA-256 of the network weights, input hashes, the envi
 list (count and digest of the (clip id, game) pairs of ``index/clips.parquet``: the split's structure, which
 ``reports/data_audit.md`` already reports; no test label or frame is read). It prints the line to quote in
 README.md. Commit the artifacts and the lock together, in one commit that holds nothing else;
-``scripts/run_test_once.py`` refuses to run on anything else.
+``scripts/run_test_once.py`` refuses to run on anything else. A freeze that fails leaves neither artifacts nor
+a lock behind.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import asdict
@@ -219,10 +221,20 @@ def main(
 ) -> None:
     root = REPO_ROOT
     try:
-        pr.require_clean_tree(root)
         text = (root / pr.PREREG_PATH).read_text(encoding="utf-8")
+        art_dir = pr.ARTIFACTS_ROOT / f"v{pr.prereg_version(text)}"
+        if (root / pr.LOCK_PATH).exists():
+            raise pr.PreregError(
+                f"{pr.LOCK_PATH} exists: the preregistration is frozen. To re-freeze before stage C, delete"
+                f" the lock and the folder {art_dir}/ itself, commit, then freeze again"
+            )
+        if (root / art_dir).exists():  # git rm keeps a folder that holds an ignored file
+            raise pr.PreregError(
+                f"{art_dir}/ exists without a lock (left by a failed freeze, or by a re-freeze that removed"
+                " only its tracked files): delete the folder itself, then freeze again"
+            )
+        pr.require_clean_tree(root)
         pr.require_final_text(text)
-        version = pr.prereg_version(text)
         missing = [pkg for pkg, v in pr.environment().items() if v == "missing"]
         if missing:
             raise pr.PreregError(
@@ -232,13 +244,6 @@ def main(
     except pr.PreregError as err:
         typer.echo(f"Refused: {err}", err=True)
         raise typer.Exit(2) from err
-    art_dir = pr.ARTIFACTS_ROOT / f"v{version}"
-    for path in (root / pr.LOCK_PATH, root / art_dir):
-        if path.exists():
-            typer.echo(
-                f"Refused: {path.relative_to(root)} already exists (the preregistration is frozen)", err=True
-            )
-            raise typer.Exit(2)
     test_clips = fz.locked_clip_list(index_dir() / "clips.parquet")
     if len(test_clips) != fz.TEST_CLIPS:
         raise typer.BadParameter(f"{len(test_clips)} test clips in the index, preregistered {fz.TEST_CLIPS}")
@@ -248,15 +253,21 @@ def main(
     games = sorted({cc.game for cc in ccs})
     if games != list(fz.DEV_GAMES):
         raise typer.BadParameter(f"dev games {games}, expected {list(fz.DEV_GAMES)}")
-    lock = freeze(
-        root,
-        art_dir,
-        ccs,
-        code_commit=commit,
-        inputs=inputs,
-        test_clips=test_clips,
-        detection_model=detection_model(ccs),
-    )
+    model = detection_model(ccs)
+    try:
+        lock = freeze(
+            root,
+            art_dir,
+            ccs,
+            code_commit=commit,
+            inputs=inputs,
+            test_clips=test_clips,
+            detection_model=model,
+        )
+    except BaseException:  # neither folder nor lock existed before: a failed freeze leaves none behind
+        shutil.rmtree(root / art_dir, ignore_errors=True)
+        (root / pr.LOCK_PATH).unlink(missing_ok=True)
+        raise
     typer.echo(f"Frozen {len(lock.artifacts)} artifacts from {len(ccs)} dev clips into {art_dir}:")
     for path, sha in lock.artifacts.items():
         typer.echo(f"  {path}  {sha[:16]}")

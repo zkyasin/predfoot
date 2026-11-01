@@ -273,26 +273,68 @@ def test_a_dirty_tree_is_refused(repo):
         pr.verify_lock(repo)
 
 
-def test_the_freeze_refuses_a_dirty_tree_and_a_draft(repo, monkeypatch):
+@pytest.fixture
+def freeze_main(repo, tmp_path, monkeypatch):
+    """freeze_prereg.main on the throw-away repository, with an empty data folder and every step that reads
+    data replaced by a failure: nothing real is ever read."""
     monkeypatch.setattr(freeze_prereg, "REPO_ROOT", repo)
-    (repo / "notes.txt").write_text("untracked\n")
+    monkeypatch.setenv("PREDFOOT_DATA_DIR", str(tmp_path / "no-data"))
+    monkeypatch.setattr(fz, "locked_clip_list", lambda path: pytest.fail("must refuse first"))
+    monkeypatch.setattr(freeze_prereg, "load_dev_clips", lambda **_: pytest.fail("must refuse first"))
+    return freeze_prereg.main
+
+
+def _unfreeze(repo):
+    git(repo, "rm", "-r", "-q", str(pr.LOCK_PATH), "artifacts")
+    commit_all(repo, "unfreeze")
+
+
+def _refusal(main, capsys):
     with pytest.raises(typer.Exit) as exc:
-        freeze_prereg.main(calib_from=None)
+        main(calib_from=None)
     assert exc.value.exit_code == 2
+    return capsys.readouterr().err
+
+
+def test_the_freeze_refuses_a_dirty_tree_and_a_draft(repo, freeze_main, capsys):
+    _unfreeze(repo)
+    (repo / "notes.txt").write_text("untracked\n")
+    assert "not clean" in _refusal(freeze_main, capsys)
     (repo / "notes.txt").unlink()
     (repo / pr.PREREG_PATH).write_text(FINAL_TEXT.replace("approved by the owner", "DRAFT"))
     commit_all(repo, "back to draft")
-    with pytest.raises(typer.Exit) as exc:
-        freeze_prereg.main(calib_from=None)
-    assert exc.value.exit_code == 2
+    assert "not final" in _refusal(freeze_main, capsys)
 
 
-def test_the_freeze_refuses_to_overwrite_a_lock(repo, monkeypatch):
-    monkeypatch.setattr(freeze_prereg, "REPO_ROOT", repo)
-    monkeypatch.setattr(freeze_prereg, "load_dev_clips", lambda **_: pytest.fail("must refuse first"))
-    with pytest.raises(typer.Exit) as exc:
-        freeze_prereg.main(calib_from=None)
-    assert exc.value.exit_code == 2
+def test_the_freeze_refuses_a_lock_or_an_artifact_folder_and_says_what_to_delete(repo, freeze_main, capsys):
+    assert "delete the lock and the folder artifacts/prereg/v1/ itself" in _refusal(freeze_main, capsys)
+    _unfreeze(repo)
+    (repo / "artifacts/prereg/v1").mkdir(parents=True)
+    (repo / "artifacts/prereg/v1/.DS_Store").write_bytes(b"finder")  # git rm leaves the folder behind
+    assert "exists without a lock" in _refusal(freeze_main, capsys)
+
+
+def test_a_failed_freeze_leaves_neither_artifacts_nor_a_lock(repo, freeze_main, monkeypatch):
+    _unfreeze(repo)
+    fake_clips = [(f"SNGS-{i:03d}", 7) for i in range(fz.TEST_CLIPS)]  # made up: no index is read
+    monkeypatch.setattr(fz, "locked_clip_list", lambda path: fake_clips)
+    monkeypatch.setattr(freeze_prereg.pr, "environment", lambda: {"python": "3.12", "torch": "2"})
+    monkeypatch.setattr(freeze_prereg, "input_hashes", lambda calib_from: {})
+    dev = [SimpleNamespace(game=g) for g in fz.DEV_GAMES]
+    monkeypatch.setattr(freeze_prereg, "load_dev_clips", lambda **_: dev)
+    monkeypatch.setattr(freeze_prereg, "detection_model", lambda ccs: MODEL)
+
+    def failing_freeze(root, art_dir, ccs, **kwargs):
+        (root / art_dir).mkdir(parents=True)
+        (root / art_dir / "analysis.json").write_text("{}\n")  # some artifacts, then the detector fails
+        raise RuntimeError("FrozenDetector.fit failed")
+
+    monkeypatch.setattr(freeze_prereg, "freeze", failing_freeze)
+    with pytest.raises(RuntimeError, match="fit failed"):
+        freeze_main(calib_from=None)
+    assert not (repo / "artifacts/prereg/v1").exists()
+    assert not (repo / pr.LOCK_PATH).exists()
+    assert pr.dirty_paths(repo) == []  # the rerun starts from a clean tree
 
 
 def test_the_draft_markers_are_refused():

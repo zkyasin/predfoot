@@ -15,8 +15,8 @@ environment. The lock and the artifacts are then committed together (the *freeze
 - the lock is anchored in git history: the lock, the preregistration and every artifact are tracked; the
   freeze commit (the latest commit that added the lock) adds only the lock and the artifacts on top of the
   lock's code commit; nothing among them changed after it. Editing the preregistration and the lock together,
-  or pointing the lock at a newer code commit, is refused; a re-freeze (lock and artifacts deleted, then
-  frozen and committed again) stays possible until stage C has claimed the evaluation;
+  or pointing the lock at a newer code commit, is refused; a re-freeze (the lock and the artifact folder
+  itself deleted, then frozen and committed again) stays possible until stage C has claimed the evaluation;
 - the working tree is clean: git status shows nothing, no tracked file hides its changes (assume-unchanged or
   skip-worktree) and no ignored file sits under the protected paths (bytecode caches and Finder's
   ``.DS_Store`` aside);
