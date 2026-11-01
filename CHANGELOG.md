@@ -130,9 +130,10 @@ the project uses [semantic versioning](https://semver.org/).
   an outside load other than Google Fonts, a broken anchor or more than 4 MB, and writes the Space's front
   matter; `scripts/deploy_space.py` creates the static Space and uploads the build. The README is rewritten in
   plain words and its technical content moves, complete, to `docs/technical.md`. Web visuals in
-  `assets/showcase/`: the hero loop on SoccerTrack v2 footage and the smoothing clip in a plain style (MP4,
-  poster and GIF), made by `scripts/render_hero.py` and `scripts/render_minimap_demo.py --style plain` and
-  described, with what they do not show, in `reports/showcase_visuals.md`.
+  `assets/showcase/`: the hero loop on SoccerTrack v2 footage, the smoothing clip in the page's colours (side
+  by side, and stacked for phones) and the README's GIF, made by `scripts/render_hero.py` and
+  `scripts/render_minimap_demo.py --style page` and `--style plain` and described, with what they do not show,
+  in `reports/showcase_visuals.md`.
 
 ### Changed
 - The dev evaluation core moved from `scripts/eval_dev.py` into `predfoot.eval.positions`, the failure
@@ -142,6 +143,17 @@ the project uses [semantic versioning](https://semver.org/).
   fold does.
 
 ### Fixed
+- Showcase review: on the Space, links to GitHub opened inside the Space's frame, which GitHub refuses ("refused
+  to connect"); they now open a new tab, and the build refuses a link to another site that does not. The page
+  said "frozen and published" for a protocol committed to a private repository; it now says frozen before the
+  test and locked with checksums, and the README names the freeze commit and the code commit the same way. The
+  page shows the four results on its first screen, says up front that players come from the dataset's boxes and
+  that the footage is a virtual camera, names the comparison (predfoot without smoothing), frames the physical
+  stats as what camera wobble adds against the dataset's smoothed tracks, scopes the alarm to the
+  frame-by-frame estimates, and ties each "target met" to the criterion it judges. The smoothing clip no longer
+  calls the moment both cameras lose the pitch (535 px off at 15.2 s) "not checked": it reads "camera lost".
+  The smoothing clip and the hero's zones use the page's grey and pink, and phones get a stacked clip.
+  `scripts/deploy_space.py` refuses a stale build and links that do not answer 200 anonymously.
 - Temporal smoothing tails: a run of misfit frames lasting at most 0.5 s strictly inside a segment gets the
   smoothed state (flag `bridged`) instead of its raw camera; raw-OK frames of a segment too short for any
   innovation to test them abstain (flag `unchecked`) instead of publishing their PTZ projection; the

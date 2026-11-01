@@ -25,9 +25,11 @@ Outputs follow the SkillCorner open-data JSONL schema at 10 fps, with the uncert
 > ([`docs/preregistration.md`](preregistration.md)); [the results](#preregistered-test-results) are all
 > published, the failed criterion included. Everything else comes from the six development games.
 >
-> Preregistration v1 frozen on 2026-11-01 at commit `a46c15aaaea4`: `docs/preregistration.md` SHA-256
-> `25bf24bf31da3027…`, artifacts digest `20f06142cba1522c…`, `docs/preregistration.lock.json` SHA-256
-> `191bb06dbb75aba8…`; hashes in [`docs/preregistration.lock.json`](preregistration.lock.json).
+> Preregistration v1, frozen on 2026-11-01 by commit `8640b9a` at 11:56 UTC, about an hour before the test run
+> started (12:58 UTC), on code commit `a46c15aaaea4`: `docs/preregistration.md` SHA-256 `25bf24bf31da3027…`,
+> artifacts digest `20f06142cba1522c…`, `docs/preregistration.lock.json` SHA-256 `191bb06dbb75aba8…`; hashes in
+> [`docs/preregistration.lock.json`](preregistration.lock.json). The repository was private when the protocol
+> was frozen: the timing can be checked in its git history.
 
 ![Side-by-side minimaps of one dev clip: per-frame camera on the left, PTZ-smoothed camera on the right](../assets/minimap_demo.gif)
 
@@ -45,13 +47,13 @@ SoccerNet frames cannot be redistributed, so SoccerNet results appear only as me
 ## Preregistered test results
 
 The 49 clips of the locked test games, run once on 2026-11-01 with the models frozen on the dev games
-(`8640b9a`). Every number is in [`reports/test_run.md`](../reports/test_run.md).
+(freeze commit `8640b9a`). Every number is in [`reports/test_run.md`](../reports/test_run.md).
 
 | | Success criterion (preregistered) | Result | Verdict |
 |---|---|---|---|
 | P1 | Coverage of the 90 % regions, PTZ-smoothed camera, raw labels: the 95 % interval contains 90 % | 93.1 % [91.7, 94.5] | **not met** (over-coverage) |
 | P2 | Median region area / constant circle at the same level | 0.73 [0.70, 0.77] | **met** |
-| P3 | Failure-detection AUROC, gradient boosting − best dev single feature (`log_sigma_centre`) | 0.911 − 0.797 = +0.114 [+0.084, +0.150] | **met** |
+| P3 | Failure-detection AUROC on the per-frame calibrations, gradient boosting − best dev single feature (`log_sigma_centre`) | 0.911 − 0.797 = +0.114 [+0.084, +0.150] | **met** |
 
 | Test games, raw labels as reference | Per-frame camera | PTZ-smoothed camera |
 |---|---|---|
@@ -61,6 +63,13 @@ The 49 clips of the locked test games, run once on 2026-11-01 with the models fr
 | Position error p50 / p90 / p99 (same player-frames) | 0.51 / 1.82 / 6.87 m | 0.40 / 1.16 / 4.00 m |
 | Frames more than 10 px from the annotated lines | 9.7 % | 2.4 % |
 | KPI proxy, distance / high-speed-running distance bias | +26.1 % / +72.4 % | +3.4 % / +5.5 % |
+
+The KPI proxy compares 5 fps tracks with the dataset's smoothed labels, not with the raw labels, which differ
+from them by +17.0 % / +40.3 % on the smoothed camera's runs; each camera's runs break wherever its error
+against the labels reaches 10 m, which leaves gross failures to abstention, something `predfoot run` cannot do
+yet. As the preregistration states (section 8), it measures the cost of jitter, not absolute KPI accuracy.
+The failure detector was scored on the per-frame calibrations (3839 frames, 10.2 % failures), not on the
+smoothed camera, which fails on 2.4 % of the frames.
 
 Reading, after the fact (not preregistered): the smoothed camera's regions are conservative on these three
 games. The constant circle calibrated on the same dev errors over-covers as much (94.1 %), so the miss comes
@@ -276,13 +285,17 @@ uv run python scripts/render_demo.py --match 117093 --start 0 --frames 10 --step
 footage comes from SoccerTrack v2, and SoccerNet appears as numbers and a pitch-diagram clip only.
 `scripts/build_site.py` wraps it into `site/dist/index.html`, copies the media it references from
 `assets/showcase/` and writes the Space's `README.md`; it fails when a referenced file is missing, when the page
-loads anything but Google Fonts from outside, or when the page and its media exceed 4 MB.
-`scripts/deploy_space.py` creates the Space if needed and uploads `site/dist/` as one commit (it needs a Hugging
-Face token with write access).
+loads anything but Google Fonts from outside, when a link to another site does not open a new tab (the Space
+shows the page in a frame that GitHub refuses to load), or when the page and its media exceed 4 MB.
+`scripts/deploy_space.py` refuses a stale build and any link to another site that does not answer 200 to an
+anonymous request, so the Space cannot go public before the repository and its evidence do
+(`--skip-link-check` for a private preview); it then creates the Space if needed and uploads `site/dist/` as
+one commit (it needs a Hugging Face token with write access).
 
 The media come from `scripts/render_hero.py` (the hero loop: predfoot on SoccerTrack v2 match 117093, an
-illustration with no reference to score against) and `scripts/render_minimap_demo.py --style plain` (the smoothing
-clip: an SN-GSR dev clip drawn on pitch diagrams). [`reports/showcase_visuals.md`](../reports/showcase_visuals.md)
+illustration with no reference to score against) and `scripts/render_minimap_demo.py --style page` (the smoothing
+clip, side by side and stacked for phones: an SN-GSR dev clip drawn on pitch diagrams; `--style plain` makes the
+README's GIF). [`reports/showcase_visuals.md`](../reports/showcase_visuals.md)
 gives each file's command, commit and size, and what it does not show.
 
 ```bash
