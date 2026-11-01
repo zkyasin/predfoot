@@ -1,5 +1,6 @@
 <title>predfoot</title>
 <meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preload" as="image" href="assets/smoothing-tall.jpg" media="(max-width: 600px)" data-poster-for="smoothing-video">
 <style>
 @import url("https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Mono:wght@400;500&family=Atkinson+Hyperlegible+Next:ital,wght@0,400;0,600;1,400&family=Big+Shoulders+Display:wght@700;800&display=swap");
 
@@ -31,6 +32,12 @@
   --focus: #b0135f;
   --shadow: rgba(15, 29, 22, 0.32);
   --screen: #0f1d16;         /* behind a video until it loads */
+  --map: #1b442e;            /* the smoothing clip's ground, the same in both themes */
+  --map-plain: #9ea9a2;      /* the clip's grey: without smoothing */
+  --map-plain-wash: rgba(158, 169, 162, 0.3);
+  --map-zone: #ff9ccb;       /* the clip's pink: predfoot */
+  --map-zone-wash: rgba(255, 156, 203, 0.3);
+  --map-true: #f4f7f2;       /* the clip's true positions */
 
   --font-display: "Big Shoulders Display", "Arial Narrow", "Roboto Condensed", "Helvetica Neue", Arial, sans-serif;
   --font-body: "Atkinson Hyperlegible Next", "Atkinson Hyperlegible", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
@@ -44,7 +51,8 @@
     --chalk-line: rgba(230, 237, 231, 0.24); --on-chalk: #0d1612; --chalk-2: #bccbc1; --zone: #f0479a;
     --zone-wash: rgba(240, 71, 154, 0.16); --zone-on-pitch: #ff8cc3; --context: #58675f; --link: #ff7ab6;
     --warn: #e9b949; --warn-wash: #2b2414; --good: #7fcb98; --focus: #ff7ab6; --shadow: rgba(0, 0, 0, 0.55);
-    --screen: #050a07;
+    --screen: #050a07; --map: #1b442e; --map-plain: #9ea9a2; --map-plain-wash: rgba(158, 169, 162, 0.3);
+    --map-zone: #ff9ccb; --map-zone-wash: rgba(255, 156, 203, 0.3); --map-true: #f4f7f2;
     color-scheme: dark;
   }
 }
@@ -54,7 +62,8 @@
   --chalk-line: rgba(230, 237, 231, 0.24); --on-chalk: #0d1612; --chalk-2: #bccbc1; --zone: #f0479a;
   --zone-wash: rgba(240, 71, 154, 0.16); --zone-on-pitch: #ff8cc3; --context: #58675f; --link: #ff7ab6;
   --warn: #e9b949; --warn-wash: #2b2414; --good: #7fcb98; --focus: #ff7ab6; --shadow: rgba(0, 0, 0, 0.55);
-  --screen: #050a07;
+  --screen: #050a07; --map: #1b442e; --map-plain: #9ea9a2; --map-plain-wash: rgba(158, 169, 162, 0.3);
+  --map-zone: #ff9ccb; --map-zone-wash: rgba(255, 156, 203, 0.3); --map-true: #f4f7f2;
   color-scheme: dark;
 }
 
@@ -141,7 +150,6 @@ video {
   background: var(--screen);
 }
 video.clip-tall { aspect-ratio: auto 720 / 850; }
-video.clip-wide { aspect-ratio: auto 2 / 1; }
 .screen video { box-shadow: 0 0 0 1px var(--chalk-line), 0 28px 56px -28px var(--shadow); }
 .media-foot { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px 24px; padding-top: 12px; }
 .media-foot figcaption { max-width: 72ch; font-size: 0.9375rem; line-height: 1.55; color: var(--ink-2); }
@@ -251,6 +259,17 @@ h3.kicker { font: 500 0.8125rem/1.2 var(--font-mono); letter-spacing: 0.12em; te
 .trust a { font: 500 0.8125rem/1.4 var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; text-decoration-color: var(--zone-on-pitch); }
 .trust a:hover { color: var(--chalk); text-decoration-thickness: 2px; }
 .trust :focus-visible { outline-color: var(--chalk); }
+
+/* The smoothing clip: a bar of the clip's own green names its colours above it */
+.duo-bar { display: flex; flex-wrap: wrap; gap: 6px 20px; padding: 10px 12px 9px; background: var(--map); color: var(--map-true); font-size: 0.875rem; line-height: 1.35; }
+.duo-bar span { display: inline-flex; align-items: center; gap: 8px; }
+.duo-bar i { display: inline-block; flex: none; border-radius: 50%; }
+.duo-bar .k-plain, .duo-bar .k-zone { width: 22px; height: 12px; border: 1.5px solid; transform: rotate(-18deg); }
+.duo-bar .k-plain { border-color: var(--map-plain); background: var(--map-plain-wash); }
+.duo-bar .k-zone { border-color: var(--map-zone); background: var(--map-zone-wash); }
+.duo-bar .k-true { width: 8px; height: 8px; margin-inline: 7px; background: var(--map-true); }
+video.clip-duo { aspect-ratio: 960 / 374; background: var(--map); }
+@media (max-width: 600px) { video.clip-duo { aspect-ratio: 640 / 992; } }  /* phones play the stacked clip */
 
 /* How it works */
 .steps { list-style: none; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 28px 40px; }
@@ -483,11 +502,13 @@ footer .wrap { display: grid; gap: 22px; padding-block: clamp(32px, 5vw, 52px); 
       <p>A broadcast camera turns around an almost fixed point, so its view changes smoothly. Worked out frame by frame, the camera estimate jitters, and every position jitters with it.</p>
     </div>
     <figure class="col-2">
-      <video class="clip-wide" id="smoothing-video" data-toggle="smoothing-toggle" data-name="the smoothing clip" autoplay muted loop playsinline preload="auto" poster="assets/smoothing.jpg" aria-label="Two pitch diagrams of the same clip: with the camera worked out frame by frame, the error zones jump and swell; smoothed over time, they stay small and steady">
-        <source src="assets/smoothing.mp4" type="video/mp4">
+      <p class="duo-bar" aria-hidden="true"><span><i class="k-plain"></i>Without smoothing</span><span><i class="k-zone"></i>With smoothing (predfoot)</span><span><i class="k-true"></i>True position</span></p>
+      <video class="clip-duo" id="smoothing-video" data-toggle="smoothing-toggle" data-name="the smoothing clip" autoplay muted loop playsinline preload="auto" poster="assets/smoothing.jpg" aria-label="Two pitch diagrams of the same clip: without smoothing, the grey error zones jump and swell; with smoothing, the pink zones stay small and steady">
+        <source src="assets/smoothing.mp4" type="video/mp4" media="(min-width: 601px)">
+        <source src="assets/smoothing-tall.mp4" type="video/mp4">
       </video>
       <div class="media-foot">
-        <figcaption>A SoccerNet development clip, drawn on a pitch diagram because SoccerNet images cannot be shown, and picked to show the effect, so not a typical one. Frame by frame (left), the error zones jump and swell whenever the camera estimate wobbles; smoothed over time (right), they stay small and steady. On the test matches, smoothing cut the frames whose camera misses the pitch lines by more than 10 pixels from 9.7 % to 2.4 %.</figcaption>
+        <figcaption>A clip from a SoccerNet match used during development, drawn on pitch diagrams since SoccerNet images cannot be shown for licence reasons, and picked to show the effect, so not a typical one. Without smoothing (grey), the error zones jump and swell whenever the camera estimate wobbles; with smoothing (pink), they stay small and steady, apart from one moment when both estimates lose the pitch. On the test matches, smoothing cut the frames whose camera misses the pitch lines by more than 10 pixels from 9.7 % to 2.4 %.</figcaption>
         <button class="toggle" id="smoothing-toggle" type="button" hidden>Pause</button>
       </div>
     </figure>
@@ -561,6 +582,11 @@ footer .wrap { display: grid; gap: 22px; padding-block: clamp(32px, 5vw, 52px); 
 <script>
   // Clips play muted and in a loop while on screen. With reduced motion they wait for the Play button.
   (function () {
+    // A phone plays the stacked smoothing clip (its <source> media); give it the matching poster.
+    Array.prototype.forEach.call(document.querySelectorAll("link[data-poster-for]"), function (link) {
+      var target = document.getElementById(link.dataset.posterFor);
+      if (target && window.matchMedia(link.media).matches) target.poster = link.getAttribute("href");
+    });
     var reduce = window.matchMedia("(prefers-reduced-motion: reduce)");
     var clips = Array.prototype.slice.call(document.querySelectorAll("video[data-toggle]"));
     function wantsMotion(v) { return !reduce.matches || v.dataset.asked === "yes"; }

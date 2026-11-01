@@ -253,7 +253,14 @@ def test_cli_builds_and_fails_with_a_readable_message(tmp_path):
 # The real page
 
 
-SHOWCASE_MEDIA = {"hero.mp4", "hero.jpg", "smoothing.mp4", "smoothing.jpg"}
+SHOWCASE_MEDIA = {
+    "hero.mp4",
+    "hero.jpg",
+    "smoothing.mp4",
+    "smoothing.jpg",
+    "smoothing-tall.mp4",
+    "smoothing-tall.jpg",
+}
 
 
 def test_showcase_page_builds_with_its_media(tmp_path):
@@ -304,6 +311,21 @@ def test_showcase_page_keeps_its_contract():
     assert "SoccerTrack v2, Scott et al., CC BY 4.0" in page
     # ADR-0002: public pixels say how the frames were changed
     assert all(change in page for change in ("cropped", "downscaled", "overlaid"))
+
+
+def test_phones_get_the_stacked_smoothing_clip_and_its_poster():
+    page = build_site.PAGE.read_text(encoding="utf-8")
+    video = page[page.index('id="smoothing-video"') :]
+    video = video[: video.index("</video>")]
+    sources = re.findall(r'<source src="([^"]+)" type="video/mp4"(?: media="([^"]+)")?>', video)
+    # browsers that ignore media take the first source: the wide clip
+    assert sources == [("assets/smoothing.mp4", "(min-width: 601px)"), ("assets/smoothing-tall.mp4", "")]
+    assert 'poster="assets/smoothing.jpg"' in video
+    link = re.search(
+        r'<link rel="preload" as="image" href="([^"]+)" media="([^"]+)" data-poster-for="([^"]+)">', page
+    )
+    assert link is not None
+    assert link.groups() == ("assets/smoothing-tall.jpg", "(max-width: 600px)", "smoothing-video")
 
 
 # Deploy
