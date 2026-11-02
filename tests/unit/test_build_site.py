@@ -1,6 +1,7 @@
 """scripts/build_site.py and scripts/deploy_space.py without network or a Hugging Face account."""
 
 import importlib.util
+import json
 import re
 import sys
 
@@ -49,6 +50,7 @@ def media_dir(tmp_path, sizes=None):
     folder = tmp_path / "media"
     folder.mkdir()
     for name, size in (sizes or {"clip.jpg": 10, "clip.mp4": 20, "unused.mp4": 30}).items():
+        (folder / name).parent.mkdir(parents=True, exist_ok=True)
         (folder / name).write_bytes(b"x" * size)
     return folder
 
@@ -263,6 +265,10 @@ SHOWCASE_MEDIA = {
     "smoothing.jpg",
     "smoothing-tall.mp4",
     "smoothing-tall.jpg",
+    "vendor/d3.min.js",
+    "vendor/motion.js",
+    "vendor/lenis.min.js",
+    "vendor/LICENSES.txt",
 }
 
 
@@ -315,6 +321,31 @@ def test_showcase_page_keeps_its_contract():
     assert "SoccerTrack v2, Scott et al., CC BY 4.0" in text
     # ADR-0002: public pixels say how the frames were changed
     assert all(change in text for change in ("cropped", "downscaled", "overlaid"))
+
+
+def test_showcase_scripts_are_vendored_and_licensed():
+    page = build_site.PAGE.read_text(encoding="utf-8")
+    scripts = re.findall(r'<script src="([^"]+)"', page)
+    assert scripts
+    assert all(src.startswith("assets/vendor/") for src in scripts)
+    licences = (build_site.MEDIA / "vendor" / "LICENSES.txt").read_text(encoding="utf-8")
+    for src in scripts:
+        assert src.removeprefix("assets/vendor/") in licences
+
+
+def test_accuracy_chart_data_matches_the_test_report():
+    page = build_site.PAGE.read_text(encoding="utf-8")
+    raw = re.search(r'<script type="application/json" id="data-errors">(.*?)</script>', page)
+    assert raw is not None
+    errors = json.loads(raw.group(1))
+    # reports/test_run.md, position error against the raw labels: p50 and p90 of each camera
+    for camera, (p50, p90) in {"perframe": (0.51, 1.82), "ptz": (0.40, 1.16)}.items():
+        values = errors[camera]
+        assert len(values) == 100
+        assert values == sorted(values)
+        # the dots sit at the percentiles 0.5, 1.5, ..., 99.5: p50 and p90 fall between two of them
+        assert abs((values[49] + values[50]) / 2 - p50) <= 0.01
+        assert abs((values[89] + values[90]) / 2 - p90) <= 0.01
 
 
 def test_phones_get_the_stacked_smoothing_clip_and_its_poster():

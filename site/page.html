@@ -2,328 +2,378 @@
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preload" as="image" href="assets/smoothing-tall.jpg" media="(max-width: 600px)" data-poster-for="smoothing-video">
 <style>
-@import url("https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Mono:wght@400;500&family=Atkinson+Hyperlegible+Next:ital,wght@0,400;0,600;1,400&family=Big+Shoulders+Display:wght@700;800&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible+Mono:wght@400;500&family=Atkinson+Hyperlegible+Next:ital,wght@0,400;0,600;1,400&family=Big+Shoulders+Display:wght@700;800&family=Newsreader:ital,opsz,wght@0,6..72,400..700;1,6..72,400..700&display=swap");
 
-/* Layout: a mown-pitch band carries the thesis, the four results at a glance and the broadcast screen; below
-   it, chalk-ruled sections with the heading in a left column, the four results on a board split by chalk
-   lines like a pitch, a quiet footer. Light theme: a day match. Dark theme: the same match under floodlights.
-   Magenta (pink on grass) is always predfoot; grey is predfoot without its smoothing step. */
+/* Layout: a mown-pitch band opens the page; below it, chalk-white paper with chalk rules, one chapter per
+   result with its figure in a raised panel, and the study typeset as a one-page technical note at the end.
+   Light theme: a day match. Dark theme: the same match under floodlights.
+   Magenta is predfoot; grey is predfoot without its smoothing step. */
 :root {
-  --paper: #f3f6f2;          /* page ground: chalk white with a green bias */
-  --paper-2: #e7ede6;        /* quiet panels */
-  --ink: #0f1d16;            /* text */
-  --ink-2: #4a5a51;          /* secondary text */
-  --ink-3: #5f6e66;          /* captions, sources, axis labels */
-  --rule: #c9d4cb;           /* chalk hairlines on paper */
-  --track: #dde5dd;          /* empty part of a scale */
-  --pitch: #22683c;          /* grass */
-  --pitch-stripe: #26713f;   /* mown stripe */
-  --chalk: #f4f7f2;          /* lines and text on grass */
-  --chalk-line: rgba(244, 247, 242, 0.3);
-  --on-chalk: #0f1d16;       /* text on a chalk label */
-  --chalk-2: #dae6dc;        /* secondary text on grass (4.6:1 on the mown stripe) */
-  --zone: #c0176f;           /* predfoot: error zones, smoothed camera, alarm */
-  --zone-wash: rgba(192, 23, 111, 0.12);
-  --zone-on-pitch: #ff9ccb;  /* error zones drawn on grass */
-  --context: #818e87;        /* the comparison: without smoothing, single warning signal */
-  --link: #b0135f;
-  --warn: #8a5a00;           /* target missed */
-  --warn-wash: #f5e8cb;
-  --good: #1f6137;           /* target met */
-  --focus: #b0135f;
-  --shadow: rgba(15, 29, 22, 0.32);
-  --screen: #0f1d16;         /* behind a video until it loads */
-  --map: #1b442e;            /* the smoothing clip's ground, the same in both themes */
-  --map-plain: #9ea9a2;      /* the clip's grey: without smoothing */
-  --map-plain-wash: rgba(158, 169, 162, 0.3);
-  --map-zone: #ff9ccb;       /* the clip's pink: predfoot */
-  --map-zone-wash: rgba(255, 156, 203, 0.3);
-  --map-true: #f4f7f2;       /* the clip's true positions */
-
-  --font-display: "Big Shoulders Display", "Arial Narrow", "Roboto Condensed", "Helvetica Neue", Arial, sans-serif;
+  --bg: #f3f6f2; --bg-2: #e7ede6; --ink: #0f1d16; --ink-2: #4a5a51; --ink-3: #5f6e66;
+  --rule: #c9d4cb; --track: #dde5dd;
+  --band: #22683c; --band-stripe: #26713f; --band-ink: #f4f7f2; --band-ink-2: #dae6dc;
+  --band-line: rgba(244, 247, 242, 0.3); --tab-bg: #f4f7f2; --tab-ink: #0f1d16;
+  --accent: #c0176f; --accent-wash: rgba(192, 23, 111, 0.12); --accent-band: #ff9ccb; --on-accent: #ffffff;
+  --base: #818e87; --base-wash: rgba(129, 142, 135, 0.18); --on-base: #0f1d16;
+  --truth: #0f1d16; --warn: #8a5a00; --warn-fill: #e3a03a; --warn-wash: #f5e8cb; --good: #1f6137;
+  --link: #b0135f; --focus: #b0135f; --shadow: rgba(15, 29, 22, 0.32); --screen: #0f1d16;
+  --panel: #fbfcfa; --panel-line: #d3dcd4; --panel-hi: rgba(255, 255, 255, 0.85); --sheet: #ffffff; --viz-bg: #fbfcfa;
+  --topbar: rgba(243, 246, 242, 0.84); --topbar-line: rgba(15, 29, 22, 0.1);
+  --map: #1b442e; --map-line: rgba(244, 247, 242, 0.34); --map-plain: #9ea9a2;
+  --map-plain-wash: rgba(158, 169, 162, 0.3); --map-zone: #ff9ccb; --map-zone-wash: rgba(255, 156, 203, 0.3);
+  --map-true: #f4f7f2;
+  --font-display: "Big Shoulders Display", "Arial Narrow", "Roboto Condensed", Arial, sans-serif;
   --font-body: "Atkinson Hyperlegible Next", "Atkinson Hyperlegible", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   --font-mono: "Atkinson Hyperlegible Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-
+  --title-weight: 800; --title-case: none; --title-tracking: 0.004em; --title-leading: 0.96;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --paper: #0d1612; --paper-2: #121f19; --ink: #e6ede7; --ink-2: #a8b6ad; --ink-3: #8e9c94;
-    --rule: #27372e; --track: #1d2b24; --pitch: #123d25; --pitch-stripe: #15452a; --chalk: #e6ede7;
-    --chalk-line: rgba(230, 237, 231, 0.24); --on-chalk: #0d1612; --chalk-2: #bccbc1; --zone: #f0479a;
-    --zone-wash: rgba(240, 71, 154, 0.16); --zone-on-pitch: #ff8cc3; --context: #58675f; --link: #ff7ab6;
-    --warn: #e9b949; --warn-wash: #2b2414; --good: #7fcb98; --focus: #ff7ab6; --shadow: rgba(0, 0, 0, 0.55);
-    --screen: #050a07; --map: #1b442e; --map-plain: #9ea9a2; --map-plain-wash: rgba(158, 169, 162, 0.3);
-    --map-zone: #ff9ccb; --map-zone-wash: rgba(255, 156, 203, 0.3); --map-true: #f4f7f2;
+    --bg: #0d1612; --bg-2: #121f19; --ink: #e6ede7; --ink-2: #a8b6ad; --ink-3: #8e9c94;
+    --rule: #27372e; --track: #1d2b24;
+    --band: #123d25; --band-stripe: #15452a; --band-ink: #e6ede7; --band-ink-2: #bccbc1;
+    --band-line: rgba(230, 237, 231, 0.24); --tab-bg: #e6ede7; --tab-ink: #0d1612;
+    --accent: #f0479a; --accent-wash: rgba(240, 71, 154, 0.16); --accent-band: #ff8cc3; --on-accent: #0d1612;
+    --base: #6d7c74; --base-wash: rgba(109, 124, 116, 0.24); --on-base: #e6ede7;
+    --truth: #e6ede7; --warn: #e9b949; --warn-fill: #e9b949; --warn-wash: #2b2414; --good: #7fcb98;
+    --link: #ff7ab6; --focus: #ff7ab6; --shadow: rgba(0, 0, 0, 0.55); --screen: #050a07;
+    --panel: #111c17; --panel-line: rgba(230, 237, 231, 0.1); --panel-hi: rgba(255, 255, 255, 0.04); --sheet: #101a15; --viz-bg: #111c17;
+    --topbar: rgba(13, 22, 18, 0.82); --topbar-line: rgba(230, 237, 231, 0.1);
     color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
-  --paper: #0d1612; --paper-2: #121f19; --ink: #e6ede7; --ink-2: #a8b6ad; --ink-3: #8e9c94;
-  --rule: #27372e; --track: #1d2b24; --pitch: #123d25; --pitch-stripe: #15452a; --chalk: #e6ede7;
-  --chalk-line: rgba(230, 237, 231, 0.24); --on-chalk: #0d1612; --chalk-2: #bccbc1; --zone: #f0479a;
-  --zone-wash: rgba(240, 71, 154, 0.16); --zone-on-pitch: #ff8cc3; --context: #58675f; --link: #ff7ab6;
-  --warn: #e9b949; --warn-wash: #2b2414; --good: #7fcb98; --focus: #ff7ab6; --shadow: rgba(0, 0, 0, 0.55);
-  --screen: #050a07; --map: #1b442e; --map-plain: #9ea9a2; --map-plain-wash: rgba(158, 169, 162, 0.3);
-  --map-zone: #ff9ccb; --map-zone-wash: rgba(255, 156, 203, 0.3); --map-true: #f4f7f2;
+  --bg: #0d1612; --bg-2: #121f19; --ink: #e6ede7; --ink-2: #a8b6ad; --ink-3: #8e9c94;
+  --rule: #27372e; --track: #1d2b24;
+  --band: #123d25; --band-stripe: #15452a; --band-ink: #e6ede7; --band-ink-2: #bccbc1;
+  --band-line: rgba(230, 237, 231, 0.24); --tab-bg: #e6ede7; --tab-ink: #0d1612;
+  --accent: #f0479a; --accent-wash: rgba(240, 71, 154, 0.16); --accent-band: #ff8cc3; --on-accent: #0d1612;
+  --base: #6d7c74; --base-wash: rgba(109, 124, 116, 0.24); --on-base: #e6ede7;
+  --truth: #e6ede7; --warn: #e9b949; --warn-fill: #e9b949; --warn-wash: #2b2414; --good: #7fcb98;
+  --link: #ff7ab6; --focus: #ff7ab6; --shadow: rgba(0, 0, 0, 0.55); --screen: #050a07;
+    --panel: #111c17; --panel-line: rgba(230, 237, 231, 0.1); --panel-hi: rgba(255, 255, 255, 0.04); --sheet: #101a15; --viz-bg: #111c17;
+  --topbar: rgba(13, 22, 18, 0.82); --topbar-line: rgba(230, 237, 231, 0.1);
   color-scheme: dark;
 }
-
 *, *::before, *::after { box-sizing: border-box; }
-body {
-  margin: 0;
-  background: var(--paper);
-  color: var(--ink);
-  font: 400 1.0625rem/1.6 var(--font-body);
-}
+body { margin: 0; background: var(--bg); color: var(--ink); font: 400 1.0625rem/1.6 var(--font-body); }
+html.lenis, html.lenis body { height: auto; }
+.lenis.lenis-stopped { overflow: clip; }
 h1, h2, h3, p, ol, ul, figure { margin: 0; }
-a { color: inherit; text-decoration: underline; text-decoration-color: var(--zone); text-decoration-thickness: 1.5px; text-underline-offset: 0.2em; }
+a { color: inherit; text-decoration: underline; text-decoration-color: var(--accent); text-decoration-thickness: 1.5px; text-underline-offset: 0.2em; transition: color 0.2s ease; }
 a:hover { color: var(--link); }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; border-radius: 2px; }
-.band :focus-visible { outline-color: var(--chalk); }
 .nowrap { white-space: nowrap; }
-
+section[id], article[id] { scroll-margin-top: 72px; }
 .wrap {
   width: 100%;
-  max-width: 74rem;
+  max-width: 76rem;
   margin-inline: auto;
   padding-left: max(16px, env(safe-area-inset-left, 0px));
   padding-right: max(16px, env(safe-area-inset-right, 0px));
 }
-
-/* Pitch band */
-.band {
-  position: relative;
-  background: var(--pitch);
-  color: var(--chalk);
-  padding-block: clamp(18px, 3vw, 30px) clamp(32px, 5vw, 64px);
+@media (min-width: 700px) {
+  .wrap { padding-left: max(32px, env(safe-area-inset-left, 0px)); padding-right: max(32px, env(safe-area-inset-right, 0px)); }
 }
+
+/* Top bar: slides in once the opening band has scrolled away */
+.topbar {
+  position: fixed; z-index: 50; top: 0; left: 0; right: 0;
+  padding-top: env(safe-area-inset-top, 0px);
+  background: var(--topbar); border-bottom: 1px solid var(--topbar-line);
+  -webkit-backdrop-filter: blur(14px) saturate(1.3); backdrop-filter: blur(14px) saturate(1.3);
+  transform: translateY(-110%); transition: transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.topbar.is-shown { transform: none; }
+.topbar .topbar-in { display: flex; align-items: center; gap: 28px; min-height: 58px; }
+.topbar-mark { display: inline-flex; align-items: center; gap: 9px; color: var(--ink); text-decoration: none; font: var(--title-weight) 1.375rem/1 var(--font-display); text-transform: var(--title-case); }
+.topbar-mark svg { width: 24px; height: 16px; }
+.topbar-mark ellipse { fill: none; stroke: var(--accent); stroke-width: 1.75; }
+.topbar-mark circle { fill: var(--ink); }
+.topbar-links { display: flex; gap: 22px; font-size: 0.9375rem; }
+.topbar-links a, .topbar-code { color: var(--ink-2); text-decoration: none; }
+.topbar-links a:hover, .topbar-code:hover { color: var(--ink); }
+.topbar-code { margin-left: auto; font-size: 0.9375rem; }
+.progress { position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--accent); transform: scaleX(0); transform-origin: 0 50%; }
+@media (max-width: 760px) {
+  .topbar-links { display: none; }
+}
+
+/* Opening band */
+.band { position: relative; overflow: hidden; background: var(--band); color: var(--band-ink); padding-block: clamp(18px, 3vw, 30px) clamp(40px, 6vw, 80px); }
 .band .pitch { position: absolute; inset: 0; width: 100%; height: 100%; }
 .band .wrap { position: relative; }
-.pitch .stripes rect { fill: var(--pitch-stripe); }
-.pitch .lines { fill: none; stroke: var(--chalk-line); stroke-width: 1.5px; opacity: 0.5; }  /* faint: text runs over it */
-.pitch .lines circle.spot { fill: var(--chalk-line); stroke: none; }
+.pitch .stripes rect { fill: var(--band-stripe); }
+.pitch .lines { fill: none; stroke: var(--band-line); stroke-width: 1.5px; opacity: 0.5; }
+.pitch .lines circle.spot { fill: var(--band-line); stroke: none; }
 .pitch * { vector-effect: non-scaling-stroke; }
-
-.masthead { display: flex; align-items: center; justify-content: space-between; gap: 12px 24px; flex-wrap: wrap; }
-.wordmark { display: inline-flex; align-items: center; gap: 10px; font: 800 1.75rem/1 var(--font-display); letter-spacing: 0.01em; }
+.masthead { display: flex; align-items: center; justify-content: space-between; gap: 12px 24px; flex-wrap: wrap; min-height: 40px; }
+.wordmark { display: inline-flex; align-items: center; gap: 10px; font: var(--title-weight) 1.75rem/1 var(--font-display); letter-spacing: 0.01em; text-transform: var(--title-case); }
 .wordmark svg { width: 30px; height: 20px; flex: none; }
-.wordmark svg ellipse { fill: none; stroke: var(--zone-on-pitch); stroke-width: 1.75; }
-.wordmark svg circle { fill: var(--chalk); }
-.masthead a { font: 500 0.8125rem/1 var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; text-decoration-color: var(--zone-on-pitch); }
-.masthead a:hover { color: var(--chalk); text-decoration-thickness: 2px; }
+.wordmark svg ellipse { fill: none; stroke: var(--accent-band); stroke-width: 1.75; }
+.wordmark svg circle { fill: var(--band-ink); }
+.masthead a { font: 500 0.8125rem/1 var(--font-mono); letter-spacing: 0.06em; text-transform: uppercase; text-decoration-color: var(--accent-band); }
+.masthead a:hover { color: var(--band-ink); text-decoration-thickness: 2px; }
+.band :focus-visible { outline-color: var(--band-ink); }
 
-/* Thesis and results at a glance beside the broadcast screen on wide screens; stacked on a phone, with the
-   results before the video */
 .hero { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-areas: "thesis" "glance" "screen"; gap: 26px; padding-top: clamp(32px, 5vw, 64px); }
 .hero > * { min-width: 0; }
 @media (min-width: 900px) {
   .hero { grid-template-columns: minmax(0, 1fr) minmax(0, 28rem); grid-template-areas: "thesis screen" "glance screen"; grid-template-rows: auto 1fr; column-gap: clamp(40px, 5vw, 72px); row-gap: 30px; }
 }
 .thesis { grid-area: thesis; display: grid; gap: clamp(14px, 2vw, 22px); }
-h1 {
-  max-width: 21ch;
-  font: 800 clamp(2.4rem, 1.2rem + 3.9vw, 4.25rem)/0.96 var(--font-display);
-  letter-spacing: 0.004em;
-  text-wrap: balance;
-}
+h1 { max-width: 21ch; font: var(--title-weight) clamp(2.4rem, 1.2rem + 3.9vw, 4.25rem)/var(--title-leading) var(--font-display); letter-spacing: var(--title-tracking); text-transform: var(--title-case); text-wrap: balance; }
 .lede { max-width: 54ch; font-size: clamp(1.0625rem, 1rem + 0.35vw, 1.25rem); line-height: 1.5; }
-
-/* The four results at a glance */
-.glance { grid-area: glance; align-self: start; display: grid; gap: 14px; padding-top: 16px; border-top: 1px solid var(--chalk-line); }
-.glance-head { font: 500 0.75rem/1.4 var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--chalk-2); }
-.glance-head a { color: var(--chalk); text-decoration-color: var(--zone-on-pitch); }
-.glance-head a:hover { color: var(--chalk); text-decoration-thickness: 2px; }
+.glance { grid-area: glance; align-self: start; display: grid; gap: 14px; padding-top: 16px; border-top: 1px solid var(--band-line); }
+.glance-head { font-size: 0.875rem; line-height: 1.4; color: var(--band-ink-2); }
+.glance-head a { color: var(--band-ink); text-decoration-color: var(--accent-band); }
 .glance ul { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 22px; }
 @media (min-width: 600px) and (max-width: 899px), (min-width: 1180px) { .glance ul { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 .glance li { display: grid; align-content: start; gap: 6px; }
-.glance b { font: 800 clamp(2.1rem, 1.7rem + 1.1vw, 2.6rem)/0.92 var(--font-display); color: var(--chalk); }
-.glance b .unit { font-size: 0.58em; color: var(--chalk-2); }
-.glance li > span { font-size: 0.875rem; line-height: 1.4; color: var(--chalk-2); }
-.glance em { font-style: normal; font-weight: 600; color: var(--chalk); }
+.glance b { font: var(--title-weight) clamp(2.1rem, 1.7rem + 1.1vw, 2.6rem)/0.92 var(--font-display); color: var(--band-ink); font-variant-numeric: tabular-nums; }
+.glance b .unit { font-size: 0.58em; color: var(--band-ink-2); }
+.glance li > span { font-size: 0.875rem; line-height: 1.4; color: var(--band-ink-2); }
+.glance em { font-style: normal; font-weight: 600; color: var(--band-ink); }
 
-/* Broadcast screen, with its caption under it */
 .screen { grid-area: screen; display: grid; }
 .screen-bar { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; }
-.screen figcaption { max-width: 60ch; padding-top: 14px; font-size: 0.9375rem; line-height: 1.55; color: var(--chalk-2); }
-.tab {
-  display: inline-block;
-  padding: 7px 10px 6px;
-  white-space: nowrap;
-  background: var(--chalk);
-  color: var(--on-chalk);
-  font: 500 0.75rem/1.2 var(--font-mono);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-video {
-  display: block;
-  width: 100%;
-  max-width: 100%;
-  height: auto;
-  aspect-ratio: auto 16 / 9;
-  background: var(--screen);
-}
+.screen figcaption { max-width: 60ch; padding-top: 14px; font-size: 0.9375rem; line-height: 1.55; color: var(--band-ink-2); }
+.tab { display: inline-block; padding: 7px 10px 6px; white-space: nowrap; background: var(--tab-bg); color: var(--tab-ink); font: 500 0.75rem/1.2 var(--font-mono); letter-spacing: 0.06em; text-transform: uppercase; }
+video { display: block; width: 100%; max-width: 100%; height: auto; aspect-ratio: auto 16 / 9; background: var(--screen); }
 video.clip-tall { aspect-ratio: auto 720 / 850; }
-.screen video { box-shadow: 0 0 0 1px var(--chalk-line), 0 28px 56px -28px var(--shadow); }
-.media-foot { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px 24px; padding-top: 12px; }
-.media-foot figcaption { max-width: 72ch; font-size: 0.9375rem; line-height: 1.55; color: var(--ink-2); }
-.toggle {
-  flex: none;
-  padding: 7px 12px 6px;
-  border: 1px solid var(--rule);
-  border-radius: 3px;
-  background: var(--paper);
-  color: var(--ink);
-  font: 500 0.75rem/1 var(--font-mono);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  cursor: pointer;
-}
+.screen video { box-shadow: 0 0 0 1px var(--band-line), 0 28px 56px -28px var(--shadow); }
+.toggle { flex: none; padding: 7px 12px 6px; border: 1px solid var(--rule); border-radius: 999px; background: var(--bg); color: var(--ink); font: 500 0.75rem/1 var(--font-mono); letter-spacing: 0.06em; text-transform: uppercase; cursor: pointer; transition: border-color 0.2s ease; }
 .toggle:hover { border-color: var(--ink-3); }
-.band .toggle { margin-bottom: 4px; border-color: var(--chalk-line); background: transparent; color: var(--chalk); }
-.band .toggle:hover { border-color: var(--chalk); }
+.band .toggle { margin-bottom: 4px; border-color: var(--band-line); background: transparent; color: var(--band-ink); }
+.band .toggle:hover { border-color: var(--band-ink); }
 
-/* Sections: heading in a left column on wide screens */
-.sec { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px 56px; padding-block: clamp(56px, 8vw, 104px) 0; }
-.sec > * { min-width: 0; }
-@media (min-width: 900px) {
-  .sec { grid-template-columns: 14rem minmax(0, 1fr); }
-  .sec > .span { grid-column: 1 / -1; }
-  .sec > .col-2 { grid-column: 2; }
-}
-h2 {
-  font: 800 clamp(1.9rem, 1.4rem + 1.8vw, 2.75rem)/1 var(--font-display);
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  text-wrap: balance;
-}
-.prose { display: grid; gap: 14px; max-width: 64ch; }
-.prose p { font-size: clamp(1.0625rem, 1rem + 0.25vw, 1.1875rem); }
-.note { font-size: 0.9375rem; color: var(--ink-2); }
+/* Sections */
+.sec { padding-block: clamp(84px, 11vw, 150px) 0; }
+.split { display: grid; gap: 36px 72px; }
+@media (min-width: 960px) { .split { grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); align-items: center; } }
+.sec-text { display: grid; gap: 20px; align-content: start; }
+h2 { max-width: 17ch; font: var(--title-weight) clamp(2.2rem, 1.3rem + 3vw, 3.75rem)/var(--title-leading) var(--font-display); letter-spacing: var(--title-tracking); text-transform: var(--title-case); text-wrap: balance; }
+.lead { max-width: 40ch; font-size: clamp(1.1875rem, 1.05rem + 0.5vw, 1.4375rem); line-height: 1.5; }
+.sec-text p:not(.lead) { max-width: 52ch; color: var(--ink-2); }
+.fig-note { max-width: 72ch; font-size: 0.875rem; line-height: 1.55; color: var(--ink-3); }
+.problem-figure, .fix-figure { display: grid; gap: 14px; min-width: 0; }
 
-/* Results board */
-.legend { display: flex; flex-wrap: wrap; gap: 6px 22px; font-size: 0.875rem; color: var(--ink-2); }
-.legend span { display: inline-flex; align-items: center; gap: 8px; }
-.legend i { display: inline-block; width: 18px; height: 10px; border-radius: 0 3px 3px 0; background: var(--context); }
-.legend i.is-zone { background: var(--zone); }
-.board { display: grid; grid-template-columns: minmax(0, 1fr); border-top: 1px solid var(--rule); }
-.metric { display: flex; flex-direction: column; gap: 16px; min-width: 0; padding-block: clamp(26px, 3.6vw, 44px); border-bottom: 1px solid var(--rule); }
-.metric > .source { margin-top: auto; }  /* sources line up at the foot of each row of cards */
-@media (min-width: 860px) {
-  .board { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .metric:nth-child(odd) { padding-right: clamp(28px, 3.6vw, 48px); border-right: 1px solid var(--rule); }
-  .metric:nth-child(even) { padding-left: clamp(28px, 3.6vw, 48px); }
-}
-.metric-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; }
-h3.kicker { font: 500 0.8125rem/1.2 var(--font-mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-2); }
-.figure { font: 800 clamp(3.6rem, 2.6rem + 3.4vw, 5.5rem)/0.88 var(--font-display); letter-spacing: 0.005em; }
-.figure .unit { font-size: 0.5em; letter-spacing: 0.02em; color: var(--ink-2); }
-.claim { max-width: 46ch; font-size: 1.0625rem; line-height: 1.5; }
-.source { max-width: 62ch; font-size: 0.8125rem; line-height: 1.5; color: var(--ink-3); }
-
-.verdict { display: inline-flex; align-items: center; gap: 6px; padding: 5px 9px 4px; border: 1px solid currentColor; border-radius: 3px; font: 500 0.75rem/1.2 var(--font-mono); letter-spacing: 0.06em; text-transform: uppercase; }
-.verdict svg { width: 12px; height: 12px; flex: none; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
-.verdict.is-missed { color: var(--warn); background: var(--warn-wash); }
-.verdict.is-met { color: var(--good); }
-
-.bars { display: grid; gap: 12px; }
-.bar-group { display: grid; gap: 8px; }
-.bar-group + .bar-group { padding-top: 6px; }
-.bar-title { font-size: 0.875rem; font-weight: 600; color: var(--ink); }
-.bar-title .dir { font-weight: 400; color: var(--ink-2); white-space: nowrap; }
-.bar-row { display: grid; gap: 3px; }
-.bar-label { font-size: 0.875rem; color: var(--ink-2); }
-.bar-line { display: flex; align-items: center; gap: 8px; border-left: 1px solid var(--ink-3); }
-.bar { flex: none; display: block; width: calc(var(--v) * (100% - 4.75rem)); min-width: 3px; height: 16px; border-radius: 0 4px 4px 0; background: var(--context); }
-.bar.is-zone { background: var(--zone); }
-.bar-value { font-weight: 600; font-size: 0.9375rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
-
-.dots { display: grid; gap: 14px; --target: 0.3333; }
-.dot-row { display: grid; gap: 4px; }
-.dot-head { display: flex; justify-content: space-between; gap: 12px; font-size: 0.875rem; color: var(--ink-2); }
-.dot-head b { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
-.dot-track { position: relative; height: 20px; background: linear-gradient(var(--track), var(--track)) 0 50% / 100% 2px no-repeat; }
-.dot-track::before { content: ""; position: absolute; top: -3px; bottom: -3px; left: calc(var(--target) * 100%); width: 2px; margin-left: -1px; background: var(--ink); }
-.range { position: absolute; top: 8px; height: 4px; left: calc(var(--lo) * 100%); width: calc((var(--hi) - var(--lo)) * 100%); border-radius: 2px; background: var(--context); }
-.dot { position: absolute; top: 4px; left: calc(var(--x) * 100%); width: 12px; height: 12px; margin-left: -6px; border-radius: 50%; background: var(--context); box-shadow: 0 0 0 2px var(--paper); }
-.range.is-zone, .dot.is-zone { background: var(--zone); }
-.dot-axis { position: relative; height: 1.4em; font-size: 0.75rem; color: var(--ink-3); font-variant-numeric: tabular-nums; }
-.dot-axis span { position: absolute; top: 0; left: calc(var(--x) * 100%); transform: translateX(-50%); white-space: nowrap; }
-.dot-axis span:first-child { transform: none; }
-.dot-axis span:last-child { transform: translateX(-100%); }
-.dot-axis .is-target { color: var(--ink); font-weight: 600; }
-.dot-key { font-size: 0.8125rem; color: var(--ink-3); }
-
-.size { display: flex; align-items: center; gap: 16px; padding-top: 4px; }
-.size > svg { width: 92px; height: 60px; flex: none; }
-.size > div, .judged { display: grid; justify-items: start; gap: 8px; }
-.size .circle { fill: none; stroke: var(--ink-3); stroke-width: 1.5; }
-.size .zone { fill: var(--zone-wash); stroke: var(--zone); stroke-width: 1.75; }
-.size p, .judged p { max-width: 46ch; font-size: 0.9375rem; line-height: 1.45; }
-
-/* Trust band */
-.trust { margin-top: clamp(56px, 8vw, 104px); background: var(--pitch); color: var(--chalk); }
-.trust .wrap { display: grid; grid-template-columns: minmax(0, 1fr); gap: 22px 56px; align-items: start; padding-block: clamp(36px, 5vw, 64px); }
-@media (min-width: 900px) { .trust .wrap { grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); } }
-.trust .wrap > * { min-width: 0; }
-.trust-head { display: grid; gap: 18px; }
-.trust-line { max-width: 22ch; font: 800 clamp(1.9rem, 1.3rem + 2.2vw, 3rem)/1 var(--font-display); letter-spacing: 0; text-transform: none; text-wrap: balance; }
-.trust .links { display: flex; flex-wrap: wrap; gap: 8px 28px; }
-.trust ol { list-style: none; padding: 0; display: grid; gap: 0; border-top: 1px solid var(--chalk-line); counter-reset: step; }
-.trust li { display: grid; grid-template-columns: 2.25rem minmax(0, 1fr); gap: 12px; padding-block: 14px; border-bottom: 1px solid var(--chalk-line); counter-increment: step; font-size: 1.0625rem; line-height: 1.5; }
-.trust li::before { content: counter(step); font: 800 1.5rem/1.05 var(--font-display); color: var(--zone-on-pitch); }
-.trust li b { font-weight: 600; }
-.trust a { font: 500 0.8125rem/1.4 var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; text-decoration-color: var(--zone-on-pitch); }
-.trust a:hover { color: var(--chalk); text-decoration-thickness: 2px; }
-.trust :focus-visible { outline-color: var(--chalk); }
-
-/* The smoothing clip: a bar of the clip's own green names its colours above it */
-.duo-bar { display: flex; flex-wrap: wrap; gap: 6px 20px; padding: 10px 12px 9px; background: var(--map); color: var(--map-true); font-size: 0.875rem; line-height: 1.35; }
+.duo-bar { display: flex; flex-wrap: wrap; gap: 6px 20px; padding: 10px 12px 9px; background: var(--map); color: var(--map-true); font-family: "Atkinson Hyperlegible Next", system-ui, sans-serif; font-size: 0.875rem; line-height: 1.35; }
 .duo-bar span { display: inline-flex; align-items: center; gap: 8px; }
 .duo-bar i { display: inline-block; flex: none; border-radius: 50%; }
 .duo-bar .k-plain, .duo-bar .k-zone { width: 22px; height: 12px; border: 1.5px solid; transform: rotate(-18deg); }
 .duo-bar .k-plain { border-color: var(--map-plain); background: var(--map-plain-wash); }
 .duo-bar .k-zone { border-color: var(--map-zone); background: var(--map-zone-wash); }
 .duo-bar .k-true { width: 8px; height: 8px; margin-inline: 7px; background: var(--map-true); }
+.fix-figure .duo-bar { margin-bottom: -14px; }
 video.clip-duo { aspect-ratio: 960 / 374; background: var(--map); }
-@media (max-width: 600px) { video.clip-duo { aspect-ratio: 640 / 992; } }  /* phones play the stacked clip */
+@media (max-width: 600px) { video.clip-duo { aspect-ratio: 640 / 992; } }
+.media-foot { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px 24px; }
+@media (max-width: 520px) { .media-foot { flex-wrap: wrap; } }
 
-/* How it works */
-.steps { list-style: none; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 28px 40px; }
-@media (min-width: 640px) { .steps { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-.steps li { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 4px 16px; align-content: start; }
-.steps svg { grid-row: span 2; width: 64px; height: 64px; color: var(--ink); fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
-.steps svg .accent { stroke: var(--zone); }
-.steps svg .accent-fill { fill: var(--zone); stroke: none; }
-.steps svg .quiet { stroke: var(--context); }
-.steps h3 { font: 800 1.375rem/1.1 var(--font-display); letter-spacing: 0.02em; text-transform: uppercase; }
-.steps h3 span { color: var(--zone); }
-.steps p { font-size: 1rem; line-height: 1.55; color: var(--ink-2); }
+/* Results: one chapter per result, each with its own figure */
+.results-head { display: grid; gap: 20px; padding-block: clamp(84px, 11vw, 150px) clamp(20px, 3vw, 36px); }
+.chapter { display: grid; gap: 30px 72px; padding-block: clamp(48px, 7vw, 96px); }
+@media (min-width: 960px) {
+  .chapter { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); align-items: center; }
+  .chapter:nth-child(even) .chapter-text { order: 2; }
+}
+.chapter-text { display: grid; gap: 18px; align-content: start; min-width: 0; }
+.kicker { display: inline-flex; justify-self: start; align-items: center; gap: 9px; font-size: 0.9375rem; font-weight: 600; color: var(--ink-2); }
+.kicker::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--accent); }
+.chapter-title { max-width: 18ch; font: var(--title-weight) clamp(2rem, 1.3rem + 2.4vw, 3.25rem)/var(--title-leading) var(--font-display); letter-spacing: var(--title-tracking); text-transform: var(--title-case); text-wrap: balance; }
+.steps { display: grid; gap: 14px; }
+.step { max-width: 46ch; color: var(--ink-2); transition: color 0.45s ease, opacity 0.45s ease; }
+.step b { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+.step.is-current { color: var(--ink); }
+.chapter-figure { display: grid; gap: 16px; min-width: 0; padding: clamp(16px, 2.4vw, 28px); border: 1px solid var(--panel-line); border-radius: 16px; background: var(--panel); box-shadow: inset 0 1px 0 var(--panel-hi), 0 32px 64px -44px var(--shadow); }
+.fig-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; }
+
+.seg { position: relative; isolation: isolate; display: inline-grid; grid-template-columns: 1fr 1fr; padding: 3px; border-radius: 999px; border: 1px solid var(--rule); background: var(--bg-2); }
+.seg::before { content: ""; position: absolute; z-index: -1; top: 3px; bottom: 3px; left: 3px; width: calc(50% - 3px); border-radius: 999px; background: var(--base); transition: transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1), background-color 0.35s ease; }
+.seg[data-state="on"]::before { transform: translateX(100%); background: var(--accent); }
+.seg button { appearance: none; border: 0; border-radius: 999px; padding: 8px 15px; background: none; color: var(--ink-2); font: 600 0.8125rem/1.2 var(--font-body); white-space: nowrap; cursor: pointer; transition: color 0.3s ease; }
+.seg[data-state="off"] button[data-set="off"] { color: var(--on-base); }
+.seg[data-state="on"] button[data-set="on"] { color: var(--on-accent); }
+.verdict { display: inline-flex; align-items: center; gap: 7px; padding: 6px 11px 5px; border: 1px solid currentColor; border-radius: 999px; font: 600 0.8125rem/1.2 var(--font-body); white-space: nowrap; }
+.verdict svg { width: 12px; height: 12px; flex: none; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.verdict.is-missed { color: var(--warn); background: var(--warn-wash); }
+.verdict.is-met { color: var(--good); }
+.readout { font-size: 0.9375rem; color: var(--ink-2); }
+.readout b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.odo { display: flex; flex-wrap: wrap; gap: 8px 32px; }
+.odo div { display: grid; gap: 2px; }
+.odo span { font-size: 0.8125rem; color: var(--ink-3); }
+.odo b { font: var(--title-weight) 1.875rem/1 var(--font-display); font-variant-numeric: tabular-nums; }
+.odo .is-meas b { color: var(--base); transition: color 0.5s ease; }
+.chapter[data-state="on"] .odo .is-meas b { color: var(--accent); }
+.size-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; padding-top: 8px; border-top: 1px solid var(--rule); }
+.size-row .viz { width: min(260px, 100%); flex: none; }
+.size-text { display: grid; justify-items: start; gap: 10px; flex: 1 1 14rem; }
+.size-text p { max-width: 36ch; font-size: 0.9375rem; line-height: 1.5; }
+.size-key { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 0.8125rem; color: var(--ink-3); }
+.size-key span { display: inline-flex; align-items: center; gap: 7px; }
+.size-key i { width: 18px; height: 10px; border-radius: 50%; border: 1.5px solid var(--accent); background: var(--accent-wash); }
+.size-key i.is-circle { border: 1.5px dashed var(--base); background: none; border-radius: 50%; width: 12px; height: 12px; }
+.judged { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+.judged p { flex: 1 1 18rem; font-size: 0.9375rem; line-height: 1.5; }
+
+/* Figures drawn by the page (SVG) */
+.viz { position: relative; width: 100%; min-height: 24px; }
+.viz svg { display: block; max-width: 100%; height: auto; overflow: visible; }
+.viz-center svg { margin-inline: auto; }
+.v-grid circle, .v-grid line, .v-grid rect, .v-grid path { fill: none; stroke: var(--rule); stroke-width: 1; }
+.v-grid .is-dash { stroke-dasharray: 2 4; }
+.v-tick, .v-note { font: 400 11px/1 var(--font-mono); fill: var(--ink-3); }
+.v-halo { paint-order: stroke; stroke: var(--viz-bg); stroke-width: 4px; stroke-linejoin: round; }
+.v-label { font: 600 13px/1 var(--font-body); fill: var(--ink); paint-order: stroke; stroke: var(--viz-bg); stroke-width: 5px; stroke-linejoin: round; }
+.v-label.is-small { font-size: 12px; }
+.v-truth { fill: var(--viz-bg); stroke: var(--truth); stroke-width: 2; }
+.v-dot { fill: var(--base); transition: fill 0.6s ease; }
+.viz[data-state="on"] .v-dot { fill: var(--accent); }
+.v-dot.is-out { fill: var(--viz-bg); stroke: var(--base); stroke-width: 1.5; }
+.viz[data-state="on"] .v-dot.is-out { fill: var(--viz-bg); stroke: var(--accent); }
+.v-ring { fill: none; stroke: var(--base); stroke-width: 1.75; transition: stroke 0.6s ease; }
+.v-ring.is-50 { stroke-dasharray: 4 4; }
+.viz[data-state="on"] .v-ring { stroke: var(--accent); }
+.v-map { fill: var(--map); }
+.v-chalk rect, .v-chalk line, .v-chalk circle, .v-chalk path { fill: none; stroke: var(--map-line); stroke-width: 1.25; }
+.v-true-ring { fill: none; stroke: var(--map-true); stroke-width: 1.5; }
+.v-est { fill: var(--map-plain); }
+.v-link { stroke: var(--map-plain); stroke-width: 1; opacity: 0.75; }
+.v-true { fill: none; stroke: var(--map-true); stroke-width: 2; stroke-dasharray: 1 5; stroke-linecap: round; }
+.v-meas { fill: none; stroke: var(--map-plain); stroke-width: 2.25; stroke-linejoin: round; transition: stroke 0.6s ease; }
+.viz[data-state="on"] .v-meas { stroke: var(--map-zone); }
+.v-end { fill: var(--map-true); }
+.v-db-track { stroke: var(--track); stroke-width: 8; stroke-linecap: round; }
+.v-db-link { stroke: var(--base); stroke-width: 2; opacity: 0.55; }
+.v-db-base { fill: var(--base); }
+.v-db-dot { fill: var(--accent); stroke: var(--viz-bg); stroke-width: 2; }
+.v-db-key { font: 600 13px/1 var(--font-body); fill: var(--ink); }
+.v-db-val { font: 500 12px/1 var(--font-mono); fill: var(--ink-2); }
+.v-db-val.is-accent { fill: var(--accent); font-weight: 600; }
+.v-cell { fill: var(--bg-2); }
+.v-zone { fill: var(--accent-wash); stroke: var(--accent); stroke-width: 1.25; transition: fill 0.5s ease, stroke 0.5s ease; }
+.viz[data-state="off"] .v-zone { fill: var(--base-wash); stroke: var(--base); }
+.v-pos { fill: var(--truth); }
+.v-pos.is-miss { fill: var(--warn-fill); stroke: var(--viz-bg); stroke-width: 1; }
+.v-promise { stroke: var(--ink); stroke-width: 1.5; stroke-dasharray: 5 4; }
+.v-tag rect { fill: var(--ink); }
+.v-tag text { font: 500 11px/1 var(--font-mono); fill: var(--viz-bg); }
+.v-circle { fill: none; stroke: var(--base); stroke-width: 1.5; stroke-dasharray: 4 4; }
+.v-ellipse { fill: var(--accent-wash); stroke: var(--accent); stroke-width: 2; }
+.v-ghost { fill: none; stroke: var(--rule); stroke-width: 1; stroke-dasharray: 2 2; }
+.v-frame { fill: var(--track); stroke: var(--rule); stroke-width: 0.75; }
+.v-frame.is-wrong { fill: var(--warn-fill); stroke: none; }
+.v-tray { fill: var(--accent-wash); stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 4 3; transition: stroke 0.5s ease, fill 0.5s ease; }
+.viz[data-state="off"] .v-tray { fill: var(--base-wash); stroke: var(--base); }
+
+/* Trust band */
+.trust { margin-top: clamp(84px, 11vw, 150px); background: var(--band); color: var(--band-ink); }
+.trust .wrap { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px 56px; align-items: start; padding-block: clamp(44px, 6vw, 80px); }
+@media (min-width: 900px) { .trust .wrap { grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); } }
+.trust .wrap > * { min-width: 0; }
+.trust-head { display: grid; gap: 20px; }
+.trust-line { max-width: 20ch; color: var(--band-ink); }
+.trust .links { display: flex; flex-wrap: wrap; gap: 8px 28px; }
+.trust a { font: 500 0.8125rem/1.4 var(--font-mono); letter-spacing: 0.06em; text-transform: uppercase; text-decoration-color: var(--accent-band); }
+.trust a:hover { color: var(--band-ink); text-decoration-thickness: 2px; }
+.trust :focus-visible { outline-color: var(--band-ink); }
+.trust ol { list-style: none; padding: 0; display: grid; border-top: 1px solid var(--band-line); counter-reset: step; }
+.trust li { display: grid; grid-template-columns: 2.4rem minmax(0, 1fr); gap: 12px; padding-block: 16px; border-bottom: 1px solid var(--band-line); counter-increment: step; font-size: 1.0625rem; line-height: 1.5; color: var(--band-ink-2); }
+.trust li::before { content: counter(step); font: var(--title-weight) 1.6rem/1 var(--font-display); color: var(--accent-band); }
+.trust li b { font-weight: 600; color: var(--band-ink); }
+
+/* Method */
+.method-head { display: grid; gap: 18px; margin-bottom: clamp(32px, 5vw, 56px); }
+.method-steps { list-style: none; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+@media (min-width: 700px) { .method-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 1100px) { .method-steps { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.method-steps li { display: grid; align-content: start; gap: 12px; padding: 22px 20px 24px; border: 1px solid var(--rule); border-radius: 12px; background: var(--bg); transition: transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1), border-color 0.35s ease, box-shadow 0.35s ease; }
+.method-steps li:hover { transform: translateY(-3px); border-color: var(--ink-3); box-shadow: 0 18px 36px -24px var(--shadow); }
+.method-steps svg { width: 56px; height: 56px; color: var(--ink); fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.method-steps svg .accent { stroke: var(--accent); }
+.method-steps svg .accent-fill { fill: var(--accent); stroke: none; }
+.method-steps svg .quiet { stroke: var(--base); }
+.method-steps h3 { font: var(--title-weight) 1.375rem/1.1 var(--font-display); letter-spacing: 0.01em; text-transform: var(--title-case); }
+.method-steps h3 span { color: var(--accent); }
+.method-steps p { font-size: 0.9688rem; line-height: 1.55; color: var(--ink-2); }
 
 /* Limits */
-.limits { list-style: none; padding: 0; max-width: 64ch; border-top: 1px solid var(--rule); }
-.limits li { padding-block: 12px; border-bottom: 1px solid var(--rule); }
+.limits-grid { display: grid; gap: 24px 72px; }
+@media (min-width: 960px) { .limits-grid { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); } }
+.limits { list-style: none; padding: 0; border-top: 1px solid var(--rule); }
+.limits li { padding-block: 14px; border-bottom: 1px solid var(--rule); }
 
 /* Footer */
-footer { margin-top: clamp(56px, 8vw, 104px); background: var(--paper-2); border-top: 1px solid var(--rule); }
-footer .wrap { display: grid; gap: 22px; padding-block: clamp(32px, 5vw, 52px); }
+footer { margin-top: clamp(84px, 11vw, 150px); background: var(--bg-2); border-top: 1px solid var(--rule); }
+footer .wrap { display: grid; gap: 24px; padding-block: clamp(36px, 5vw, 56px); }
 .links-grid { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: 10px 28px; }
-.links-grid a { display: grid; gap: 2px; padding-block: 8px; text-decoration: none; border-top: 2px solid var(--ink); }
-.links-grid a b { font: 800 1.25rem/1.15 var(--font-display); letter-spacing: 0.02em; text-transform: uppercase; }
+.links-grid a { display: grid; gap: 2px; padding-block: 10px; text-decoration: none; border-top: 2px solid var(--ink); }
+.links-grid a b { font: var(--title-weight) 1.25rem/1.15 var(--font-display); letter-spacing: 0.01em; text-transform: var(--title-case); }
 .links-grid a span { font-size: 0.875rem; color: var(--ink-2); }
 .links-grid a:hover b { color: var(--link); }
 .credits { display: grid; gap: 6px; max-width: 80ch; font-size: 0.875rem; color: var(--ink-2); }
 .credits .independent { color: var(--ink); font-weight: 600; }
 
-@media (max-width: 520px) {
-  .media-foot { flex-wrap: wrap; }
+/* The study, typeset as a one-page technical note */
+.study-head { display: grid; gap: 18px; margin-bottom: clamp(28px, 4vw, 44px); }
+.paper {
+  position: relative; max-width: 70rem;
+  padding: clamp(22px, 5vw, 60px) clamp(18px, 5.5vw, 68px) clamp(24px, 5vw, 56px);
+  border: 1px solid var(--panel-line); border-radius: 6px; background: var(--sheet); color: var(--ink);
+  box-shadow: inset 0 1px 0 var(--panel-hi), 0 40px 80px -50px var(--shadow);
+  font: 400 1.0625rem/1.62 "Newsreader", Georgia, "Times New Roman", serif;
 }
+.paper-running { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 16px; padding-bottom: 10px; margin-bottom: clamp(20px, 3vw, 32px); border-bottom: 1px solid var(--rule); font: 400 0.75rem/1.4 var(--font-mono); color: var(--ink-3); }
+.paper-title { max-width: 32ch; font: 600 clamp(1.75rem, 1.25rem + 1.8vw, 2.5rem)/1.12 "Newsreader", Georgia, serif; letter-spacing: -0.01em; text-wrap: balance; }
+.paper-byline { margin-top: 10px; font-style: italic; color: var(--ink-2); }
+.paper-facts { list-style: none; padding: 0; margin-top: 16px; display: flex; flex-wrap: wrap; gap: 8px; font: 500 0.8125rem/1.2 var(--font-body); }
+.paper-facts li { padding: 6px 11px 5px; border: 1px solid var(--rule); border-radius: 999px; color: var(--ink-2); }
+.paper-facts b { color: var(--ink); font-weight: 600; }
+.paper h4 { font: 600 1.0625rem/1.3 "Newsreader", Georgia, serif; font-variant-caps: all-small-caps; letter-spacing: 0.06em; break-after: avoid; }
+.paper h4 span { margin-right: 8px; color: var(--accent); font-variant-numeric: lining-nums; }
+.paper-abstract { margin-block: clamp(20px, 3vw, 30px); padding: 16px 20px 18px; border-left: 3px solid var(--accent); background: var(--bg-2); }
+.paper-abstract p { margin-top: 6px; }
+.paper-cols { column-gap: 52px; column-rule: 1px solid var(--rule); }
+@media (min-width: 900px) { .paper-cols { column-count: 2; } }
+.paper-cols section + section { margin-top: 22px; }
+.paper-cols p, .paper-cols ul { margin-top: 8px; }
+.paper-cols ul { padding-left: 1.1em; }
+.paper-cols li { break-inside: avoid; }
+.paper-cols li + li { margin-top: 5px; }
+.paper-cols li b { font-weight: 600; }
+.paper sup { font-size: 0.7em; line-height: 0; }
+.paper-tables { display: grid; gap: 24px; margin-block: clamp(24px, 3.5vw, 36px); }
+.paper-tables figcaption { margin-bottom: 8px; font-size: 0.9375rem; color: var(--ink-2); }
+.paper-tables figcaption b { color: var(--ink); }
+.table-scroll { overflow-x: auto; }
+.paper table { width: 100%; border-collapse: collapse; border-block: 1.5px solid var(--ink); font-size: 0.9688rem; font-variant-numeric: tabular-nums lining-nums; }
+.paper th, .paper td { padding: 8px 12px; text-align: left; vertical-align: top; }
+.paper th:first-child, .paper td:first-child { padding-left: 0; }
+.paper thead th { border-bottom: 1px solid var(--ink); font-weight: 600; white-space: nowrap; }
+.paper tbody tr + tr td { border-top: 1px solid var(--rule); }
+.paper .num { text-align: right; white-space: nowrap; }
+.paper .is-met { color: var(--good); font-weight: 600; white-space: nowrap; }
+.paper .is-missed { color: var(--warn); font-weight: 600; white-space: nowrap; }
+.paper-refs { margin-top: clamp(24px, 3.5vw, 34px); padding-top: 14px; border-top: 1px solid var(--rule); font-size: 0.9375rem; color: var(--ink-2); }
+.paper-refs ol { margin-top: 8px; padding-left: 1.7em; display: grid; gap: 4px; }
+.paper-refs p { margin-top: 12px; }
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { transition: none !important; animation: none !important; }
+  *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
 }
 </style>
 
-<header class="band">
+<nav class="topbar" aria-label="Sections">
+  <div class="wrap topbar-in">
+    <a class="topbar-mark" href="#top"><svg viewBox="0 0 30 20" aria-hidden="true" focusable="false"><ellipse cx="15" cy="10" rx="13" ry="7" transform="rotate(-18 15 10)"/><circle cx="15" cy="10" r="2.6"/></svg>predfoot</a>
+    <div class="topbar-links"><a href="#problem">Problem</a><a href="#results">Results</a><a href="#method">Method</a><a href="#limits">Limits</a><a href="#study">Study</a></div>
+    <a class="topbar-code" href="https://github.com/zkyasin/predfoot" target="_blank" rel="noopener">Code</a>
+  </div>
+  <span class="progress" aria-hidden="true"></span>
+</nav>
+
+<header class="band" id="top">
   <svg class="pitch" viewBox="-60 -38 120 76" preserveAspectRatio="xMidYMid slice" aria-hidden="true" focusable="false">
     <g class="stripes">
       <rect x="-63" y="-40" width="5.25" height="80"/><rect x="-52.5" y="-40" width="5.25" height="80"/>
@@ -361,15 +411,15 @@ footer .wrap { display: grid; gap: 22px; padding-block: clamp(32px, 5vw, 52px); 
     <div class="hero">
       <div class="thesis">
         <h1>Where every player stands, read from a TV picture, and how far off it could be.</h1>
-        <p class="lede">predfoot works out from the pitch markings where a TV camera stands and where it points, then places each player on the 105&nbsp;×&nbsp;68&nbsp;m pitch with an error zone built to hold the true spot 9 times in 10. It is about the camera: the players' spots in the picture come from boxes drawn by the dataset's annotators, not from a detector.</p>
+        <p class="lede">predfoot reads the pitch markings to work out where the TV camera is and where it points. It then places each player on the pitch in metres, with an error zone that should contain the true position 9 times in 10. The players' boxes come from the dataset's annotators; predfoot does not detect players.</p>
       </div>
       <div class="glance">
-        <p class="glance-head">On three matches never used in development · <a href="#results">details</a></p>
+        <p class="glance-head">Final test on three matches kept out of development · <a href="#results">See the results</a></p>
         <ul>
-          <li><b>1.2<span class="unit"> m</span></b><span>9 players in 10 placed this close, against 1.8&nbsp;m without smoothing</span></li>
-          <li><b>3.4<span class="unit"> %</span></b><span>extra distance covered from camera wobble, down from 26&nbsp;%</span></li>
-          <li><b>93.1<span class="unit"> %</span></b><span>of true spots inside zones built for 90&nbsp;%: <em>target missed</em>, on the cautious side</span></li>
-          <li><b>55<span class="unit"> %</span></b><span>of wrong camera estimates caught when the alarm sets aside 1 frame in 10</span></li>
+          <li><b data-count="1.2" data-dec="1">1.2<span class="unit"> m</span></b><span>9 players in 10 are placed this close to their true position, against 1.8&nbsp;m without smoothing</span></li>
+          <li><b data-count="3.4" data-dec="1">3.4<span class="unit"> %</span></b><span>extra distance from camera wobble, down from 26&nbsp;%</span></li>
+          <li><b data-count="93.1" data-dec="1">93.1<span class="unit"> %</span></b><span>of true positions fell inside their 90&nbsp;% zone, so the zones are slightly too large (<em>target missed</em>)</span></li>
+          <li><b data-count="55" data-dec="0">55<span class="unit"> %</span></b><span>of wrong camera estimates flagged when the alarm sets aside 1 frame in 10</span></li>
         </ul>
       </div>
       <figure class="screen">
@@ -380,228 +430,316 @@ footer .wrap { display: grid; gap: 22px; padding-block: clamp(32px, 5vw, 52px); 
         <video class="clip-tall" id="hero-video" data-toggle="hero-toggle" data-name="the public footage" autoplay muted loop playsinline preload="auto" poster="assets/hero.jpg" aria-label="predfoot on public match footage seen through a virtual TV camera: the recovered pitch lines over the view, and the same players on a pitch diagram with their error zones" aria-describedby="hero-caption">
           <source src="assets/hero.mp4" type="video/mp4">
         </video>
-        <figcaption id="hero-caption">Public footage (SoccerTrack v2) seen through a virtual TV camera that pans inside the dataset's fixed panoramic recording; a short window chosen for the demo. Top: the pitch lines redrawn from the camera predfoot recovered, and the players' feet from the dataset's boxes. Bottom: the same players on the pitch with their error zones, and the area the camera sees. An illustration, not a measurement: the results come from SoccerNet matches, whose images cannot be shown for licence reasons.</figcaption>
+        <figcaption id="hero-caption">SoccerTrack v2 footage seen through a virtual TV camera that pans across the dataset's fixed panoramic recording, over a short window chosen for the demo. Top: pitch lines redrawn from the camera predfoot recovered, and the players' feet from the dataset's boxes. Bottom: the same players on the pitch with their error zones, and the area the camera sees. The clip illustrates the output; the measured results come from SoccerNet matches, whose images cannot be shown for licence reasons.</figcaption>
       </figure>
     </div>
   </div>
 </header>
 
 <main>
-
-  <section class="wrap sec" aria-labelledby="why">
-    <h2 id="why">Why it matters</h2>
-    <div class="prose">
-      <p>Much of football's tracking data now comes from ordinary TV broadcasts. To turn a picture into positions, software first has to work out where the camera is pointing, and when that estimate wobbles, every player on screen moves with it.</p>
-      <p>The wobble inflates stats such as distance covered and high-speed running, and the positions rarely say how far off they might be.</p>
+  <section class="wrap sec split" id="problem" aria-labelledby="problem-title">
+    <div class="sec-text">
+      <h2 id="problem-title" data-reveal>A shaky camera moves every player</h2>
+      <p class="lead" data-reveal="1">Broadcast tracking turns TV footage into player positions. First it has to work out where the camera is pointing, and any error there shifts every player on screen at the same time.</p>
+      <p data-reveal="2">Frame after frame, these shifts add up. They inflate distance covered and high-speed running, and the positions come with no sign of how far off they might be.</p>
     </div>
+    <figure class="problem-figure" data-reveal="1">
+      <div class="viz" data-viz="shake" role="img" aria-label="Illustration: ten players on a pitch diagram. Their estimated positions shift together as the camera estimate shakes."></div>
+      <figcaption class="fig-note">Illustration. Rings mark where the players are; dots mark where a shaky camera estimate puts them.</figcaption>
+    </figure>
   </section>
 
-  <section class="wrap sec" aria-labelledby="results">
-    <h2 id="results">What the test showed</h2>
-    <div class="prose">
-      <p class="note">Tested once, on 49 clips from three SoccerNet matches never used in development, against the dataset's labels. Grey is predfoot with its smoothing step switched off: the same network and the same camera solver, each frame worked out on its own. In the alarm card, grey is the best single warning signal.</p>
-      <p class="legend" aria-hidden="true"><span><i class="is-zone"></i>With smoothing (predfoot)</span><span><i></i>Without smoothing</span></p>
+  <section class="wrap sec split" id="fix" aria-labelledby="fix-title">
+    <div class="sec-text">
+      <h2 id="fix-title" data-reveal>Smooth the camera, add an error zone</h2>
+      <p class="lead" data-reveal="1">A broadcast camera pans, tilts and zooms from a fixed spot, so its view changes gradually. predfoot uses that to smooth its estimate of the camera over the clip, then draws a zone around each player that should contain the true position 9 times in 10.</p>
     </div>
-
-    <div class="board span">
-      <article class="metric" aria-labelledby="m-accuracy">
-        <div class="metric-head"><h3 class="kicker" id="m-accuracy">Accuracy</h3></div>
-        <p class="figure">1.2<span class="unit"> m</span></p>
-        <p class="claim">With smoothing, 9 players in 10 are placed within 1.2&nbsp;m of their labelled position, against 1.8&nbsp;m without.</p>
-        <div class="bars">
-          <div class="bar-group">
-            <p class="bar-title">9 players in 10 are within <span class="dir">(lower is better)</span></p>
-            <div class="bar-row">
-              <span class="bar-label">Without smoothing</span>
-              <span class="bar-line"><span class="bar" style="--v: 0.91"></span><span class="bar-value">1.8&nbsp;m</span></span>
-            </div>
-            <div class="bar-row">
-              <span class="bar-label">With smoothing (predfoot)</span>
-              <span class="bar-line"><span class="bar is-zone" style="--v: 0.58"></span><span class="bar-value">1.2&nbsp;m</span></span>
-            </div>
-          </div>
-          <div class="bar-group">
-            <p class="bar-title">Half of the players are within <span class="dir">(lower is better)</span></p>
-            <div class="bar-row">
-              <span class="bar-label">Without smoothing</span>
-              <span class="bar-line"><span class="bar" style="--v: 0.255"></span><span class="bar-value">0.51&nbsp;m</span></span>
-            </div>
-            <div class="bar-row">
-              <span class="bar-label">With smoothing (predfoot)</span>
-              <span class="bar-line"><span class="bar is-zone" style="--v: 0.2"></span><span class="bar-value">0.40&nbsp;m</span></span>
-            </div>
-          </div>
-        </div>
-        <p class="source">Same 89,700 player positions for both. Source: <a href="https://github.com/zkyasin/predfoot/blob/main/reports/test_run.md" target="_blank" rel="noopener">test report</a>.</p>
-      </article>
-
-      <article class="metric" aria-labelledby="m-stats">
-        <div class="metric-head"><h3 class="kicker" id="m-stats">Physical stats</h3></div>
-        <p class="figure">3.4<span class="unit"> %</span></p>
-        <p class="claim">extra distance covered that camera wobble still adds with smoothing. Without it, wobble adds 26.1&nbsp;% to distance and 72.4&nbsp;% to high-speed running.</p>
-        <div class="bars">
-          <div class="bar-group">
-            <p class="bar-title">Distance covered, extra from wobble <span class="dir">(lower is better)</span></p>
-            <div class="bar-row">
-              <span class="bar-label">Without smoothing</span>
-              <span class="bar-line"><span class="bar" style="--v: 0.3263"></span><span class="bar-value">26.1&nbsp;%</span></span>
-            </div>
-            <div class="bar-row">
-              <span class="bar-label">With smoothing (predfoot)</span>
-              <span class="bar-line"><span class="bar is-zone" style="--v: 0.0425"></span><span class="bar-value">3.4&nbsp;%</span></span>
-            </div>
-          </div>
-          <div class="bar-group">
-            <p class="bar-title">High-speed running (20&nbsp;km/h or faster), extra from wobble <span class="dir">(lower is better)</span></p>
-            <div class="bar-row">
-              <span class="bar-label">Without smoothing</span>
-              <span class="bar-line"><span class="bar" style="--v: 0.905"></span><span class="bar-value">72.4&nbsp;%</span></span>
-            </div>
-            <div class="bar-row">
-              <span class="bar-label">With smoothing (predfoot)</span>
-              <span class="bar-line"><span class="bar is-zone" style="--v: 0.0688"></span><span class="bar-value">5.5&nbsp;%</span></span>
-            </div>
-          </div>
-        </div>
-        <p class="source">Measured 5 times a second against the dataset's own smoothed tracks, which are not exact either: this is the distance camera wobble adds, not absolute accuracy. Source: <a href="https://github.com/zkyasin/predfoot/blob/main/reports/test_run.md" target="_blank" rel="noopener">test report</a>.</p>
-      </article>
-
-      <article class="metric" aria-labelledby="m-zones">
-        <div class="metric-head">
-          <h3 class="kicker" id="m-zones">Error zones</h3>
-          <span class="verdict is-missed"><svg viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"/></svg>Target missed</span>
-        </div>
-        <p class="figure">93.1<span class="unit"> %</span></p>
-        <p class="claim">of true positions fell inside their 90&nbsp;% zone: a bit too cautious, so the target set before the test was missed. Without smoothing, the zones landed at 90.7&nbsp;%.</p>
-        <div class="dots">
-          <div class="dot-row">
-            <div class="dot-head"><span>Without smoothing</span><b>90.7&nbsp;%</b></div>
-            <div class="dot-track"><span class="range" style="--lo: 0.2533; --hi: 0.5067"></span><span class="dot" style="--x: 0.38"></span></div>
-          </div>
-          <div class="dot-row">
-            <div class="dot-head"><span>With smoothing (predfoot)</span><b>93.1&nbsp;%</b></div>
-            <div class="dot-track"><span class="range is-zone" style="--lo: 0.4467; --hi: 0.6333"></span><span class="dot is-zone" style="--x: 0.54"></span></div>
-          </div>
-          <div class="dot-axis" aria-hidden="true"><span style="--x: 0">85&nbsp;%</span><span class="is-target" style="--x: 0.3333">90&nbsp;% target</span><span style="--x: 0.6667">95&nbsp;%</span><span style="--x: 1">100&nbsp;%</span></div>
-          <p class="dot-key">Dot: the result. Bar: its likely range.</p>
-        </div>
-        <div class="size">
-          <svg viewBox="0 0 92 60" aria-hidden="true" focusable="false"><circle class="circle" cx="46" cy="30" r="26"/><ellipse class="zone" cx="46" cy="30" rx="33" ry="14.95" transform="rotate(-24 46 30)"/></svg>
-          <div>
-            <p>The zones are still 27&nbsp;% smaller than a one-size-fits-all circle making the same promise.</p>
-            <span class="verdict is-met"><svg viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M2 6.5l2.6 2.6L10 3.4"/></svg>Target met</span>
-          </div>
-        </div>
-        <p class="source">Source: <a href="https://github.com/zkyasin/predfoot/blob/main/reports/test_run.md" target="_blank" rel="noopener">test report</a>, with the likely ranges and each match's result.</p>
-      </article>
-
-      <article class="metric" aria-labelledby="m-alarm">
-        <div class="metric-head"><h3 class="kicker" id="m-alarm">Bad-camera alarm</h3></div>
-        <p class="figure">55<span class="unit"> %</span></p>
-        <p class="claim">of the frames with a wrong camera estimate are caught when the alarm sets aside the 10&nbsp;% of frames it finds most suspicious. Tested on the frame-by-frame estimates, where 1 frame in 10 is wrong.</p>
-        <div class="bars">
-          <div class="bar-group">
-            <p class="bar-title">Wrong frames caught, with 10&nbsp;% of frames set aside <span class="dir">(higher is better)</span></p>
-            <div class="bar-row">
-              <span class="bar-label">Best single warning signal</span>
-              <span class="bar-line"><span class="bar" style="--v: 0.341"></span><span class="bar-value">34&nbsp;%</span></span>
-            </div>
-            <div class="bar-row">
-              <span class="bar-label">predfoot's alarm</span>
-              <span class="bar-line"><span class="bar is-zone" style="--v: 0.551"></span><span class="bar-value">55&nbsp;%</span></span>
-            </div>
-          </div>
-        </div>
-        <div class="judged">
-          <p>It ranks the wrong frames better than the best single signal, the target set before the test (ranking score 0.91 against 0.80).</p>
-          <span class="verdict is-met"><svg viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M2 6.5l2.6 2.6L10 3.4"/></svg>Target met</span>
-        </div>
-        <p class="source">A frame counts as wrong when its recovered pitch lines sit more than 10&nbsp;pixels from the labelled ones, on average. Source: <a href="https://github.com/zkyasin/predfoot/blob/main/reports/test_run.md" target="_blank" rel="noopener">test report</a>.</p>
-      </article>
-    </div>
-  </section>
-
-  <section class="trust" aria-labelledby="trust">
-    <div class="wrap">
-      <div class="trust-head">
-        <h2 class="trust-line" id="trust">Tested once, on matches never used during development.</h2>
-        <p class="links"><a href="https://github.com/zkyasin/predfoot/blob/main/docs/preregistration.md" target="_blank" rel="noopener">Preregistration</a><a href="https://github.com/zkyasin/predfoot/blob/main/reports/test_run.md" target="_blank" rel="noopener">Test report</a></p>
-      </div>
-      <ol>
-        <li><span><b>Protocol frozen before the test</b>, success criteria included, and locked with checksums in the repository's history.</span></li>
-        <li><span><b>Test run once</b> on the three unseen matches, with every model fixed in advance.</span></li>
-        <li><span><b>Every result published</b>, including the missed target.</span></li>
-      </ol>
-    </div>
-  </section>
-
-  <section class="wrap sec" aria-labelledby="smoothing">
-    <h2 id="smoothing">Smoothing the camera</h2>
-    <div class="prose">
-      <p>A TV camera turns around an almost fixed point, so its view changes smoothly. Worked out frame by frame, the camera estimate jitters, and every position jitters with it. predfoot smooths it over time.</p>
-    </div>
-    <figure class="col-2">
+    <figure class="fix-figure" data-reveal="1">
       <p class="duo-bar" aria-hidden="true"><span><i class="k-plain"></i>Without smoothing</span><span><i class="k-zone"></i>With smoothing (predfoot)</span><span><i class="k-true"></i>True position</span></p>
       <video class="clip-duo" id="smoothing-video" data-toggle="smoothing-toggle" data-name="the smoothing clip" autoplay muted loop playsinline preload="auto" poster="assets/smoothing.jpg" aria-label="Two pitch diagrams of the same clip: without smoothing, the grey error zones jump and swell; with smoothing, the pink zones stay small and steady">
         <source src="assets/smoothing.mp4" type="video/mp4" media="(min-width: 601px)">
         <source src="assets/smoothing-tall.mp4" type="video/mp4">
       </video>
       <div class="media-foot">
-        <figcaption>A clip from a SoccerNet match used during development, drawn on pitch diagrams since SoccerNet images cannot be shown for licence reasons, and picked to show the effect, so not a typical one. Without smoothing (grey), the error zones jump and swell whenever the camera estimate wobbles; with smoothing (pink), they stay small and steady, apart from one moment when both estimates lose the pitch. On the test matches, smoothing cut the frames whose camera misses the pitch lines by more than 10&nbsp;pixels from 9.7&nbsp;% to 2.4&nbsp;%.</figcaption>
+        <figcaption class="fig-note">A clip from a SoccerNet match used during development, drawn on pitch diagrams because SoccerNet images cannot be shown, and picked because it shows the effect clearly. Without smoothing, the zones jump and swell whenever the camera estimate shakes. With smoothing they stay small and steady, except for one moment when both estimates lose the pitch. On the test matches, smoothing cut the share of frames whose camera misses the pitch lines by more than 10&nbsp;pixels from 9.7&nbsp;% to 2.4&nbsp;%.</figcaption>
         <button class="toggle" id="smoothing-toggle" type="button" hidden>Pause</button>
       </div>
     </figure>
   </section>
 
-  <section class="wrap sec" aria-labelledby="how">
-    <h2 id="how">How it works</h2>
-    <ol class="steps">
-      <li>
+  <section class="results" id="results" aria-labelledby="results-title">
+    <div class="wrap results-head">
+      <h2 id="results-title" data-reveal>Four results from one test</h2>
+      <p class="lead" data-reveal="1">49 clips from three SoccerNet matches, kept out of development and checked against the dataset's labels. Each result compares predfoot with the same pipeline minus the smoothing step: same network, same camera solver, each frame worked out on its own.</p>
+    </div>
+
+    <div class="wrap chapters">
+      <article class="chapter" id="accuracy" aria-labelledby="accuracy-title">
+        <div class="chapter-text">
+          <p class="kicker">Accuracy</p>
+          <h3 class="chapter-title" id="accuracy-title">9 players in 10 placed within 1.2&nbsp;m</h3>
+          <div class="steps">
+            <p class="step" data-state="off">Worked out frame by frame, the camera places 9 players in 10 within <b>1.8&nbsp;m</b> of their labelled position, and a few land several metres away.</p>
+            <p class="step is-current" data-state="on">With smoothing, 9 in 10 land within <b>1.2&nbsp;m</b> and half within <b>0.4&nbsp;m</b>. Far misses become rare.</p>
+          </div>
+        </div>
+        <figure class="chapter-figure">
+          <div class="fig-head">
+            <div class="seg" role="group" aria-label="Compare the two cameras" data-state="on"><button type="button" data-set="off" aria-pressed="false">Without smoothing</button><button type="button" data-set="on" aria-pressed="true">With smoothing</button></div>
+          </div>
+          <div class="viz" data-viz="accuracy" role="img" aria-label="Dot chart of position errors. 100 dots, each standing for 1 % of the test's player positions, sit at their distance from the labelled position in the centre. Without smoothing, 9 in 10 are within 1.82 m and half within 0.51 m; with smoothing, 9 in 10 within 1.16 m and half within 0.40 m."></div>
+          <figcaption class="fig-note">Each dot stands for 1&nbsp;% of the 89,700 player positions, at its measured distance from the labelled position in the centre. Only the distance counts; the directions are spread out so the dots do not overlap. <span data-acc-out>2</span> dots lie beyond 3&nbsp;m and sit on the outer edge. Source: <a href="https://github.com/zkyasin/predfoot/blob/main/reports/test_run.md" target="_blank" rel="noopener">test report</a>.</figcaption>
+        </figure>
+      </article>
+
+      <article class="chapter" id="distance" aria-labelledby="distance-title">
+        <div class="chapter-text">
+          <p class="kicker">Physical stats</p>
+          <h3 class="chapter-title" id="distance-title">Camera wobble adds 3&nbsp;% to distance covered, down from 26&nbsp;%</h3>
+          <div class="steps">
+            <p class="step" data-state="off">Each jump of the camera estimate moves the player a little, and the zig-zags add distance that was never run. Without smoothing they add <b>26.1&nbsp;%</b> to distance covered and <b>72.4&nbsp;%</b> to high-speed running, where quick zig-zags pass for sprints.</p>
+            <p class="step is-current" data-state="on">With smoothing, wobble adds <b>3.4&nbsp;%</b> to distance covered and <b>5.5&nbsp;%</b> to high-speed running.</p>
+          </div>
+        </div>
+        <figure class="chapter-figure">
+          <div class="fig-head">
+            <div class="seg" role="group" aria-label="Compare the two cameras" data-state="on"><button type="button" data-set="off" aria-pressed="false">Without smoothing</button><button type="button" data-set="on" aria-pressed="true">With smoothing</button></div>
+          </div>
+          <div class="viz" data-viz="distance" role="img" aria-label="Illustration of a 100 m run on a pitch diagram. The true path is a dotted curve; the measured path zig-zags around it and comes out at 126 m without smoothing and 103 m with smoothing."></div>
+          <div class="odo"><div><span>Real run</span><b>100 m</b></div><div class="is-meas"><span>Measured</span><b data-odo>103 m</b></div></div>
+          <div class="viz" data-viz="dumbbell" role="img" aria-label="Measured extra distance from camera wobble. Distance covered: 26.1 % without smoothing, 3.4 % with smoothing. High-speed running: 72.4 % without, 5.5 % with."></div>
+          <figcaption class="fig-note">Top: an illustration whose zig-zag is drawn to add exactly the measured share of distance. Bottom: the measured figures, taken 5 times a second against the dataset's smoothed tracks, which carry some noise of their own. Source: <a href="https://github.com/zkyasin/predfoot/blob/main/reports/test_run.md" target="_blank" rel="noopener">test report</a>.</figcaption>
+        </figure>
+      </article>
+
+      <article class="chapter" id="zones" aria-labelledby="zones-title">
+        <div class="chapter-text">
+          <p class="kicker">Error zones</p>
+          <h3 class="chapter-title" id="zones-title">The zones held 93&nbsp;% of true positions, for a promised 90&nbsp;%</h3>
+          <div class="steps">
+            <p class="step" data-state="off">Every position comes with a zone that should contain the true position 9 times in 10. Without smoothing, the zones held <b>90.7&nbsp;%</b>, right on target.</p>
+            <p class="step is-current" data-state="on">With smoothing they held <b>93.1&nbsp;%</b>. Allowing for chance, the true rate likely lies between 91.7&nbsp;% and 94.5&nbsp;%, which leaves out 90&nbsp;%, so the target set before the test was missed. The zones are slightly larger than they need to be.</p>
+          </div>
+        </div>
+        <figure class="chapter-figure">
+          <div class="fig-head">
+            <div class="seg" role="group" aria-label="Compare the two cameras" data-state="on"><button type="button" data-set="off" aria-pressed="false">Without smoothing</button><button type="button" data-set="on" aria-pressed="true">With smoothing</button></div>
+            <span class="verdict is-missed"><svg viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7"/></svg>Target missed</span>
+          </div>
+          <div class="viz" data-viz="zones" role="img" aria-label="100 squares, each a player position with its error zone. With smoothing, 93 true positions fall inside their zone and 7 outside; without smoothing, 91 inside. A dashed line marks the promise of 90 inside."></div>
+          <p class="readout"><b data-zones-in>93</b> of 100 positions inside their zone, for 90 promised.</p>
+          <div class="size-row">
+            <div class="viz" data-viz="size" data-static role="img" aria-label="A fixed circle of 7.0 square metres and predfoot's median zone of 5.2 square metres, drawn to the same scale."></div>
+            <div class="size-text">
+              <p>Still 27&nbsp;% smaller than a fixed circle making the same promise (median 5.2&nbsp;m² against 7.0&nbsp;m²).</p>
+              <p class="size-key"><span><i class="is-circle"></i>Fixed circle</span><span><i></i>predfoot zone</span></p>
+              <span class="verdict is-met"><svg viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M2 6.5l2.6 2.6L10 3.4"/></svg>Target met</span>
+            </div>
+          </div>
+          <figcaption class="fig-note">Each square is one player position; the counts are the measured shares rounded to 100. The zone and the circle are drawn to scale. Source: <a href="https://github.com/zkyasin/predfoot/blob/main/reports/test_run.md" target="_blank" rel="noopener">test report</a>.</figcaption>
+        </figure>
+      </article>
+
+      <article class="chapter" id="alarm" aria-labelledby="alarm-title">
+        <div class="chapter-text">
+          <p class="kicker">Bad-camera alarm</p>
+          <h3 class="chapter-title" id="alarm-title">The alarm flags 55&nbsp;% of wrong camera estimates</h3>
+          <div class="steps">
+            <p class="step" data-state="off">About 1 frame in 10 gets a wrong camera estimate. If the best single warning sign sets aside the 10&nbsp;% of frames it trusts least, it catches <b>34&nbsp;%</b> of the wrong ones.</p>
+            <p class="step is-current" data-state="on">predfoot's alarm combines several warning signs. Setting aside the same number of frames, it catches <b>55&nbsp;%</b>.</p>
+          </div>
+        </div>
+        <figure class="chapter-figure">
+          <div class="fig-head">
+            <div class="seg" role="group" aria-label="Compare the two warnings" data-state="on"><button type="button" data-set="off" aria-pressed="false">Best single sign</button><button type="button" data-set="on" aria-pressed="true">predfoot's alarm</button></div>
+          </div>
+          <div class="viz" data-viz="alarm" role="img" aria-label="200 frames, 20 of them wrong. The 20 frames set aside by predfoot's alarm include 11 wrong ones; those set aside by the best single warning sign include 7."></div>
+          <p class="readout">Catches <b data-alarm-caught>11</b> of the 20 wrong frames.</p>
+          <div class="judged">
+            <span class="verdict is-met"><svg viewBox="0 0 12 12" aria-hidden="true" focusable="false"><path d="M2 6.5l2.6 2.6L10 3.4"/></svg>Target met</span>
+            <p>Beating the best single sign was the target set before the test (ranking score 0.91 against 0.80).</p>
+          </div>
+          <figcaption class="fig-note">Each square is one frame, in the test's proportions: 3,839 frames, 10&nbsp;% of them wrong. Tested on the frame-by-frame estimates. A frame counts as wrong when its pitch lines sit more than 10&nbsp;pixels from the labelled ones on average. Source: <a href="https://github.com/zkyasin/predfoot/blob/main/reports/test_run.md" target="_blank" rel="noopener">test report</a>.</figcaption>
+        </figure>
+      </article>
+    </div>
+  </section>
+
+  <section class="trust" aria-labelledby="trust-title">
+    <div class="wrap">
+      <div class="trust-head">
+        <h2 class="trust-line" id="trust-title" data-reveal>Tested once, on matches never used during development.</h2>
+        <p class="links"><a href="https://github.com/zkyasin/predfoot/blob/main/docs/preregistration.md" target="_blank" rel="noopener">Preregistration</a><a href="https://github.com/zkyasin/predfoot/blob/main/reports/test_run.md" target="_blank" rel="noopener">Test report</a></p>
+      </div>
+      <ol>
+        <li data-reveal="1"><span><b>Protocol frozen first.</b> The method and its pass or fail criteria were locked with checksums in the repository's history before the test.</span></li>
+        <li data-reveal="2"><span><b>One run.</b> The test ran once on the three held-out matches, with every setting fixed in advance.</span></li>
+        <li data-reveal="3"><span><b>Everything published.</b> All results are public, including the missed target.</span></li>
+      </ol>
+    </div>
+  </section>
+
+  <section class="wrap sec" id="method" aria-labelledby="method-title">
+    <div class="method-head">
+      <h2 id="method-title" data-reveal>From picture to pitch in four steps</h2>
+    </div>
+    <ol class="method-steps">
+      <li data-reveal="1">
         <svg viewBox="0 0 56 56" aria-hidden="true" focusable="false">
           <rect x="4" y="8" width="48" height="34" rx="3"/><path d="M22 49h12M28 42v7"/>
           <path class="quiet" d="M17 15h22l7 22H10z M28 15v22"/><ellipse class="quiet" cx="28" cy="25.5" rx="6.5" ry="3.6"/>
           <circle class="accent-fill" cx="17" cy="15" r="2.4"/><circle class="accent-fill" cx="39" cy="15" r="2.4"/><circle class="accent-fill" cx="28" cy="15" r="2.4"/><circle class="accent-fill" cx="28" cy="37" r="2.4"/><circle class="accent-fill" cx="10" cy="37" r="2.4"/><circle class="accent-fill" cx="46" cy="37" r="2.4"/>
         </svg>
         <h3><span>1</span> Find the pitch markings</h3>
-        <p>An existing public neural network (PnLCalib), used as it is, spots the lines of the pitch, and the points where they cross, in each frame.</p>
+        <p>A public neural network, PnLCalib, used as published, finds the pitch lines and the points where they cross.</p>
       </li>
-      <li>
+      <li data-reveal="2">
         <svg viewBox="0 0 56 56" aria-hidden="true" focusable="false">
           <path class="quiet" d="M29 9h19l6 17H23z M38.5 9v17"/>
           <path class="accent" d="M22 37L23 26M22 37L54 26"/>
           <rect x="5" y="33" width="14" height="10" rx="2"/><circle cx="22" cy="38" r="3"/><path d="M12 43l-4 9M12 43l4 9"/>
         </svg>
         <h3><span>2</span> Recover the camera</h3>
-        <p>The pitch is a known 105&nbsp;×&nbsp;68&nbsp;m shape, so those markings reveal where the camera is and where it points. This is called calibration; predfoot also measures how sure it can be of it.</p>
+        <p>The pitch is a known 105&nbsp;×&nbsp;68&nbsp;m shape, so the markings give away where the camera is and where it points. This is calibration; predfoot also estimates how uncertain it is.</p>
       </li>
-      <li>
+      <li data-reveal="3">
         <svg viewBox="0 0 56 56" aria-hidden="true" focusable="false">
           <path class="quiet" d="M4 36l5-14 5 16 5-20 5 16 5-13 5 16 5-17 5 13 5-9 3 5"/>
           <path class="accent" stroke-width="2.8" d="M4 30c9-4 15 1 24-1s15-3 24-1"/>
         </svg>
         <h3><span>3</span> Smooth over time</h3>
-        <p>A TV camera pans, tilts and zooms around an almost fixed point. predfoot uses this to smooth the camera across the clip and to catch frames that do not fit.</p>
+        <p>A broadcast camera pans, tilts and zooms from a fixed spot. predfoot uses that to smooth the camera across the clip and to catch frames that do not fit.</p>
       </li>
-      <li>
+      <li data-reveal="4">
         <svg viewBox="0 0 56 56" aria-hidden="true" focusable="false">
           <rect x="4" y="12" width="48" height="31"/><path d="M28 12v31"/><circle cx="28" cy="27.5" r="4.2"/>
           <ellipse class="accent" cx="40" cy="23" rx="6" ry="2.8" transform="rotate(-62 40 23)"/><circle class="accent-fill" cx="40" cy="23" r="1.6"/>
         </svg>
-        <h3><span>4</span> Place each player, with an error zone</h3>
-        <p>Each player's feet, taken from the dataset's boxes, are projected onto the pitch with a zone built to hold the true spot 9 times in 10, tuned on past matches so it keeps that promise. An alarm flags frames whose camera estimate looks wrong.</p>
+        <h3><span>4</span> Place each player</h3>
+        <p>Each player's feet, taken from the dataset's boxes, are projected onto the pitch. The zone around them is tuned on past matches to contain the true position 9 times in 10, and an alarm flags frames whose camera looks wrong.</p>
       </li>
     </ol>
   </section>
 
-  <section class="wrap sec" aria-labelledby="limits">
-    <h2 id="limits">Limits</h2>
-    <ul class="limits">
-      <li>Tested on three matches from one league and one broadcast style.</li>
-      <li>Players come from boxes drawn by the dataset's annotators: detecting and tracking them is not part of the project.</li>
-      <li>The error zones were a bit cautious on the test matches: they held the true spot 93 times in 100 rather than 90.</li>
-      <li>The physical stats were measured against the dataset's own smoothed tracks, which are not exact either: they show what camera wobble adds, not absolute accuracy.</li>
-      <li>The alarm and the physical-stat measurements run in the test scripts, not yet in the tool itself.</li>
+  <section class="wrap sec limits-grid" id="limits" aria-labelledby="limits-title">
+    <h2 id="limits-title" data-reveal>Limits</h2>
+    <ul class="limits" data-reveal="1">
+      <li>Tested on three matches from one league, filmed in one broadcast style.</li>
+      <li>The players' boxes come from the dataset's annotators. Detecting and tracking players is outside the project.</li>
+      <li>The error zones were slightly too large on the test matches: 93 positions in 100 fell inside them instead of 90.</li>
+      <li>The physical stats were checked against the dataset's smoothed tracks, which carry some noise of their own.</li>
+      <li>The alarm and the physical-stat checks run in the test scripts, not yet in the tool itself.</li>
     </ul>
+  </section>
+
+  <section class="wrap sec" id="study" aria-labelledby="study-title">
+    <div class="study-head">
+      <h2 id="study-title" data-reveal>The study in one page</h2>
+      <p class="lead" data-reveal="1">The data, the method, the assumptions and the numbers behind this page, written up as a short technical note.</p>
+    </div>
+    <article class="paper" data-reveal="1" aria-labelledby="paper-title">
+      <p class="paper-running"><span>predfoot · technical note</span><span>November 2026</span></p>
+      <h3 class="paper-title" id="paper-title">Error zones for player positions in broadcast football: a preregistered test</h3>
+      <p class="paper-byline">Ya-Sin, independent portfolio project</p>
+      <ul class="paper-facts">
+        <li><b>Data</b> SoccerNet SN-GSR</li>
+        <li><b>Test</b> 3 held-out matches, 49 clips</li>
+        <li><b>Protocol</b> frozen on 1 Nov 2026, run once</li>
+        <li><b>Code</b> Apache-2.0</li>
+      </ul>
+
+      <div class="paper-abstract">
+        <h4>Abstract</h4>
+        <p>Player positions computed from broadcast video depend on an estimate of the camera, and an error in that estimate moves every player at once. predfoot calibrates the camera in each frame from the pitch markings, smooths it over time with a pan-tilt-zoom model, carries the calibration uncertainty through to each player's position, and turns it into a 90&nbsp;% error zone calibrated by conformal prediction. A classifier flags frames whose camera is probably wrong. In one preregistered test on three held-out SoccerNet matches (49 clips), smoothing cut the 90th-percentile position error from 1.82&nbsp;m to 1.16&nbsp;m and the inflation of distance covered from 26.1&nbsp;% to 3.4&nbsp;%. The zones held 93.1&nbsp;% of true positions against a 90&nbsp;% target, a miss on the cautious side, while being 27&nbsp;% smaller than a fixed circle with the same promise. The classifier beat the best single warning signal (AUROC 0.91 against 0.80).</p>
+      </div>
+
+      <div class="paper-cols">
+        <section>
+          <h4><span>1</span>Data</h4>
+          <p>SoccerNet Game State Reconstruction (SN-GSR) [1] provides 30-second broadcast clips at 25 frames per second with annotated player boxes, pitch positions and pitch lines. Development used games 2, 3, 4, 5, 6 and 9 (115 clips). The test used games 7, 8 and 11 (49 clips), set aside before development and opened once. Every fifth frame is evaluated.</p>
+          <p>Each player's foot point is the bottom centre of the annotated box, so the test measures the camera and the error zones, not detection. The primary reference is the annotated pitch position; a secondary one is a homography fitted to each frame's annotated lines. The footage at the top of this page comes from SoccerTrack v2 [2] and is used for no measurement.</p>
+        </section>
+        <section>
+          <h4><span>2</span>Method</h4>
+          <ul>
+            <li><b>Pitch markings.</b> PnLCalib [3], with its published weights and no retraining, detects pitch keypoints and lines.</li>
+            <li><b>Calibration.</b> A robust fit (MSAC RANSAC, then soft-L1 Levenberg–Marquardt) estimates the camera in each frame; a Laplace approximation gives the covariance of its parameters.</li>
+            <li><b>Smoothing.</b> The camera is modelled as pan, tilt and zoom around a fixed centre. A Kalman filter with a Rauch–Tung–Striebel smoother [4] runs over each clip, with noise parameters fitted on the development games without labels.</li>
+            <li><b>Positions.</b> Each foot point is projected onto the pitch, and the delta method turns the camera covariance into a 2&nbsp;×&nbsp;2 position covariance Σ.</li>
+            <li><b>Error zones.</b> Split conformal prediction [5] calibrates the score e<sup>T</sup>Σ<sup>−1</sup>e at α&nbsp;=&nbsp;0.10 on the development games, with every clip weighted equally and separate quantiles for bins of image scale and inlier count. Each zone is the resulting ellipse around the estimate.</li>
+            <li><b>Alarm.</b> Gradient boosting on 11 calibration-health features predicts failures: frames whose recovered pitch lines lie more than 10&nbsp;px from the annotated ones on average.</li>
+          </ul>
+        </section>
+        <section>
+          <h4><span>3</span>Protocol</h4>
+          <p>The data split, method, endpoints and analysis code were frozen on 1 November 2026 and locked with SHA-256 checksums in the repository; the test then ran once. The unit of analysis is the clip, and 95&nbsp;% intervals come from a percentile bootstrap over the 49 test clips (2,000 draws). Three criteria were fixed in advance (Table 1): the coverage interval of the 90&nbsp;% zones contains 90&nbsp;% (P1); their median area is below that of a fixed circle calibrated to the same level (P2); the alarm's AUROC beats that of the best single feature chosen on development data (P3).</p>
+        </section>
+        <section>
+          <h4><span>4</span>Assumptions</h4>
+          <ul>
+            <li>The pitch is flat, with standard markings (105&nbsp;×&nbsp;68&nbsp;m).</li>
+            <li>A broadcast camera turns and zooms about a fixed point and moves smoothly.</li>
+            <li>Test matches resemble development matches closely enough for the conformal guarantee to carry over (exchangeability).</li>
+            <li>The annotations serve as truth, though they carry their own noise: the annotators' camera sits about 4&nbsp;px from the annotated lines.</li>
+            <li>Player boxes are given, so detection errors are left out.</li>
+          </ul>
+        </section>
+      </div>
+
+      <div class="paper-tables">
+        <figure>
+          <figcaption><b>Table 1.</b> Success criteria fixed before the test, and their outcome. 95&nbsp;% intervals from the bootstrap over the 49 clips.</figcaption>
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th></th><th>Endpoint</th><th class="num">Result [95&nbsp;% CI]</th><th>Criterion</th><th>Outcome</th></tr></thead>
+              <tbody>
+                <tr><td>P1</td><td>Coverage of the 90&nbsp;% zones, smoothed camera (89,886 player positions)</td><td class="num">93.1&nbsp;% [91.7, 94.5]</td><td>interval contains 90&nbsp;%</td><td class="is-missed">Not met</td></tr>
+                <tr><td>P2</td><td>Median zone area relative to a fixed circle</td><td class="num">0.73 [0.70, 0.77]</td><td>below 1</td><td class="is-met">Met</td></tr>
+                <tr><td>P3</td><td>AUROC of the alarm minus that of the best single feature</td><td class="num">+0.114 [+0.084, +0.150]</td><td>above 0</td><td class="is-met">Met</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </figure>
+        <figure>
+          <figcaption><b>Table 2.</b> The same pipeline without and with smoothing. Position errors on the same 89,700 player positions; physical stats at 5 frames per second against the dataset's smoothed tracks.</figcaption>
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th>Measure</th><th class="num">Without smoothing</th><th class="num">With smoothing</th></tr></thead>
+              <tbody>
+                <tr><td>Position error, median and 90th percentile</td><td class="num">0.51 and 1.82&nbsp;m</td><td class="num">0.40 and 1.16&nbsp;m</td></tr>
+                <tr><td>Frames more than 10&nbsp;px from the pitch lines</td><td class="num">9.7&nbsp;%</td><td class="num">2.4&nbsp;%</td></tr>
+                <tr><td>Extra distance covered</td><td class="num">+26.1&nbsp;%</td><td class="num">+3.4&nbsp;%</td></tr>
+                <tr><td>Extra high-speed running (20&nbsp;km/h or faster)</td><td class="num">+72.4&nbsp;%</td><td class="num">+5.5&nbsp;%</td></tr>
+                <tr><td>Coverage of the 90&nbsp;% zones</td><td class="num">90.7&nbsp;%</td><td class="num">93.1&nbsp;%</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </figure>
+      </div>
+
+      <div class="paper-cols">
+        <section>
+          <h4><span>5</span>Results</h4>
+          <p>The zones erred on the large side. Coverage differed by match, 89.8&nbsp;%, 93.2&nbsp;% and 96.0&nbsp;% on games 7, 8 and 11, inside the range of 84.0 to 95.6&nbsp;% seen between development games. Without smoothing, the same pipeline's zones covered 90.7&nbsp;% [88.8, 92.6]. Smoothing cut the position errors, the camera failures and the extra distance (Table 2). Against the smoothed tracks used for the physical stats, the raw annotations themselves show +17.0&nbsp;% distance and +40.3&nbsp;% high-speed running, so those rows measure what jitter adds, not absolute accuracy.</p>
+        </section>
+        <section>
+          <h4><span>6</span>Limitations</h4>
+          <p>Three test matches from one league and one broadcast style; the bootstrap describes these matches, not a new one. Both references carry their own errors. The alarm was scored on frame-by-frame calibrations, where failures are about four times as frequent as after smoothing. Detecting and tracking players is outside the scope.</p>
+        </section>
+      </div>
+
+      <div class="paper-refs">
+        <h4>References</h4>
+        <ol>
+          <li>V. Somers et al. SoccerNet Game State Reconstruction: end-to-end athlete tracking and identification on a minimap. CVPR Workshops, 2024.</li>
+          <li>A. Scott et al. SoccerTrack v2. arXiv:2508.01802, 2025.</li>
+          <li>M. Gutiérrez-Pérez and A. Agudo. PnLCalib. github.com/mguti97/PnLCalib, 2024.</li>
+          <li>H. E. Rauch, F. Tung and C. T. Striebel. Maximum likelihood estimates of linear dynamic systems. AIAA Journal, 1965.</li>
+          <li>V. Vovk, A. Gammerman and G. Shafer. Algorithmic Learning in a Random World. Springer, 2005.</li>
+        </ol>
+        <p>Preregistration, checksums, test report and code: <a href="https://github.com/zkyasin/predfoot" target="_blank" rel="noopener">github.com/zkyasin/predfoot</a> (<a href="https://github.com/zkyasin/predfoot/blob/main/docs/preregistration.md" target="_blank" rel="noopener">preregistration</a>, <a href="https://github.com/zkyasin/predfoot/blob/main/reports/test_run.md" target="_blank" rel="noopener">test report</a>).</p>
+      </div>
+    </article>
   </section>
 </main>
 
@@ -614,55 +752,405 @@ footer .wrap { display: grid; gap: 22px; padding-block: clamp(32px, 5vw, 52px); 
       <li><a href="https://github.com/zkyasin/predfoot/blob/main/docs/preregistration.md" target="_blank" rel="noopener"><b>Preregistration</b><span>The protocol, frozen before the test</span></a></li>
     </ul>
     <div class="credits">
-      <p>Footage: <a href="https://huggingface.co/datasets/atomscott/soccertrack-v2" target="_blank" rel="noopener">SoccerTrack v2</a>, Scott et al., <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>, reprojected to a virtual camera, cropped, downscaled and overlaid. Test matches: SoccerNet <span class="nowrap">SN-GSR</span> (Somers et al.), shown only as numbers and pitch diagrams. Pitch-marking network: PnLCalib weights by <span class="nowrap">Gutiérrez-Pérez</span> and Agudo, CC BY 4.0. Code: <span class="nowrap">Apache-2.0</span>. <a href="https://github.com/zkyasin/predfoot/blob/main/ATTRIBUTION.md" target="_blank" rel="noopener">All credits</a>.</p>
+      <p>Footage: <a href="https://huggingface.co/datasets/atomscott/soccertrack-v2" target="_blank" rel="noopener">SoccerTrack v2</a>, Scott et al., <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>, reprojected to a virtual camera, cropped, downscaled and overlaid. Test matches: SoccerNet <span class="nowrap">SN-GSR</span> (Somers et al.), shown only as numbers and pitch diagrams. Pitch-marking network: PnLCalib weights by <span class="nowrap">Gutiérrez-Pérez</span> and Agudo, CC BY 4.0. Code: <span class="nowrap">Apache-2.0</span>. Page built with D3, Motion and Lenis (<a href="assets/vendor/LICENSES.txt" target="_blank" rel="noopener">licences</a>). <a href="https://github.com/zkyasin/predfoot/blob/main/ATTRIBUTION.md" target="_blank" rel="noopener">All credits</a>.</p>
       <p>Built by Ya-Sin, a data-science master's student, as a portfolio project (<a href="https://github.com/zkyasin" target="_blank" rel="noopener">github.com/zkyasin</a>).</p>
       <p class="independent">Independent project, not affiliated with SkillCorner.</p>
     </div>
   </div>
 </footer>
 
+<script type="application/json" id="data-errors">{"perframe":[0.03,0.05,0.06,0.08,0.09,0.1,0.11,0.12,0.13,0.14,0.14,0.15,0.16,0.17,0.18,0.19,0.2,0.2,0.21,0.22,0.23,0.24,0.25,0.26,0.27,0.27,0.28,0.29,0.3,0.31,0.32,0.32,0.33,0.34,0.35,0.36,0.37,0.38,0.39,0.4,0.41,0.42,0.43,0.44,0.45,0.46,0.47,0.49,0.5,0.51,0.52,0.53,0.55,0.56,0.57,0.58,0.6,0.61,0.63,0.64,0.66,0.68,0.69,0.71,0.72,0.74,0.76,0.78,0.8,0.82,0.84,0.87,0.89,0.92,0.95,0.98,1.01,1.04,1.07,1.11,1.15,1.19,1.24,1.29,1.35,1.42,1.49,1.57,1.66,1.76,1.88,2.02,2.2,2.43,2.72,3.13,3.66,4.38,5.69,9.48],"ptz":[0.02,0.04,0.05,0.06,0.07,0.08,0.09,0.09,0.1,0.11,0.11,0.12,0.13,0.13,0.14,0.15,0.15,0.16,0.17,0.17,0.18,0.18,0.19,0.2,0.2,0.21,0.22,0.23,0.23,0.24,0.25,0.25,0.26,0.27,0.27,0.28,0.29,0.3,0.3,0.31,0.32,0.33,0.34,0.34,0.35,0.36,0.37,0.38,0.39,0.39,0.4,0.41,0.42,0.43,0.44,0.45,0.46,0.47,0.48,0.49,0.5,0.51,0.52,0.53,0.54,0.56,0.57,0.58,0.59,0.61,0.62,0.64,0.65,0.67,0.69,0.7,0.72,0.74,0.76,0.79,0.81,0.84,0.86,0.89,0.92,0.96,0.99,1.03,1.08,1.13,1.19,1.26,1.33,1.43,1.54,1.7,1.93,2.27,3.08,6.46]}</script>
+<script src="assets/vendor/d3.min.js"></script>
+<script src="assets/vendor/motion.js"></script>
+<script src="assets/vendor/lenis.min.js"></script>
 <script>
-  // Clips play muted and in a loop while on screen. With reduced motion they wait for the Play button.
-  (function () {
-    // A phone plays the stacked smoothing clip (its <source> media); give it the matching poster.
-    Array.prototype.forEach.call(document.querySelectorAll("link[data-poster-for]"), function (link) {
-      var target = document.getElementById(link.dataset.posterFor);
-      if (target && window.matchMedia(link.media).matches) target.poster = link.getAttribute("href");
-    });
-    var reduce = window.matchMedia("(prefers-reduced-motion: reduce)");
-    var clips = Array.prototype.slice.call(document.querySelectorAll("video[data-toggle]"));
-    function wantsMotion(v) { return !reduce.matches || v.dataset.asked === "yes"; }
-    function sync(v) {
-      var button = document.getElementById(v.dataset.toggle);
-      if (!button) return;
-      button.textContent = v.paused ? "Play" : "Pause";
-      button.setAttribute("aria-label", (v.paused ? "Play " : "Pause ") + v.dataset.name);
+  // Position-error percentiles above: scripts/showcase_percentiles.py on the frozen test run (metres, 0.5 to 99.5).
+  (() => {
+    "use strict";
+    const reduceMq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const reduced = () => reduceMq.matches;
+    const M = window.Motion;
+    const d3 = window.d3;
+    const $ = (s, el = document) => el.querySelector(s);
+    const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
+    const rng = (seed) => { let s = seed >>> 0 || 1; return () => (s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296; };
+    const ERR = JSON.parse($("#data-errors").textContent);
+    // How sections come in: distance in px, duration in s, delay step, easing.
+    const FEEL = { y: 18, dur: 0.75, stagger: 0.07, ease: [0.16, 1, 0.3, 1] };
+    const charts = new Map();
+    const initial = reduced() ? "on" : "off";
+    let lenis = null;
+
+    /* Figures */
+    function svgIn(el, w, h) {
+      return d3.select(el).append("svg").attr("viewBox", `0 0 ${w} ${h}`).attr("width", w).attr("height", h).attr("aria-hidden", "true").attr("focusable", "false");
     }
-    function start(v) { var p = v.play(); if (p && p.catch) p.catch(function () { sync(v); }); }
-    clips.forEach(function (v) {
-      var button = document.getElementById(v.dataset.toggle);
-      v.muted = true;
-      if (reduce.matches) { v.autoplay = false; v.removeAttribute("autoplay"); v.pause(); }
-      v.addEventListener("play", function () { if (!wantsMotion(v)) v.pause(); sync(v); });
-      v.addEventListener("pause", function () { sync(v); });
-      if (button) {
-        button.hidden = false;
-        button.addEventListener("click", function () {
-          if (v.paused) { v.dataset.asked = "yes"; v.dataset.held = ""; start(v); }
-          else { v.dataset.held = "yes"; v.pause(); }
-        });
+    function chalkPitch(g, sx, sy, k) {
+      g.append("rect").attr("x", sx(-52.5)).attr("y", sy(-34)).attr("width", 105 * k).attr("height", 68 * k);
+      g.append("line").attr("x1", sx(0)).attr("x2", sx(0)).attr("y1", sy(-34)).attr("y2", sy(34));
+      g.append("circle").attr("cx", sx(0)).attr("cy", sy(0)).attr("r", 9.15 * k);
+      for (const [x0, w0] of [[-52.5, 16.5], [36, 16.5]]) g.append("rect").attr("x", sx(x0)).attr("y", sy(-20.16)).attr("width", w0 * k).attr("height", 40.32 * k);
+      for (const [x0, w0] of [[-52.5, 5.5], [47, 5.5]]) g.append("rect").attr("x", sx(x0)).attr("y", sy(-9.16)).attr("width", w0 * k).attr("height", 18.32 * k);
+    }
+
+    // Problem: estimated positions follow the camera estimate as it shakes.
+    function buildShake(el, w) {
+      const W = Math.min(w, 600), H = Math.round(W * 0.66), pad = 14;
+      const k = (W - 2 * pad) / 105;
+      const sx = (x) => W / 2 + x * k, sy = (y) => H / 2 + y * k;
+      const svg = svgIn(el, W, H);
+      svg.append("rect").attr("class", "v-map").attr("width", W).attr("height", H).attr("rx", 12);
+      chalkPitch(svg.append("g").attr("class", "v-chalk"), sx, sy, k);
+      const P = [[-38, 4], [-27, -15], [-21, 13], [-9, -3], [-2, 21], [6, -19], [14, 6], [23, -9], [31, 17], [40, -2]].map(([x, y]) => [sx(x), sy(y)]);
+      svg.append("g").selectAll("circle").data(P).join("circle").attr("class", "v-true-ring").attr("cx", (d) => d[0]).attr("cy", (d) => d[1]).attr("r", Math.max(5, k * 1.2));
+      const links = svg.append("g").selectAll("line").data(P).join("line").attr("class", "v-link").attr("x1", (d) => d[0]).attr("y1", (d) => d[1]);
+      const dots = svg.append("g").selectAll("circle").data(P).join("circle").attr("class", "v-est").attr("r", Math.max(3.5, k * 0.8));
+      const cx = W / 2, cy = H * 0.9, amp = Math.max(1, W / 440);
+      function place(dx, dy, rot) {
+        const c = Math.cos(rot), s = Math.sin(rot);
+        const q = P.map(([x, y]) => [cx + (x - cx) * c - (y - cy) * s + dx, cy + (x - cx) * s + (y - cy) * c + dy]);
+        dots.attr("cx", (_, i) => q[i][0]).attr("cy", (_, i) => q[i][1]);
+        links.attr("x2", (_, i) => q[i][0]).attr("y2", (_, i) => q[i][1]);
       }
-      sync(v);
-    });
-    if ("IntersectionObserver" in window) {
-      var watcher = new IntersectionObserver(function (entries) {
-        entries.forEach(function (entry) {
-          var v = entry.target;
-          if (!entry.isIntersecting) { if (!v.paused) v.pause(); }
-          else if (v.paused && v.dataset.held !== "yes" && wantsMotion(v)) start(v);
-        });
-      }, { threshold: 0.2 });
-      clips.forEach(function (v) { watcher.observe(v); });
+      let raf = 0, running = false, nextJump = 0, jx = 0, jy = 0, jr = 0;
+      function tick(t) {
+        const s = t / 1000;
+        if (t > nextJump) {
+          nextJump = t + 1100 + Math.random() * 1500;
+          jx = (Math.random() * 2 - 1) * 10 * amp; jy = (Math.random() * 2 - 1) * 6 * amp; jr = (Math.random() * 2 - 1) * 0.02;
+        }
+        jx *= 0.92; jy *= 0.92; jr *= 0.92;
+        place((2.4 * Math.sin(s * 5.3) + 1.5 * Math.sin(s * 8.9 + 1.7)) * amp + jx, (1.6 * Math.sin(s * 4.1 + 0.6) + 1.1 * Math.sin(s * 9.7)) * amp + jy, 0.005 * Math.sin(s * 3.3) + jr);
+        if (running) raf = window.requestAnimationFrame(tick);
+      }
+      const io = new IntersectionObserver(([e]) => {
+        const go = e.isIntersecting && !reduced();
+        if (go && !running) { running = true; raf = window.requestAnimationFrame(tick); }
+        else if (!go && running) { running = false; window.cancelAnimationFrame(raf); }
+      });
+      io.observe(el);
+      place(8 * amp, -5 * amp, 0.012);
+      return { state: "on", set() {}, destroy() { io.disconnect(); running = false; window.cancelAnimationFrame(raf); } };
     }
+
+    // Accuracy: a quantile dot plot, one dot per percent of the player positions.
+    function buildAccuracy(el, w) {
+      const S = Math.min(w, 540), cx = S / 2, cy = S / 2, R = S / 2 - 30, RM = 3;
+      const x = d3.scaleLinear([0, RM], [0, R]);
+      const GA = Math.PI * (3 - Math.sqrt(5));
+      const Q = { off: { p50: 0.51, p90: 1.82 }, on: { p50: 0.4, p90: 1.16 } };
+      const pick = (s) => ERR[s === "on" ? "ptz" : "perframe"];
+      const where = (s, i) => { const v = pick(s)[i], r = v > RM ? R + 12 : x(v); return [cx + r * Math.cos(i * GA), cy + r * Math.sin(i * GA)]; };
+      const svg = svgIn(el, S, S);
+      const grid = svg.append("g").attr("class", "v-grid");
+      grid.append("line").attr("class", "is-dash").attr("x1", cx - R - 16).attr("x2", cx + R + 16).attr("y1", cy).attr("y2", cy);
+      grid.append("line").attr("class", "is-dash").attr("x1", cx).attr("x2", cx).attr("y1", cy - R - 16).attr("y2", cy + R + 16);
+      for (const m of [1, 2, 3]) grid.append("circle").attr("cx", cx).attr("cy", cy).attr("r", x(m));
+      const dots = svg.append("g").selectAll("circle").data(d3.range(100)).join("circle").attr("class", "v-dot").attr("r", Math.max(3, Math.min(4.6, S / 118)));
+      for (const m of [1, 2, 3]) svg.append("text").attr("class", "v-tick v-halo").attr("x", cx + x(m) + 4).attr("y", cy - 5).text(`${m} m`);
+      const ring50 = svg.append("circle").attr("class", "v-ring is-50").attr("cx", cx).attr("cy", cy);
+      const ring90 = svg.append("circle").attr("class", "v-ring is-90").attr("cx", cx).attr("cy", cy);
+      svg.append("circle").attr("class", "v-truth").attr("cx", cx).attr("cy", cy).attr("r", 5.5);
+      const lab90 = svg.append("text").attr("class", "v-label").attr("x", cx).attr("text-anchor", "middle");
+      const lab50 = svg.append("text").attr("class", "v-label is-small").attr("x", cx).attr("text-anchor", "middle");
+      const out = $("[data-acc-out]", el.closest(".chapter"));
+      let state = null;
+      function set(s, instant) {
+        if (s === state) return;
+        state = s; el.dataset.state = s;
+        const dur = instant || reduced() ? 0 : 1100;
+        const t = svg.transition().duration(dur).ease(d3.easeCubicInOut);
+        dots.classed("is-out", (i) => pick(s)[i] > RM).transition(t).delay((i) => (dur ? i * 6 : 0)).attr("cx", (i) => where(s, i)[0]).attr("cy", (i) => where(s, i)[1]);
+        ring50.transition(t).attr("r", x(Q[s].p50));
+        ring90.transition(t).attr("r", x(Q[s].p90));
+        lab90.text(`9 in 10 within ${Q[s].p90.toFixed(2)} m`).transition(t).attr("y", cy - x(Q[s].p90) - 12);
+        lab50.text(`half within ${Q[s].p50.toFixed(2)} m`).transition(t).attr("y", cy + x(Q[s].p50) + 21);
+        if (out) out.textContent = String(pick(s).filter((v) => v > RM).length);
+      }
+      return { set, get state() { return state; } };
+    }
+
+    // Physical stats: a run whose measured zig-zag adds exactly the measured share of distance.
+    function buildDistance(el, w) {
+      const W = Math.min(w, 640), H = Math.round(Math.max(170, Math.min(250, W * 0.37)));
+      const N = Math.round(Math.max(40, Math.min(72, W / 8.5)));
+      const svg = svgIn(el, W, H);
+      svg.append("rect").attr("class", "v-map").attr("width", W).attr("height", H).attr("rx", 12);
+      const chalk = svg.append("g").attr("class", "v-chalk");
+      chalk.append("line").attr("x1", W * 0.6).attr("x2", W * 0.6).attr("y1", 0).attr("y2", H);
+      chalk.append("circle").attr("cx", W * 0.6).attr("cy", H * 0.5).attr("r", H * 0.3);
+      const C = [[0.05, 0.74], [0.21, 0.46], [0.38, 0.64], [0.55, 0.3], [0.73, 0.5], [0.94, 0.27]].map(([a, b]) => [a * W, b * H]);
+      const truth = svg.append("path").attr("class", "v-true").attr("d", d3.line().curve(d3.curveCatmullRom.alpha(0.5))(C));
+      const node = truth.node(), L = node.getTotalLength();
+      const P = d3.range(N + 1).map((i) => { const p = node.getPointAtLength((L * i) / N); return [p.x, p.y]; });
+      const nrm = P.map((_, i) => { const a = P[Math.max(0, i - 1)], b = P[Math.min(N, i + 1)], dx = b[0] - a[0], dy = b[1] - a[1], h = Math.hypot(dx, dy) || 1; return [-dy / h, dx / h]; });
+      const r = rng(7);
+      const nz = P.map((_, i) => (i === 0 || i === N ? 0 : r() * 2 - 1));
+      const meas = (A) => P.map(([px, py], i) => [px + A * nz[i] * nrm[i][0], py + A * nz[i] * nrm[i][1]]);
+      const plen = (q) => { let s = 0; for (let i = 1; i < q.length; i++) s += Math.hypot(q[i][0] - q[i - 1][0], q[i][1] - q[i - 1][1]); return s; };
+      const L0 = plen(P);
+      const ampFor = (ratio) => { let lo = 0, hi = 80; for (let i = 0; i < 40; i++) { const mid = (lo + hi) / 2; if (plen(meas(mid)) / L0 < ratio) lo = mid; else hi = mid; } return (lo + hi) / 2; };
+      const AMP = { off: ampFor(1.261), on: ampFor(1.034) };
+      const path = svg.append("path").attr("class", "v-meas");
+      svg.append("circle").attr("class", "v-end").attr("cx", P[0][0]).attr("cy", P[0][1]).attr("r", 4.5);
+      svg.append("circle").attr("class", "v-end").attr("cx", P[N][0]).attr("cy", P[N][1]).attr("r", 4.5);
+      const line = d3.line();
+      const odo = $("[data-odo]", el.closest(".chapter"));
+      let A = AMP.on, state = null;
+      function draw(a) { const q = meas(a); path.attr("d", line(q)); if (odo) odo.textContent = `${Math.round((100 * plen(q)) / L0)} m`; }
+      function set(s, instant) {
+        if (s === state) return;
+        state = s; el.dataset.state = s;
+        const from = A, to = AMP[s];
+        if (instant || reduced()) { A = to; draw(A); return; }
+        svg.transition().duration(1000).ease(d3.easeCubicInOut).tween("amp", () => (t) => { A = from + (to - from) * t; draw(A); });
+      }
+      return { set, get state() { return state; } };
+    }
+
+    // Physical stats, measured: one row per stat, the pink dot slides from without to with smoothing.
+    function buildDumbbell(el, w) {
+      const W = Math.min(w, 640), rowH = 66, top = 4, H = top + rowH * 2 + 20;
+      const x = d3.scaleLinear([0, 80], [8, W - 66]);
+      const rows = [{ key: "Distance covered", off: 26.1, on: 3.4 }, { key: "High-speed running", off: 72.4, on: 5.5 }];
+      const svg = svgIn(el, W, H);
+      const axis = svg.append("g").attr("class", "v-grid");
+      for (const v of [0, 20, 40, 60, 80]) {
+        axis.append("line").attr("class", "is-dash").attr("x1", x(v)).attr("x2", x(v)).attr("y1", top + 22).attr("y2", H - 18);
+        svg.append("text").attr("class", "v-tick").attr("x", x(v)).attr("y", H - 3).attr("text-anchor", v ? "middle" : "start").text(`${v} %`);
+      }
+      const g = svg.selectAll("g.row").data(rows).join("g").attr("class", "row").attr("transform", (_, i) => `translate(0, ${top + i * rowH})`);
+      g.append("text").attr("class", "v-db-key").attr("x", 8).attr("y", 13).text((d) => d.key);
+      g.append("line").attr("class", "v-db-track").attr("x1", x(0)).attr("x2", x(80)).attr("y1", 34).attr("y2", 34);
+      const link = g.append("line").attr("class", "v-db-link").attr("y1", 34).attr("y2", 34).attr("x2", (d) => x(d.off));
+      g.append("circle").attr("class", "v-db-base").attr("cy", 34).attr("r", 7).attr("cx", (d) => x(d.off));
+      g.append("text").attr("class", "v-db-val").attr("y", 38).attr("x", (d) => x(d.off) + 13).text((d) => `${d.off} %`);
+      const dot = g.append("circle").attr("class", "v-db-dot").attr("cy", 34).attr("r", 7);
+      const val = g.append("text").attr("class", "v-db-val is-accent").attr("y", 57).attr("text-anchor", "middle").text((d) => `${d.on} %`);
+      let state = null;
+      function set(s, instant) {
+        if (s === state) return;
+        state = s; el.dataset.state = s;
+        const t = svg.transition().duration(instant || reduced() ? 0 : 1000).ease(d3.easeCubicInOut);
+        const at = (d) => x(s === "on" ? d.on : d.off);
+        dot.transition(t).attr("cx", at);
+        link.transition(t).attr("x1", at);
+        val.transition(t).attr("x", (d) => Math.max(18, at(d))).style("opacity", s === "on" ? 1 : 0);
+      }
+      return { set, get state() { return state; } };
+    }
+
+    // Error zones: 100 positions, each with its zone; the dashed line is the promise of 90 inside.
+    function buildZones(el, w) {
+      const W = Math.min(w, 500), gap = W < 420 ? 4 : 6, cell = Math.floor((W - 9 * gap) / 10), side = cell * 10 + gap * 9;
+      const COUNT = { off: 91, on: 93 };
+      const r = rng(23);
+      const cells = d3.range(100).map((i) => {
+        const cx = (i % 10) * (cell + gap) + cell / 2, cy = Math.floor(i / 10) * (cell + gap) + cell / 2;
+        const rx = cell * (0.27 + r() * 0.05), ry = cell * (0.14 + r() * 0.05), rot = r() * 140 - 70;
+        const a = (rot * Math.PI) / 180, ca = Math.cos(a), sa = Math.sin(a);
+        const u = (r() * 2 - 1) * 0.5 * rx, v = (r() * 2 - 1) * 0.5 * ry;
+        const phi = r() * Math.PI * 2, ex = Math.cos(phi) * rx * 1.35, ey = Math.sin(phi) * ry * 1.8;
+        return { i, cx, cy, rx, ry, rot, inside: [cx + u * ca - v * sa, cy + u * sa + v * ca], outside: [cx + ex * ca - ey * sa, cy + ex * sa + ey * ca] };
+      });
+      const svg = svgIn(el, side, side);
+      svg.append("g").selectAll("rect").data(cells).join("rect").attr("class", "v-cell").attr("x", (d) => d.cx - cell / 2).attr("y", (d) => d.cy - cell / 2).attr("width", cell).attr("height", cell).attr("rx", Math.min(6, cell * 0.14));
+      svg.append("g").selectAll("ellipse").data(cells).join("ellipse").attr("class", "v-zone").attr("rx", (d) => d.rx).attr("ry", (d) => d.ry).attr("transform", (d) => `translate(${d.cx} ${d.cy}) rotate(${d.rot})`);
+      const pos = svg.append("g").selectAll("circle").data(cells).join("circle").attr("class", "v-pos").attr("r", Math.max(2.2, cell * 0.075));
+      const ly = 9 * (cell + gap) - gap / 2, label = "promise: 90 inside";
+      svg.append("line").attr("class", "v-promise").attr("x1", -6).attr("x2", side + 6).attr("y1", ly).attr("y2", ly);
+      const tag = svg.append("g").attr("class", "v-tag").attr("transform", `translate(0 ${ly})`);
+      tag.append("rect").attr("x", 0).attr("y", -10).attr("width", label.length * 6.8 + 18).attr("height", 20).attr("rx", 10);
+      tag.append("text").attr("x", 9).attr("y", 4).text(label);
+      const readIn = $("[data-zones-in]", el.closest(".chapter"));
+      let state = null;
+      function set(s, instant) {
+        if (s === state) return;
+        state = s; el.dataset.state = s;
+        const dur = instant || reduced() ? 0 : 700, n = COUNT[s];
+        pos.classed("is-miss", (d) => d.i >= n).transition().duration(dur).ease(d3.easeBackOut.overshoot(1.4)).delay((d) => (dur && d.i >= 88 ? (d.i - 88) * 70 : 0))
+          .attr("cx", (d) => (d.i < n ? d.inside : d.outside)[0]).attr("cy", (d) => (d.i < n ? d.inside : d.outside)[1]);
+        if (readIn) readIn.textContent = String(n);
+      }
+      return { set, get state() { return state; } };
+    }
+
+    // Error zones, size: a fixed circle of 7.03 m² turns into the median zone of 5.17 m², to scale.
+    function buildSize(el, w) {
+      const W = Math.min(w, 260), H = 150, pxm = 38, cx = W / 2, cy = H / 2;
+      const rc = Math.sqrt(7.03 / Math.PI) * pxm, a = Math.sqrt(5.17 / (Math.PI * 0.5)) * pxm, b = a / 2;
+      const svg = svgIn(el, W, H);
+      svg.append("circle").attr("class", "v-circle").attr("cx", cx).attr("cy", cy).attr("r", rc);
+      const e = svg.append("ellipse").attr("class", "v-ellipse").attr("cx", cx).attr("cy", cy).attr("transform", `rotate(-22 ${cx} ${cy})`);
+      let io = null;
+      if (reduced()) e.attr("rx", a).attr("ry", b);
+      else {
+        e.attr("rx", rc).attr("ry", rc);
+        io = new IntersectionObserver(([en]) => {
+          if (!en.isIntersecting) return;
+          io.disconnect();
+          e.transition().delay(300).duration(1200).ease(d3.easeCubicInOut).attr("rx", a).attr("ry", b);
+        }, { threshold: 0.6 });
+        io.observe(el);
+      }
+      return { state: "on", set() {}, destroy() { if (io) io.disconnect(); } };
+    }
+
+    // Alarm: 200 frames, 20 wrong; the warning sets aside 20 frames and the wrong ones it catches show.
+    function buildAlarm(el, w) {
+      const W = Math.min(w, 600), cols = W < 440 ? 20 : 25, rows = 200 / cols, gap = 3;
+      const cw = Math.floor((W - (cols - 1) * gap) / cols), ch = Math.max(8, Math.round(cw * 0.68));
+      const trayY = 22, gridY = trayY + ch + 44, H = gridY + rows * (ch + gap) - gap;
+      const order = d3.shuffler(rng(41))(d3.range(200));
+      const wrong = order.slice(0, 20), fine = order.slice(20);
+      const FLAG = { on: [...wrong.slice(0, 11), ...fine.slice(0, 9)], off: [...wrong.slice(0, 7), ...fine.slice(0, 13)] };
+      const isWrong = new Set(wrong);
+      const home = (i) => [(i % cols) * (cw + gap), gridY + Math.floor(i / cols) * (ch + gap)];
+      const slot = (k) => [k * (cw + gap), trayY];
+      const svg = svgIn(el, W, H);
+      svg.append("text").attr("class", "v-note").attr("x", 0).attr("y", trayY - 9).text("Set aside: 20 frames (10 %)");
+      svg.append("rect").attr("class", "v-tray").attr("x", -5).attr("y", trayY - 5).attr("width", 20 * (cw + gap) - gap + 10).attr("height", ch + 10).attr("rx", 5);
+      svg.append("text").attr("class", "v-note").attr("x", 0).attr("y", gridY - 11).text("All 200 frames (amber: wrong camera estimate)");
+      svg.append("g").selectAll("rect").data(d3.range(200)).join("rect").attr("class", "v-ghost").attr("x", (i) => home(i)[0]).attr("y", (i) => home(i)[1]).attr("width", cw).attr("height", ch).attr("rx", 2);
+      const frames = svg.append("g").selectAll("rect").data(d3.range(200)).join("rect").attr("class", (i) => `v-frame${isWrong.has(i) ? " is-wrong" : ""}`).attr("width", cw).attr("height", ch).attr("rx", 2);
+      const caught = $("[data-alarm-caught]", el.closest(".chapter"));
+      let state = null;
+      function set(s, instant) {
+        if (s === state) return;
+        state = s; el.dataset.state = s;
+        const dur = instant || reduced() ? 0 : 900;
+        const at = new Map(FLAG[s].map((i, k) => [i, k]));
+        frames.transition().duration(dur).ease(d3.easeCubicInOut).delay((i) => (dur && at.has(i) ? at.get(i) * 28 : 0))
+          .attr("x", (i) => (at.has(i) ? slot(at.get(i)) : home(i))[0]).attr("y", (i) => (at.has(i) ? slot(at.get(i)) : home(i))[1]);
+        if (caught) caught.textContent = String(s === "on" ? 11 : 7);
+      }
+      return { set, get state() { return state; } };
+    }
+
+    const BUILD = { shake: buildShake, accuracy: buildAccuracy, distance: buildDistance, dumbbell: buildDumbbell, zones: buildZones, size: buildSize, alarm: buildAlarm };
+    function mount(el) {
+      if (!d3) return;
+      const w = Math.round(el.clientWidth);
+      const prev = charts.get(el);
+      if (!w || (prev && Math.abs(prev.w - w) < 4)) return;
+      const state = prev ? prev.api.state : initial;
+      if (prev && prev.api.destroy) prev.api.destroy();
+      el.replaceChildren();
+      const api = BUILD[el.dataset.viz](el, w);
+      charts.set(el, { api, w });
+      api.set(state, true);
+    }
+
+    /* Chapters: the switch, the text and the figures share one state */
+    function setChapter(ch, state, instant) {
+      ch.dataset.state = state;
+      $$("[data-viz]", ch).forEach((el) => { const c = charts.get(el); if (c && !el.hasAttribute("data-static")) c.api.set(state, instant); });
+      const seg = $(".seg", ch);
+      if (seg) {
+        seg.dataset.state = state;
+        $$("button", seg).forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.set === state)));
+      }
+      $$(".step", ch).forEach((p) => p.classList.toggle("is-current", p.dataset.state === state));
+    }
+    function autoplay() {
+      $$(".chapter").forEach((ch) => {
+        const io = new IntersectionObserver(([e]) => {
+          if (!e.isIntersecting) return;
+          io.disconnect();
+          if (reduced()) return;
+          window.setTimeout(() => { if (!ch.dataset.touched) setChapter(ch, "on"); }, 650);
+        }, { threshold: 0.45 });
+        io.observe($(".chapter-figure", ch));
+      });
+    }
+
+    /* Motion: smooth scrolling, sections coming in, counters */
+    function smoothScroll() {
+      if (!window.Lenis || reduced()) return;
+      lenis = new window.Lenis({ lerp: 0.12, smoothWheel: true });
+      const raf = (t) => { lenis.raf(t); window.requestAnimationFrame(raf); };
+      window.requestAnimationFrame(raf);
+    }
+    function reveals() {
+      if (!M || reduced()) return;
+      M.inView("[data-reveal]", (el) => {
+        M.animate(el, { opacity: [0, 1], y: [FEEL.y, 0] }, { duration: FEEL.dur, ease: FEEL.ease, delay: (Number(el.dataset.reveal) || 0) * FEEL.stagger });
+      }, { margin: "0px 0px -8% 0px" });
+    }
+    function counters() {
+      if (!M || reduced()) return;
+      $$("[data-count]").forEach((b, k) => {
+        const node = b.firstChild, to = Number(b.dataset.count), dec = Number(b.dataset.dec || 0);
+        M.animate(0, to, { duration: 1.2, delay: 0.2 + k * 0.08, ease: [0.16, 1, 0.3, 1], onUpdate: (v) => { node.nodeValue = v.toFixed(dec); } });
+      });
+    }
+    function chrome() {
+      const topbar = $(".topbar");
+      new IntersectionObserver(([e]) => topbar.classList.toggle("is-shown", !e.isIntersecting), { rootMargin: "-72px 0px 0px 0px" }).observe($(".band"));
+      const bar = $(".progress");
+      if (M && M.scroll) M.scroll((p) => { bar.style.transform = `scaleX(${p})`; });
+      document.addEventListener("click", (ev) => {
+        const a = ev.target.closest('a[href^="#"]');
+        if (!a) return;
+        const target = document.getElementById(decodeURIComponent(a.getAttribute("href").slice(1)));
+        if (!target) return;
+        ev.preventDefault();
+        if (lenis) lenis.scrollTo(target, { offset: -64 });
+        else target.scrollIntoView({ behavior: reduced() ? "auto" : "smooth", block: "start" });
+      });
+    }
+
+    /* Clips play muted and in a loop while on screen; with reduced motion they wait for the Play button */
+    function clips() {
+      $$("link[data-poster-for]").forEach((link) => {
+        const target = document.getElementById(link.dataset.posterFor);
+        if (target && window.matchMedia(link.media).matches) target.poster = link.getAttribute("href");
+      });
+      const videos = $$("video[data-toggle]");
+      const wantsMotion = (v) => !reduced() || v.dataset.asked === "yes";
+      const sync = (v) => {
+        const button = document.getElementById(v.dataset.toggle);
+        if (!button) return;
+        button.textContent = v.paused ? "Play" : "Pause";
+        button.setAttribute("aria-label", `${v.paused ? "Play" : "Pause"} ${v.dataset.name}`);
+      };
+      const start = (v) => { const p = v.play(); if (p && p.catch) p.catch(() => sync(v)); };
+      videos.forEach((v) => {
+        const button = document.getElementById(v.dataset.toggle);
+        v.muted = true;
+        if (reduced()) { v.autoplay = false; v.removeAttribute("autoplay"); v.pause(); }
+        v.addEventListener("play", () => { if (!wantsMotion(v)) v.pause(); sync(v); });
+        v.addEventListener("pause", () => sync(v));
+        if (button) {
+          button.hidden = false;
+          button.addEventListener("click", () => {
+            if (v.paused) { v.dataset.asked = "yes"; v.dataset.held = ""; start(v); }
+            else { v.dataset.held = "yes"; v.pause(); }
+          });
+        }
+        sync(v);
+      });
+      const watcher = new IntersectionObserver((entries) => entries.forEach((entry) => {
+        const v = entry.target;
+        if (!entry.isIntersecting) { if (!v.paused) v.pause(); }
+        else if (v.paused && v.dataset.held !== "yes" && wantsMotion(v)) start(v);
+      }), { threshold: 0.2 });
+      videos.forEach((v) => watcher.observe(v));
+    }
+
+    /* Start */
+    $$("[data-viz]").forEach(mount);
+    $$(".chapter").forEach((ch) => {
+      setChapter(ch, initial, true);
+      $$(".seg button", ch).forEach((b) => b.addEventListener("click", () => { ch.dataset.touched = "yes"; setChapter(ch, b.dataset.set); }));
+    });
+    const resize = new ResizeObserver((entries) => entries.forEach((e) => mount(e.target)));
+    $$("[data-viz]").forEach((el) => resize.observe(el));
+    smoothScroll();
+    chrome();
+    reveals();
+    counters();
+    autoplay();
+    clips();
   })();
 </script>
