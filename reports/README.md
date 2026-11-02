@@ -14,6 +14,7 @@ Calibration and position uncertainty (SN-GSR dev):
   the KPI proxy, with the figures in `figures/`.
 - `minimap_demo.md`: how the clip and window of `assets/minimap_demo.gif` were chosen, and which frames it
   leaves unevaluated (no labels).
+- `showcase_visuals.md`: how the animations in `assets/showcase/` were made, and what they do not show.
 - `m3_health_dev.md`: failure detection from calibration-health features.
 
 Error process and KPI budget:

@@ -24,6 +24,17 @@ Usage:
     uv run python scripts/render_minimap_demo.py --none-run runs/<per-frame run> --ptz-run runs/<ptz run>
 writes assets/minimap_demo.gif (5 fps) and assets/minimap_demo.png (the frame of the window where the
 per-frame camera's median error is largest).
+
+``--style plain`` draws the same clip, window and frames for the README: panels titled "Frame by frame" and
+"Smoothed over time", a three-word legend, no counts, areas or subtitles, larger type. It writes
+assets/showcase/smoothing.gif and no report. ``--style page`` draws them for the showcase page, which labels
+the clip in its own text: the page's colours (grey for the per-frame camera, pink for the smoothed one) on the
+mown pitch of the hero's map (scripts/render_hero.py), white true positions and no words but the veils'. It
+writes two H.264 clips (needs ffmpeg), each with a JPEG poster of the same still: a wide one, the two pitches
+side by side (assets/showcase/smoothing.mp4, .jpg), and a tall one for phones, the two pitches stacked
+(smoothing-tall.mp4, .jpg). Both styles keep the honest states: greyed "no position"; hatched "not checked"
+for positions that nothing can check; hatched "camera lost" when such a frame's camera misses the annotated
+pitch lines by more than 10 px, the evaluation's failure threshold.
 """
 
 from __future__ import annotations
@@ -41,12 +52,14 @@ import polars as pl
 import typer
 from matplotlib.axes import Axes
 from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.colors import to_rgba
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.patches import Ellipse, Patch, Rectangle
 from PIL import Image
 
 from predfoot.io.files import atomic_write_bytes, atomic_write_text
+from predfoot.io.skillcorner import DEFAULT_PITCH_LENGTH_M, DEFAULT_PITCH_WIDTH_M
 from predfoot.viz.minimap import PITCH_LINE, SURFACE, TEXT, TEXT_SECONDARY, VEIL, draw_pitch, ellipse_axes
 
 
@@ -65,6 +78,7 @@ def load_script(name: str) -> ModuleType:
 
 
 eval_dev = load_script("eval_dev")
+render_demo = load_script("render_demo")
 
 app = typer.Typer(add_completion=False)
 CAMERAS = {"none": "Per-frame camera", "ptz": "PTZ-smoothed camera"}
@@ -80,6 +94,26 @@ DEFAULT_REPORT = Path("reports/minimap_demo.md")
 #: Panel states: positions with their regions and labels; no position published; positions published on a
 #: frame without usable labels (not evaluated).
 SHOWN, ABSTAINS, UNLABELLED = "shown", "abstains", "unlabelled"
+STYLES = ("report", "plain", "page")
+#: Words on the veils of the plain and page styles. A frame without usable labels whose camera misses the
+#: annotated pitch lines by more than LOST_LINE_PX (the evaluation's failure threshold) reads "camera lost".
+VEIL_WORDS = {ABSTAINS: "no position", UNLABELLED: "not checked"}
+LOST_WORD = "camera lost"
+LOST_LINE_PX = 10.0
+#: The plain style (--style plain, the README): titles and output.
+PLAIN_TITLES = {"none": "Frame by frame", "ptz": "Smoothed over time"}
+PLAIN_GIF = Path("assets/showcase/smoothing.gif")
+#: The page style (--style page, the showcase page): the page's grey and pink on the hero map's pitch, two
+#: layouts of fixed even pixel sizes (H.264), the per-frame camera first (left, or top).
+PAGE_COLOURS = {"none": "#9ea9a2", "ptz": "#ff9ccb"}
+PAGE_SURROUND = "#1b442e"  # scripts/render_hero.py: the map's surround and mown bands
+PAGE_STRIPES = ("#23593a", "#286040")
+PAGE_CHALK = "#f4f7f2"
+PAGE_INK = "#0f1d16"
+PAGE_SIZES = {"wide": (960, 374), "tall": (640, 992)}
+PAGE_MARGIN_PX, PAGE_GAP_PX = 8, 16
+PAGE_MP4 = Path("assets/showcase/smoothing.mp4")
+PAGE_POSTER = Path("assets/showcase/smoothing.jpg")
 
 
 @dataclass
@@ -199,19 +233,65 @@ def frame_stats(rows: pl.DataFrame) -> tuple[int, int, float]:
     return int(rows["hit_mond"].sum()), rows.height, float(np.median(area)) if rows.height else np.nan
 
 
+def veil_word(view: View) -> str:
+    """The plain word on a veiled panel: no position, not checked, or camera lost when the camera of a frame
+    whose positions cannot be checked misses the annotated lines by more than LOST_LINE_PX."""
+    if view.state == UNLABELLED and np.isfinite(view.line_px) and view.line_px > LOST_LINE_PX:
+        return LOST_WORD
+    return VEIL_WORDS[view.state]
+
+
+def tall_path(path: Path) -> Path:
+    """Where the tall variant of a page-style file goes: ``smoothing.mp4`` → ``smoothing-tall.mp4``."""
+    return path.with_name(f"{path.stem}-tall{path.suffix}")
+
+
+def draw_page_pitch(ax: Axes) -> None:
+    """The hero map's pitch: dark surround, 14 mown bands, white markings at 60 %."""
+    ax.set_facecolor(PAGE_SURROUND)
+    band = DEFAULT_PITCH_LENGTH_M / 14
+    for k in range(14):
+        x0 = -DEFAULT_PITCH_LENGTH_M / 2 + k * band
+        stripe = Rectangle((x0, -DEFAULT_PITCH_WIDTH_M / 2), band, DEFAULT_PITCH_WIDTH_M, edgecolor="none")
+        stripe.set(facecolor=PAGE_STRIPES[k % 2], zorder=0)
+        ax.add_patch(stripe)
+    draw_pitch(ax, colour="#ffffff", linewidth=1.2, alpha=0.6)
+
+
+def page_axes(fig: Figure, layout: str) -> list[Axes]:
+    """The two pitch panels of a page-style figure: side by side (wide) or stacked (tall)."""
+    width, height = PAGE_SIZES[layout]
+    m, g = PAGE_MARGIN_PX, PAGE_GAP_PX
+    if layout == "wide":
+        w, h = (width - 2 * m - g) / 2, height - 2 * m
+        corners = [(m, m), (m + w + g, m)]
+    else:
+        w, h = width - 2 * m, (height - 2 * m - g) / 2
+        corners = [(m, m + h + g), (m, m)]
+    return [fig.add_axes((x / width, y / height, w / width, h / height)) for x, y in corners]
+
+
 def git_sha() -> str:
     return subprocess.run(
         ["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True
     ).stdout.strip()
 
 
-def draw_panel(ax: Axes, cam: str, view: View, window: tuple[float, ...]) -> None:
+def draw_panel(ax: Axes, cam: str, view: View, window: tuple[float, ...], style: str = "report") -> None:
     """One camera at one frame: pitch, calibrated 90 % regions, predictions, labels; a grey veil if it
-    abstains, a hatched one if its positions cannot be checked."""
-    ax.set_facecolor(SURFACE)
-    draw_pitch(ax)
-    colour = COLOURS[cam]
+    abstains, a hatched one if its positions cannot be checked. ``plain``: larger marks, a plain title and
+    plain words on the veils, no status line. ``page``: the same in the page's colours on a mown pitch, with
+    no title (the page labels the panels)."""
+    page = style == "page"
+    if page:
+        draw_page_pitch(ax)
+        colour = PAGE_COLOURS[cam]
+    else:
+        ax.set_facecolor(SURFACE)
+        draw_pitch(ax)
+        colour = COLOURS[cam]
     rows = view.rows
+    dot, label_dot = {"report": (3.6, 1.8), "plain": (6.0, 3.2), "page": (6.5, 4.2)}[style]
     if view.state == SHOWN:
         for r in rows.iter_rows(named=True):
             cov = np.array([[r["c00"], r["c01"]], [r["c01"], r["c11"]]])
@@ -224,23 +304,24 @@ def draw_panel(ax: Axes, cam: str, view: View, window: tuple[float, ...]) -> Non
                     height,
                     angle=angle,
                     facecolor=colour,
-                    alpha=0.16,
+                    alpha=0.24 if page else 0.16,
                     edgecolor="none",
                     zorder=2,
                 )
             )
-            ax.add_patch(
-                Ellipse(centre, width, height, angle=angle, fill=False, edgecolor=colour, lw=0.7, zorder=2)
+            rim = Ellipse(centre, width, height, angle=angle, fill=False, edgecolor=colour, lw=0.7, zorder=2)
+            if page:
+                rim.set(linewidth=1.1, alpha=0.95)
+            ax.add_patch(rim)
+        truth_x, truth_y = rows["x_pred"] - rows["ex_lab"], rows["y_pred"] - rows["ey_lab"]
+        if page:
+            ax.plot(
+                rows["x_pred"], rows["y_pred"], "o", ms=dot, color=colour, mec=PAGE_INK, mew=0.8, zorder=3
             )
-        ax.plot(rows["x_pred"], rows["y_pred"], "o", ms=3.6, color=colour, mec=SURFACE, mew=0.6, zorder=3)
-        ax.plot(
-            rows["x_pred"] - rows["ex_lab"],
-            rows["y_pred"] - rows["ey_lab"],
-            "o",
-            ms=1.8,
-            color=TEXT,
-            zorder=4,
-        )
+            ax.plot(truth_x, truth_y, "o", ms=label_dot, color=PAGE_CHALK, mec=PAGE_INK, mew=0.7, zorder=4)
+        else:
+            ax.plot(rows["x_pred"], rows["y_pred"], "o", ms=dot, color=colour, mec=SURFACE, mew=0.6, zorder=3)
+            ax.plot(truth_x, truth_y, "o", ms=label_dot, color=TEXT, zorder=4)
     ax.set_xlim(window[0], window[1])
     ax.set_ylim(window[2], window[3])
     ax.set_aspect("equal")
@@ -248,6 +329,13 @@ def draw_panel(ax: Axes, cam: str, view: View, window: tuple[float, ...]) -> Non
     ax.set_yticks([])
     for spine in ax.spines.values():
         spine.set_edgecolor(VEIL)
+        spine.set_visible(not page)
+    if style != "report":
+        if view.state != SHOWN:
+            draw_veil(ax, view.state, veil_word(view), fontsize=22 if page else 20, page=page)
+        if not page:
+            ax.set_title(PLAIN_TITLES[cam], loc="left", fontsize=23, color=TEXT, fontweight="bold", pad=7)
+        return
     if view.state == SHOWN:
         inside, n, area = frame_stats(rows)
         status = f"{inside} / {n} labels inside their region · median area {area:.1f} m²"
@@ -256,27 +344,49 @@ def draw_panel(ax: Axes, cam: str, view: View, window: tuple[float, ...]) -> Non
     else:
         if view.state == ABSTAINS:
             status, word = "abstains: no calibrated camera", "abstains"
-            veil = Rectangle((0, 0), 1, 1, facecolor=VEIL, alpha=0.85, edgecolor="none")
         else:
             status, word = "published, no labels to check", "not evaluated"
             if np.isfinite(view.line_px):
                 status += f" · line reprojection {view.line_px:.0f} px"
-            veil = Rectangle((0, 0), 1, 1, facecolor=SURFACE, alpha=0.8, hatch="////", edgecolor=PITCH_LINE)
+        draw_veil(ax, view.state, word)
+    ax.set_title(f"{CAMERAS[cam]}\n{status}", loc="left", fontsize=8.5, color=TEXT, linespacing=1.4)
+
+
+def draw_veil(ax: Axes, state: str, word: str, fontsize: float = 11, page: bool = False) -> None:
+    """Grey veil (no position published) or hatched veil (positions published, nothing to check them
+    against) over a panel, with ``word`` in its middle; ``page``: dark veils and light words."""
+    if page:
+        if state == ABSTAINS:
+            veil = Rectangle((0, 0), 1, 1, facecolor=PAGE_INK, alpha=0.62, edgecolor="none")
+        else:
+            veil = Rectangle(
+                (0, 0), 1, 1, facecolor=to_rgba(PAGE_SURROUND, 0.85), edgecolor="none", hatch="////"
+            )
+            veil.set(hatchcolor=to_rgba(PAGE_CHALK, 0.3))
         veil.set(transform=ax.transAxes, zorder=5)
         ax.add_patch(veil)
-        ax.text(
-            0.5,
-            0.5,
-            word,
-            transform=ax.transAxes,
-            ha="center",
-            va="center",
-            fontsize=11,
-            color=TEXT_SECONDARY,
-            zorder=6,
-            bbox={"facecolor": SURFACE, "edgecolor": "none", "pad": 2.0} if view.state != ABSTAINS else None,
-        )
-    ax.set_title(f"{CAMERAS[cam]}\n{status}", loc="left", fontsize=8.5, color=TEXT, linespacing=1.4)
+        box = {"facecolor": PAGE_SURROUND, "edgecolor": "none", "pad": 4.0} if state != ABSTAINS else None
+        ax.text(0.5, 0.5, word, transform=ax.transAxes, ha="center", va="center", fontsize=fontsize,
+                color=PAGE_CHALK, zorder=6, bbox=box)  # fmt: skip
+        return
+    if state == ABSTAINS:
+        veil = Rectangle((0, 0), 1, 1, facecolor=VEIL, alpha=0.85, edgecolor="none")
+    else:
+        veil = Rectangle((0, 0), 1, 1, facecolor=SURFACE, alpha=0.8, hatch="////", edgecolor=PITCH_LINE)
+    veil.set(transform=ax.transAxes, zorder=5)
+    ax.add_patch(veil)
+    ax.text(
+        0.5,
+        0.5,
+        word,
+        transform=ax.transAxes,
+        ha="center",
+        va="center",
+        fontsize=fontsize,
+        color=TEXT_SECONDARY,
+        zorder=6,
+        bbox={"facecolor": SURFACE, "edgecolor": "none", "pad": 2.0} if state != ABSTAINS else None,
+    )
 
 
 def render_frame(
@@ -286,11 +396,35 @@ def render_frame(
     game: int,
     frame: int,
     window: tuple[float, ...],
+    style: str = "report",
+    layout: str = "wide",
 ) -> Image.Image:
     fig.clear()
+    if style == "page":
+        for ax, (cam, run) in zip(page_axes(fig, layout), runs.items(), strict=True):
+            draw_panel(ax, cam, frame_view(run, clip, frame), window, style=style)
+        return _image(fig)
     axes = fig.subplots(1, 2)
     for ax, (cam, run) in zip(axes, runs.items(), strict=True):
-        draw_panel(ax, cam, frame_view(run, clip, frame), window)
+        draw_panel(ax, cam, frame_view(run, clip, frame), window, style=style)
+    if style == "plain":
+        handles = [
+            Line2D(
+                [],
+                [],
+                marker="o",
+                ls="none",
+                ms=9,
+                color=TEXT_SECONDARY,
+                mec=SURFACE,
+                label="estimated position",
+            ),
+            Patch(facecolor=TEXT_SECONDARY, alpha=0.16, edgecolor=TEXT_SECONDARY, label="90 % zone"),
+            Line2D([], [], marker="o", ls="none", ms=4.5, color=TEXT, label="true position"),
+        ]
+        fig.legend(handles=handles, loc="outside lower center", ncols=3, frameon=False, fontsize=18,
+                   handletextpad=0.3, columnspacing=1.2)  # fmt: skip
+        return _image(fig)
     t = (frame - 1) / NATIVE_FPS
     fig.suptitle(
         f"SN-GSR dev clip {clip} (game {game}, quantiles fitted on the five other games) · t = {t:4.1f} s",
@@ -305,6 +439,10 @@ def render_frame(
         Patch(facecolor=SURFACE, edgecolor=PITCH_LINE, hatch="////", label="not evaluated (no labels)"),
     ]
     fig.legend(handles=handles, loc="outside lower center", ncols=5, frameon=False, fontsize=7.5)
+    return _image(fig)
+
+
+def _image(fig: Figure) -> Image.Image:
     canvas = fig.canvas
     assert isinstance(canvas, FigureCanvasAgg)
     canvas.draw()
@@ -326,6 +464,19 @@ def save_gif(images: list[Image.Image], path: Path, fps: float, colours: int = 6
     atomic_write_bytes(path, buffer.getvalue())
 
 
+def write_clip(
+    images: list[Image.Image], still: Image.Image, mp4: Path, poster: Path, ffmpeg: str | None
+) -> None:
+    """A page-style clip, H.264 at 5 fps (one cached frame in five, in real time), and its JPEG poster."""
+    frames = [np.asarray(im)[..., ::-1] for im in images]  # RGB → BGR
+    render_demo.write_mp4(frames, mp4, NATIVE_FPS / STEP_FRAMES, crf=24, tune="animation", ffmpeg=ffmpeg)
+    buffer = io.BytesIO()
+    still.save(buffer, format="JPEG", quality=88, optimize=True)
+    atomic_write_bytes(poster, buffer.getvalue())
+    for path in (mp4, poster):
+        typer.echo(f"{path} ({path.stat().st_size / 1e3:.0f} kB)")
+
+
 SELECTION = (
     ("speed_ptz", "Image speed of the smoothed camera (px/s, median)", "{:.0f}"),
     ("step_none", "Common-mode step RMS, per-frame camera (m)", "{:.2f}"),
@@ -345,11 +496,20 @@ def main(
     clip: str = typer.Option("auto", help="Dev clip id, or auto (see the module docstring)."),
     start: str = typer.Option("auto", help="First second of the window, or auto."),
     seconds: float = typer.Option(15.0, help="Length of the window (s)."),
-    gif: Path = typer.Option(DEFAULT_GIF, help="Animation path."),  # noqa: B008
-    png: Path = typer.Option(DEFAULT_PNG, help="Still path."),  # noqa: B008
-    report: Path = typer.Option(DEFAULT_REPORT, help="Markdown report of the choices."),  # noqa: B008
+    gif: Path | None = typer.Option(None, help="Animation path (default by style)."),  # noqa: B008
+    png: Path | None = typer.Option(None, help="Still path, report style (PNG)."),  # noqa: B008
+    report: Path = typer.Option(DEFAULT_REPORT, help="Markdown report of the choices (report style)."),  # noqa: B008
     width: float = typer.Option(8.8, help="Figure width (inches, 100 dpi)."),
+    style: str = typer.Option(
+        "report", help="report (the dev figure), plain (README GIF) or page (showcase)."
+    ),
+    mp4: Path | None = typer.Option(None, help="Wide H.264 clip, page style; the tall one gets -tall."),  # noqa: B008
+    poster: Path | None = typer.Option(None, help="Wide clip's JPEG poster, page style (same rule)."),  # noqa: B008
+    ffmpeg: str | None = typer.Option(None, help="ffmpeg executable for the MP4 (default: on PATH)."),
 ) -> None:
+    if style not in STYLES:
+        raise typer.BadParameter(f"--style {style}: expected report, plain or page")
+    plain = style == "plain"
     runs = {"none": load_run(none_run), "ptz": load_run(ptz_run)}
     table = clip_table(runs)
     chosen = choose_clip(table) if clip == "auto" else clip
@@ -368,11 +528,7 @@ def main(
     )
     window_frames = frames[k0 : k0 + n]
     t0, t1 = (window_frames[0] - 1) / NATIVE_FPS, (window_frames[-1] - 1) / NATIVE_FPS
-    fig = Figure(figsize=(width, width * 0.47), dpi=100, facecolor=SURFACE, layout="constrained")
-    FigureCanvasAgg(fig)
     window = crop(runs, chosen, window_frames)
-    images = [render_frame(fig, runs, chosen, game, int(fr), window) for fr in window_frames]
-    save_gif(images, gif, fps=NATIVE_FPS / STEP_FRAMES)
     # The still: the frame of the window where the per-frame camera's median error is largest.
     err = (
         clip_none.filter(pl.col("frame").is_in(window_frames.tolist()))
@@ -381,8 +537,38 @@ def main(
         .sort("e", descending=True)
     )
     still = int(err["frame"][0]) if err.height else int(window_frames[len(window_frames) // 2])
+    k_still = int(np.flatnonzero(window_frames == still)[0])
+    summary = (
+        f"{style} style: clip {chosen} (game {game}), window {t0:.1f}-{t1:.1f} s, {len(window_frames)} frames"
+    )
+    if style == "page":
+        mp4, poster = mp4 or PAGE_MP4, poster or PAGE_POSTER
+        for layout, movie, still_path in (("wide", mp4, poster), ("tall", tall_path(mp4), tall_path(poster))):
+            w_px, h_px = PAGE_SIZES[layout]
+            fig = Figure(figsize=(w_px / 100, h_px / 100), dpi=100, facecolor=PAGE_SURROUND)
+            FigureCanvasAgg(fig)
+            images = [
+                render_frame(fig, runs, chosen, game, int(fr), window, style, layout) for fr in window_frames
+            ]
+            write_clip(images, images[k_still], movie, still_path, ffmpeg)
+        typer.echo(summary)
+        return
+    height = round(width * 0.5 * 50) / 50 if plain else width * 0.47  # plain: 880 × 440 at the default width
+    fig = Figure(figsize=(width, height), dpi=100, facecolor=SURFACE, layout="constrained")
+    if plain:
+        fig.get_layout_engine().set(rect=(0.005, 0.0, 0.99, 0.975))  # air above the large titles
+    FigureCanvasAgg(fig)
+    images = [render_frame(fig, runs, chosen, game, int(fr), window, style) for fr in window_frames]
+    gif = gif or (PLAIN_GIF if plain else DEFAULT_GIF)
+    save_gif(images, gif, fps=NATIVE_FPS / STEP_FRAMES)
+    still_image = images[k_still]
+    if plain:
+        typer.echo(f"{gif} ({gif.stat().st_size / 1e3:.0f} kB)")
+        typer.echo(summary)
+        return
+    png = png or DEFAULT_PNG
     buffer = io.BytesIO()
-    images[int(np.flatnonzero(window_frames == still)[0])].save(buffer, format="PNG", optimize=True)
+    still_image.save(buffer, format="PNG", optimize=True)
     atomic_write_bytes(png, buffer.getvalue())
 
     command = (

@@ -1,10 +1,12 @@
 """scripts/render_minimap_demo.py on synthetic run folders: clip choice, window and the animation."""
 
+import dataclasses
 import importlib.util
 import sys
 
 import numpy as np
 import polars as pl
+import pytest
 from PIL import Image
 from typer.testing import CliRunner
 
@@ -162,3 +164,112 @@ def test_main_writes_a_small_animation_and_a_still(tmp_path, rng):
         assert im.info["duration"] == 200
     assert gif.stat().st_size < 1_000_000
     assert png.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_plain_style_writes_only_the_readme_gif(tmp_path, rng, monkeypatch):
+    none = write_run(tmp_path / "none", rng, smoothed=False)
+    ptz = write_run(tmp_path / "ptz", rng, smoothed=True)
+    monkeypatch.setattr(demo.render_demo, "write_mp4", lambda *a, **k: pytest.fail("plain writes no MP4"))
+    gif, report = tmp_path / "smoothing.gif", tmp_path / "report.md"
+    args = [
+        "--none-run",
+        str(none),
+        "--ptz-run",
+        str(ptz),
+        "--seconds",
+        "2",
+        "--start",
+        "0",
+        "--style",
+        "plain",
+    ]
+    args += ["--gif", str(gif), "--report", str(report), "--width", "6"]
+    result = CliRunner().invoke(demo.app, args)
+    assert result.exit_code == 0, result.output
+    assert not report.exists()
+    assert f"clip {STEADY} (game 2)" in result.output
+    with Image.open(gif) as im:
+        assert im.n_frames == 10
+        assert im.info["duration"] == 200
+    assert sorted(p.name for p in tmp_path.iterdir() if p.is_file()) == ["smoothing.gif"]
+
+
+def test_page_style_writes_a_wide_and_a_tall_clip_with_posters(tmp_path, rng, monkeypatch):
+    none = write_run(tmp_path / "none", rng, smoothed=False)
+    ptz = write_run(tmp_path / "ptz", rng, smoothed=True)
+    encoded = {}
+
+    def fake_mp4(frames, path, fps, **kwargs):
+        encoded[path.name] = {"n": len(frames), "fps": fps, "shape": frames[0].shape}
+        path.write_bytes(b"mp4")
+        return 3
+
+    monkeypatch.setattr(demo.render_demo, "write_mp4", fake_mp4)
+    out = tmp_path / "out"
+    out.mkdir()
+    args = [
+        "--none-run",
+        str(none),
+        "--ptz-run",
+        str(ptz),
+        "--seconds",
+        "2",
+        "--start",
+        "0",
+        "--style",
+        "page",
+    ]
+    args += ["--mp4", str(out / "smoothing.mp4"), "--poster", str(out / "smoothing.jpg")]
+    args += ["--report", str(tmp_path / "report.md")]
+    result = CliRunner().invoke(demo.app, args)
+    assert result.exit_code == 0, result.output
+    assert not (tmp_path / "report.md").exists()
+    assert sorted(p.name for p in out.iterdir()) == [
+        "smoothing-tall.jpg",
+        "smoothing-tall.mp4",
+        "smoothing.jpg",
+        "smoothing.mp4",
+    ]
+    assert encoded["smoothing.mp4"] == {"n": 10, "fps": 5.0, "shape": (374, 960, 3)}
+    assert encoded["smoothing-tall.mp4"] == {"n": 10, "fps": 5.0, "shape": (992, 640, 3)}
+    for name, size in (("smoothing.jpg", (960, 374)), ("smoothing-tall.jpg", (640, 992))):
+        with Image.open(out / name) as im:
+            assert (im.format, im.size) == ("JPEG", size)
+
+
+def test_a_camera_that_misses_the_lines_on_an_unchecked_frame_is_lost(tmp_path, rng):
+    run = demo.load_run(write_run(tmp_path / "none", rng, smoothed=False))
+    frame = 1 + 5 * np.arange(20)
+    unlabelled = demo.frame_view(run, "g1-c0", int(frame[UNLABELLED_K]))
+    assert demo.veil_word(dataclasses.replace(unlabelled, line_px=4.8)) == "not checked"
+    assert demo.veil_word(dataclasses.replace(unlabelled, line_px=10.0)) == "not checked"
+    assert demo.veil_word(dataclasses.replace(unlabelled, line_px=534.9)) == "camera lost"
+    assert demo.veil_word(dataclasses.replace(unlabelled, line_px=float("nan"))) == "not checked"
+    assert demo.veil_word(demo.frame_view(run, "g1-c0", int(frame[7]))) == "no position"
+
+
+def test_plain_and_page_panels_carry_plain_words_and_no_numbers(tmp_path, rng):
+    from matplotlib.figure import Figure
+
+    run = demo.load_run(write_run(tmp_path / "none", rng, smoothed=False))
+    frame = 1 + 5 * np.arange(20)
+    window = (-50.0, 50.0, -35.0, 35.0)
+    unchecked = demo.frame_view(run, "g1-c0", int(frame[UNLABELLED_K]))
+    views = [
+        (demo.frame_view(run, "g1-c0", int(frame[0])), None),
+        (demo.frame_view(run, "g1-c0", int(frame[7])), "no position"),
+        (dataclasses.replace(unchecked, line_px=2.8), "not checked"),
+        (dataclasses.replace(unchecked, line_px=534.9), "camera lost"),
+    ]
+    titles = {"none": "Frame by frame", "ptz": "Smoothed over time"}
+    for style in ("plain", "page"):
+        for cam in ("none", "ptz"):
+            for view, word in views:
+                ax = Figure().subplots()
+                demo.draw_panel(ax, cam, view, window, style=style)
+                title = ax.get_title(loc="left")
+                assert title == (titles[cam] if style == "plain" else "")
+                texts = [t.get_text() for t in ax.texts]
+                assert texts == ([] if word is None else [word])
+                assert not any(c.isdigit() for t in [title, *texts] for c in t)
+                assert all(spine.get_visible() == (style == "plain") for spine in ax.spines.values())

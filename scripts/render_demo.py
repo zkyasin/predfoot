@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import io
 import json
+import shutil
 import subprocess
 import time
 from datetime import datetime
@@ -267,6 +268,89 @@ def write_gif(
                 f"the {max_bytes / 1e3:.0f} kB cap: render fewer frames"
             )
         width //= 2
+
+
+def ffmpeg_command(
+    exe: str, path: Path, size: tuple[int, int], fps: float, crf: int, tune: str | None = None
+) -> list[str]:
+    """ffmpeg reading raw BGR frames of ``size`` (width, height) on stdin and writing web video: H.264,
+    yuv420p, moov atom first (+faststart), no audio."""
+    w, h = size
+    cmd = [exe, "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{w}x{h}"]
+    cmd += ["-r", f"{fps:g}", "-i", "-", "-an", "-c:v", "libx264", "-preset", "slow", "-crf", str(crf)]
+    if tune is not None:
+        cmd += ["-tune", tune]
+    return [*cmd, "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-f", "mp4", str(path)]
+
+
+class Mp4Writer:
+    """Streams BGR frames of one size to ffmpeg; the file appears at ``path`` only once every frame is
+    encoded (a partial file is removed on error)."""
+
+    def __init__(
+        self,
+        path: Path,
+        size: tuple[int, int],
+        fps: float,
+        crf: int = 28,
+        tune: str | None = None,
+        ffmpeg: str | None = None,
+    ) -> None:
+        if size[0] % 2 or size[1] % 2:
+            raise ValueError(f"yuv420p needs an even frame size, got {size[0]} × {size[1]}")
+        exe = ffmpeg or shutil.which("ffmpeg")
+        if exe is None:
+            raise FileNotFoundError("ffmpeg not found: install it or pass its path")
+        self.path, self.size, self.n_frames = Path(path), size, 0
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.part = self.path.with_name(self.path.name + ".part")
+        self.proc = subprocess.Popen(
+            ffmpeg_command(exe, self.part, size, fps, crf, tune),
+            stdin=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+    def write(self, frame_bgr: np.ndarray) -> None:
+        if frame_bgr.shape != (self.size[1], self.size[0], 3) or frame_bgr.dtype != np.uint8:
+            raise ValueError(f"frame {frame_bgr.shape} {frame_bgr.dtype}, expected {self.size} uint8 BGR")
+        assert self.proc.stdin is not None
+        self.proc.stdin.write(np.ascontiguousarray(frame_bgr).tobytes())
+        self.n_frames += 1
+
+    def close(self) -> int:
+        """Finish the file; its size in bytes. RuntimeError, and no file, when ffmpeg fails."""
+        assert self.proc.stdin is not None
+        assert self.proc.stderr is not None
+        self.proc.stdin.close()
+        err = self.proc.stderr.read().decode(errors="replace")
+        if self.proc.wait() != 0 or not self.n_frames:
+            self.part.unlink(missing_ok=True)
+            raise RuntimeError(f"ffmpeg failed on {self.path} ({self.n_frames} frames): {err.strip()}")
+        self.part.replace(self.path)
+        return self.path.stat().st_size
+
+    def abort(self) -> None:
+        self.proc.kill()
+        self.proc.wait()
+        self.part.unlink(missing_ok=True)
+
+    def __enter__(self) -> Mp4Writer:
+        return self
+
+    def __exit__(self, exc_type: object, *_: object) -> None:
+        if exc_type is not None:
+            self.abort()
+
+
+def write_mp4(frames_bgr: list[np.ndarray], path: Path, fps: float, **kwargs: Any) -> int:
+    """All frames to one H.264 file (see :class:`Mp4Writer`); its size in bytes."""
+    if not frames_bgr:
+        raise ValueError("no frames to encode")
+    h, w = frames_bgr[0].shape[:2]
+    with Mp4Writer(path, (w, h), fps, **kwargs) as writer:
+        for frame in frames_bgr:
+            writer.write(frame)
+        return writer.close()
 
 
 def write_still(frame_bgr: np.ndarray, path: Path, width: int = 1280, quality: int = 82) -> int:

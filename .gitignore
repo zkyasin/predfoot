@@ -19,6 +19,7 @@ smoke/
 models/weights/
 mlruns/
 reports/cache/
+site/dist/
 
 # Local scratch, mirroring SkillCorner's conventions
 archive/
