@@ -281,8 +281,18 @@ uv run python scripts/render_demo.py --match 117093 --start 0 --frames 10 --step
 ## Showcase page
 
 `site/page.html` is the visual summary for visitors, published as a static Hugging Face Space
-(<https://huggingface.co/spaces/Ya-SinZ/predfoot>). It shows the four headline results of the test run; its only
-footage comes from SoccerTrack v2, and SoccerNet appears as numbers and a pitch-diagram clip only.
+(<https://huggingface.co/spaces/Ya-SinZ/predfoot>). It runs from the problem (a shaky camera moves every player)
+to the fix, then gives each of the four headline results of the test run a chapter with its own animated figure,
+followed by the run-once protocol, the method, the limits and the study written up as a one-page technical note.
+Its only footage comes from SoccerTrack v2, and SoccerNet appears as numbers and pitch diagrams only. The
+figures are drawn in the browser with D3 7.9.0, animated with Motion 12.43.0 and scrolled with Lenis 1.3.26,
+vendored in `assets/showcase/vendor/` with their licences (`LICENSES.txt`).
+
+The figures' data: the accuracy chart's 100 dots are the error percentiles 0.5 to 99.5 of both cameras on the
+same 89,700 player positions as the report's position-error table, computed from the frozen test run by
+`scripts/showcase_percentiles.py` (a test checks them against the report's p50 and p90); the wobble chart's
+zig-zag is an illustration drawn so that its extra length matches the measured +26.1 % and +3.4 %; the zone
+grid and the alarm's frame strip show the measured shares rounded to 100 positions and 200 frames.
 `scripts/build_site.py` wraps it into `site/dist/index.html`, copies the media it references from
 `assets/showcase/` and writes the Space's `README.md`; it fails when a referenced file is missing, when the page
 loads anything but Google Fonts from outside, when a link to another site does not open a new tab (the Space

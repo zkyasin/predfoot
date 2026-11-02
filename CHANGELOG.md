@@ -134,6 +134,13 @@ the project uses [semantic versioning](https://semver.org/).
   by side, and stacked for phones) and the README's GIF, made by `scripts/render_hero.py` and
   `scripts/render_minimap_demo.py --style page` and `--style plain` and described, with what they do not show,
   in `reports/showcase_visuals.md`.
+- Showcase redesign: the page now runs from the problem to the fix, then gives each headline result a chapter
+  with its own animated figure in a raised panel (a dot chart of the error percentiles, a run whose zig-zag adds
+  the measured distance, a grid of 100 zones against the promised 90, a strip of 200 frames for the alarm),
+  each with a switch between the two cameras, and ends with the study as a one-page technical note (data,
+  method, protocol, assumptions, results, limitations, references). D3, Motion and Lenis are vendored in
+  `assets/showcase/vendor/` with their licences; `scripts/showcase_percentiles.py` computes the dot chart's
+  percentiles from the frozen test run. The README's wording follows the page.
 
 ### Changed
 - The dev evaluation core moved from `scripts/eval_dev.py` into `predfoot.eval.positions`, the failure

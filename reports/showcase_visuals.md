@@ -101,6 +101,22 @@ per-frame camera, and the veil hides those positions rather than drawing them. T
 frame for the per-frame camera. The report style is unchanged: regenerating it gives a GIF and a PNG
 byte-identical to `assets/minimap_demo.*`.
 
+## Figures drawn by the page
+
+Besides the two clips, `site/page.html` draws four figures in the browser (D3, animated with Motion). They use
+the numbers of `reports/test_run.md` and nothing else:
+
+- Accuracy: 100 dots, one per percent of the 89,700 player positions, each at its measured error against the
+  raw labels. The values are the percentiles 0.5 to 99.5 of both cameras, from
+  `uv run python scripts/showcase_percentiles.py runs/test_once/lock-191bb06dbb75aba8` on the frozen run; its
+  p50, p90 and p99 match the report (0.51, 1.82, 6.87 m and 0.40, 1.16, 4.00 m). Directions are spread with the
+  golden angle and mean nothing. Dots beyond 3 m (5 and 2) sit on the edge.
+- Physical stats: a run drawn as an illustration, whose zig-zag is scaled so that its length exceeds the true
+  path by exactly 26.1 % or 3.4 %; the measured biases sit below it.
+- Error zones: 100 positions with 91 or 93 inside their zone, the measured 90.7 % and 93.1 % rounded.
+- Alarm: 200 frames with 20 wrong, the test's 10.2 % failure rate rounded; 20 set aside (10 %), of which 7 or 11
+  are wrong, the measured 34.1 % and 55.1 % of 20 rounded.
+
 ## Legibility check
 
 A scratch page embedded both videos and was captured by headless Chrome at 1280 px, with the hero in a 480 px
