@@ -1,4 +1,4 @@
-"""Per-run QA report: one self-contained HTML file next to ``tracking.jsonl`` (T5.2).
+"""Per-run QA report: one self-contained HTML file next to ``tracking.jsonl``.
 
 ``predfoot run`` writes ``qa_report.html`` at the end of every run; ``predfoot qa OUT`` rebuilds it from the
 files of a finished run. The report reads ``tracking.jsonl`` (required), and ``match.json``, ``meta.json``,

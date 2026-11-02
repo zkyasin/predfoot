@@ -1,4 +1,4 @@
-"""Contract tests: predfoot exports load in kloppy and look like SkillCorner open data (EXECUTION.md §5)."""
+"""Contract tests: predfoot exports load in kloppy and look like SkillCorner open data."""
 
 import json
 import re

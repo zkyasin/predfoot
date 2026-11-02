@@ -1,4 +1,4 @@
-"""Dev evaluation (tickets T1.5 and T2.3, temporal smoothing): calibrate every cached dev frame, optionally
+"""Dev evaluation: calibrate every cached dev frame, optionally
 smooth the camera over time, predict positions with their uncertainty, and measure leave-one-game-out (LOGO)
 conformal coverage against two references.
 

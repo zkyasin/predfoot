@@ -1,4 +1,4 @@
-"""Golden test of the real stages (T5.3): calibration from synthetic network detections, Mondrian conformal
+"""Golden test of the real stages: calibration from synthetic network detections, Mondrian conformal
 regions, localization and export, compared with the outputs committed in ``tests/fixtures/golden/expected``.
 
 The comparison (:func:`predfoot.io.compare.compare_runs`) is exact on structure, ids, flags and texts, and

@@ -1,4 +1,4 @@
-"""Feasibility of SoccerTrack v2 as a quasi-ground-truth benchmark (ticket T5.D1): the numbers behind
+"""Feasibility of SoccerTrack v2 as a quasi-ground-truth benchmark: the numbers behind
 ``reports/soccertrack_v2.md``.
 
     uv run python scripts/soccertrack_feasibility.py --match 117092 --out runs/soccertrack_feasibility.json

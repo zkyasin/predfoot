@@ -1,4 +1,4 @@
-"""Measure predfoot's position-error process on SN-GSR dev (ticket T4.2), for the KPI error budget (T4.3), and
+"""Measure predfoot's position-error process on SN-GSR dev, for the KPI error budget, and
 compare two cameras (per-frame calibration against temporal smoothing).
 
 Reads ``players.parquet`` written by scripts/eval_dev.py (frames one in five, so 5 fps). For each clip the
@@ -247,7 +247,7 @@ def main(
     cmd += f" --name {name}" if name else ""
     cmd += f" --compare-name {compare_name}" if compare_name else ""
     md = [
-        "# Position-error process on SN-GSR dev (T4.2)",
+        "# Position-error process on SN-GSR dev",
         "",
         f"`{cmd}` · commit `{git_sha()}`",
         "",
@@ -330,7 +330,7 @@ def main(
         "predfoot's; the smoothed labels remove the annotators' jitter but carry track-smoothing artefacts,",
         "so use them for temporal metrics only. (2) The 25 Hz correlation is bracketed, not measured: the",
         "two lags disagree when the process is not a single exponential (white jitter plus slow drift), and",
-        "only clips decoded at the full 25 fps (planned in T1.6) can settle it.",
+        "only clips decoded at the full 25 fps can settle it.",
     ]
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("\n".join(md) + "\n")

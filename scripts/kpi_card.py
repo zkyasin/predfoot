@@ -1,4 +1,4 @@
-"""KPI uncertainty card on IDSSE (T4.4): bias-corrected nominal 90 % intervals and their coverage.
+"""KPI uncertainty card on IDSSE: bias-corrected nominal 90 % intervals and their coverage.
 
     uv run python scripts/kpi_card.py                                   # seven matches, both cameras
     uv run python scripts/kpi_card.py --matches J03WMX J03WN1 --n-draws 30 --n-outer 8 --n-inner 8
@@ -316,7 +316,7 @@ def render(
                 ]
             )
     lines = [
-        "# KPI uncertainty card: a consistency check on IDSSE (T4.4)",
+        "# KPI uncertainty card: a consistency check on IDSSE",
         "",
         '> **Consistency check, not validation.** The "observed" tracks are clean IDSSE tracking plus errors',
         "> simulated by the same model the card assumes (fitted on SN-GSR dev,"

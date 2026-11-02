@@ -1,4 +1,4 @@
-"""Calibration failure detection on dev (tickets T3.1–T3.2): can a frame's own features flag a bad camera?
+"""Calibration failure detection on dev: can a frame's own features flag a bad camera?
 
 Reads ``frames.parquet`` written by scripts/eval_dev.py. Only frames whose calibration succeeded are scored
 (the others already abstain). Failure label, chosen before looking at any score: the calibration leaves the
@@ -94,7 +94,7 @@ def main(frames_path: Path, out: Path = Path("reports/m3_health_dev.md")) -> Non
         "",
         "Notes. Exploratory dev numbers. Frames are one in five and correlated within a clip, so the",
         "effective sample is closer to the number of clips than to the number of frames. The critic CNN",
-        "(ticket T3.3) has to beat the best row of this table to be worth its cost.",
+        "has to beat the best row of this table to be worth its cost.",
     ]
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("\n".join(md) + "\n")

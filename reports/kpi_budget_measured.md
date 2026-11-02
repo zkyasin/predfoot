@@ -1,8 +1,8 @@
-# KPI error budget: first sensitivity study (T4.1)
+# KPI error budget: first sensitivity study
 
 > **This is a sensitivity analysis on simulated position errors.** None of these numbers is a measured
 > error of predfoot: the real error process (variance, temporal correlation, common-mode part, dependence
-> on the predicted uncertainty) is measured on SN-GSR later (ticket T4.2) and injected in T4.3. KPI
+> on the predicted uncertainty) is measured on SN-GSR and injected in later reports. KPI
 > definitions marked *assumption* below are ours, not SkillCorner's.
 
 > **Measured condition.** The row *measured on SN-GSR* injects the error process
@@ -202,7 +202,7 @@ Change of each KPI when one assumption changes, against the default configuratio
 
 ## Reading these numbers
 
-- Errors here are stationary, isotropic and independent of the camera; real broadcast errors grow with the distance to the camera, are larger along the viewing direction and depend on the calibration of each frame (T4.2 measures them, T4.3 injects errors driven by the predicted uncertainty σ̂).
+- Errors here are stationary, isotropic and independent of the camera; real broadcast errors grow with the distance to the camera, are larger along the viewing direction and depend on the calibration of each frame (later reports measure them and inject errors driven by the predicted uncertainty σ̂).
 - The reference is IDSSE's own tracking, not ground truth; injected errors are added on top of it.
 - Distance is robust to noise once positions are smoothed: for a moving player, noise lengthens each step only at second order. Speed-threshold KPIs (counts, PSV-99, explosive accelerations) react at first order, because noise moves speed across thresholds.
 

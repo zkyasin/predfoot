@@ -1,4 +1,4 @@
-# KPI uncertainty card: a consistency check on IDSSE (T4.4)
+# KPI uncertainty card: a consistency check on IDSSE
 
 > **Consistency check, not validation.** The "observed" tracks are clean IDSSE tracking plus errors
 > simulated by the same model the card assumes (fitted on SN-GSR dev, `reports/kpi_budget_spectral.md`).

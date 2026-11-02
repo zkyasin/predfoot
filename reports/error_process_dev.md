@@ -1,4 +1,4 @@
-# Position-error process on SN-GSR dev (T4.2)
+# Position-error process on SN-GSR dev
 
 `uv run python scripts/error_process.py runs/20261031-152537_c3861c7_none/players.parquet` · commit `1bb22eb`
 
@@ -48,4 +48,4 @@ Caveats. (1) Errors against the labels include the labels' own error, so σ is a
 predfoot's; the smoothed labels remove the annotators' jitter but carry track-smoothing artefacts,
 so use them for temporal metrics only. (2) The 25 Hz correlation is bracketed, not measured: the
 two lags disagree when the process is not a single exponential (white jitter plus slow drift), and
-only clips decoded at the full 25 fps (planned in T1.6) can settle it.
+only clips decoded at the full 25 fps can settle it.

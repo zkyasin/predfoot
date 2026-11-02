@@ -1,4 +1,4 @@
-"""Guards of the preregistered test run (tickets T3.4 and T6.1): the freeze lock and the single evaluation.
+"""Guards of the preregistered test run: the freeze lock and the single evaluation.
 
 ``scripts/freeze_prereg.py`` fits the frozen artifacts on dev only, from a clean tree whose preregistration is
 final (no draft marker), and writes ``docs/preregistration.lock.json``: SHA-256 of the preregistration and of

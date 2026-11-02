@@ -1,6 +1,6 @@
 """Validation of tracking files: JSON Schema ``frame-1.0.json`` plus the rules a schema cannot express.
 
-Checked in code (EXECUTION.md §3.2):
+Checked in code:
 
 - every ``pos_cov_m2`` is symmetric and positive semi-definite (up to the writer's 1e-4 m² rounding);
 - top image corners are clipped at y = pitch_width / 2 + 5 m, and the footprint top-left → bottom-left →

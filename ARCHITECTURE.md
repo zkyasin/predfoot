@@ -49,7 +49,6 @@ What runs where today:
 | `pipeline` | Clip input, stub and real stages, orchestration per frame, export blocks with resume |
 | `serve` | HTTP API (FastAPI): `/v1/calibrate`, `/v1/localize`, `/healthz`, `/metrics` |
 | `demo` | Virtual broadcast cameras inside SoccerTrack v2 panoramas, and the dev calibration the demo borrows |
-| `detect` | Placeholder: foot points come from labelled boxes for now |
 
 Shared contracts live in `predfoot/contracts.py`; conventions in [ADR-0001](docs/adr/0001-conventions.md).
 

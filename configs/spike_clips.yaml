@@ -1,4 +1,4 @@
-# Dev clips for the calibration spike S0 (ticket T0.5), chosen from reports/data_audit.md (2026-10-31).
+# Dev clips for the calibration spike S0, chosen from reports/data_audit.md (2026-10-31).
 # Five games (2, 3, 4, 5, 9), five action classes, train and valid, both halves, penalty-box and midfield views,
 # tight and wide zoom; every clip has ground-truth positions in at least 97 % of its frames (camera_pct).
 # Download the frames 1, 6, 11, ... with:

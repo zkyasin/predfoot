@@ -1,4 +1,4 @@
-"""Per-frame latency of the PnLCalib networks on this machine (ticket T5.5).
+"""Per-frame latency of the PnLCalib networks on this machine.
 
 Backends: PyTorch CPU, PyTorch MPS (Apple GPU) or CUDA when available, ONNX Runtime CPU, and ONNX Runtime
 with the CoreML or CUDA execution provider when available.

@@ -6,7 +6,7 @@ the project uses [semantic versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
-- SoccerTrack v2 demo lane (T5.D1): `soccertrack-v2` download source (raw, MOT boxes, MOT clip of one match),
+- SoccerTrack v2 demo lane: `soccertrack-v2` download source (raw, MOT boxes, MOT clip of one match),
   `predfoot.io.soccertrack` loaders with conversion to the internal frame, virtual broadcast cameras inside the
   panorama (`predfoot.demo.virtual_camera`), `scripts/render_demo.py` (side-by-side demo video, still, GIF)
   and `reports/soccertrack_v2.md`: the released calibration is metres off on the far half, so SoccerTrack v2
@@ -74,7 +74,7 @@ the project uses [semantic versioning](https://semver.org/).
   `release` workflows and runnable locally.
 - `scripts/run_real_clip.py` writes its inputs next to its outputs (`input_clip.json`, `detections.json`
   re-keyed by clip frame index, `conformal.json`), so `predfoot run --detections` reruns a dev clip from files.
-- Spectral KPI error budget (T4.3) and KPI uncertainty card (T4.4): `predfoot.kpi.noise` (nugget + one or two
+- Spectral KPI error budget and KPI uncertainty card: `predfoot.kpi.noise` (nugget + one or two
   scales of an exponential, Matérn-3/2, Matérn-5/2 or squared-exponential kernel, Gaussian or Gaussian-copula
   marginal, exact circulant-embedding sampling, weighted least-squares fit to the 5 fps ACF);
   `error_process.py --json` (per-axis σ, ACF and normal-score ACF pooled over series through the
@@ -93,7 +93,7 @@ the project uses [semantic versioning](https://semver.org/).
   PSV-99 at their nominal 90 % (90 to 91 %, against 57 to 69 % with the spread of one dose); distance KPIs
   stay below (32 to 51 %) because of the remaining extrapolation bias, and only leave-one-match-out
   calibrated intervals reach about 90 % for every KPI.
-- Portfolio README with the development results of both cameras, coverage with player-frames pooled and with
+- README with the development results of both cameras, coverage with player-frames pooled and with
   each clip weighted equally, and what the evidence does not show. `scripts/render_minimap_demo.py` animates
   one dev clip, per-frame against PTZ-smoothed camera (`assets/minimap_demo.gif`, abstentions greyed, frames
   without position labels hatched); `scripts/make_figures.py` draws the dev reliability (coverage minus the
@@ -101,7 +101,7 @@ the project uses [semantic versioning](https://semver.org/).
   (`reports/dev_figures.md`, `reports/minimap_demo.md`). An index of the reports, serving and Docker details
   in `docs/serving.md` and `docs/docker.md`, and ARCHITECTURE.md brought up to date. `eval_dev.logo` takes the
   level α and returns each held-out row's Mondrian quantile.
-- Preregistered test run (T6.1). `docs/preregistration.md`, version 1, final: SN-GSR raw labels as the
+- Preregistered test run. `docs/preregistration.md`, version 1, final: SN-GSR raw labels as the
   primary reference, the PTZ-smoothed camera under test with the per-frame camera as the comparison arm,
   coverage (player-frames pooled, clips weighted equally reported next to it), region size against a constant
   circle, gradient boosting against the best dev single feature, KPI proxy biases as a secondary endpoint.
@@ -143,11 +143,19 @@ the project uses [semantic versioning](https://semver.org/).
   percentiles from the frozen test run. The README's wording follows the page.
 
 ### Changed
+- Ready for a public repository: neutral wording on the page, the README and the Space card (no personal
+  byline); internal ticket numbers and references to private planning notes removed from docstrings, reports
+  and this changelog; the reports index starts with the test report, and `scripts/README.md` lists the scripts
+  by stage.
 - The dev evaluation core moved from `scripts/eval_dev.py` into `predfoot.eval.positions`, the failure
   detectors into `predfoot.health.detector` and the players-table KPI proxy into `predfoot.kpi.proxy`; the
   scripts give identical results. The gradient boosting of the failure detector runs with early stopping
   off: scikit-learn switches it on above 10,000 rows, which the six-game fit of the freeze reaches and no dev
   fold does.
+
+### Removed
+- The empty `predfoot.detect` package (players come from the dataset's boxes) and `notebooks/`, whose README
+  listed tutorials that were never written.
 
 ### Fixed
 - Showcase review: on the Space, links to GitHub opened inside the Space's frame, which GitHub refuses ("refused

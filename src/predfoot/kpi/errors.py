@@ -6,7 +6,7 @@ every player of the frame (for broadcast tracking, mostly the camera calibration
 ``e[t] = ρ e[t-1] + sqrt(1 - ρ²) σ ε[t]``, with marginal standard deviation σ and lag-one autocorrelation ρ
 (ρ = 0 is i.i.d. noise). The two axes are independent with the same σ.
 
-The real error process of predfoot is measured on SN-GSR later (ticket T4.2); :func:`split_common_mode` and
+The real error process of predfoot is measured on SN-GSR later; :func:`split_common_mode` and
 :func:`fit_ar1` are the estimators for that step.
 """
 

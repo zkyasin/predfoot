@@ -1,4 +1,4 @@
-"""Spike S0 (ticket T0.5): does the calibration pipeline work on real broadcast frames, and does its predicted
+"""Spike S0: does the calibration pipeline work on real broadcast frames, and does its predicted
 uncertainty rank the real position errors?
 
 Per frame: PnLCalib keypoints (+ intersections of detected lines) → robust calibration → positions of the

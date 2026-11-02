@@ -1,4 +1,4 @@
-"""End-to-end tracer bullet: ``predfoot run`` on the synthetic clip, resume after a hard kill (T0.7, T5.1)."""
+"""End-to-end tracer bullet: ``predfoot run`` on the synthetic clip, resume after a hard kill."""
 
 import json
 import subprocess

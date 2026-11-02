@@ -1,1 +1,0 @@
-"""predfoot.detect"""

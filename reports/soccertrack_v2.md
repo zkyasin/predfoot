@@ -1,4 +1,4 @@
-# SoccerTrack v2: demo pixels and feasibility as a quasi-ground-truth benchmark (T5.D1)
+# SoccerTrack v2: demo pixels and feasibility as a quasi-ground-truth benchmark
 
 `uv run python scripts/soccertrack_feasibility.py --match <m>` and
 `uv run python scripts/render_demo.py --match <m> --start 0 --frames 10 --step 5` · commit `f5ae948` ·

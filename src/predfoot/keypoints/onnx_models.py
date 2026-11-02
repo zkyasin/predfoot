@@ -22,7 +22,7 @@ OPSET = 18
 INPUT_NAME = "frames"
 OUTPUT_NAME = "heatmaps"
 MODEL_FILES = {"kp": "pnlcalib-sv-kp.onnx", "lines": "pnlcalib-sv-lines.onnx"}
-#: Acceptance of ticket T5.4: decoded keypoints and line ends within 0.5 px of PyTorch's.
+#: Parity tolerance: decoded keypoints and line ends within 0.5 px of PyTorch's.
 PARITY_TOLERANCE_PX = 0.5
 #: Largest heatmap difference accepted between two float32 CPU runtimes (2.7e-6 measured). A wrong head, a
 #: rescaled output or a constant background shows far above it even where the decoded peaks do not move, and

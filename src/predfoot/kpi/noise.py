@@ -1,4 +1,4 @@
-"""Stationary Gaussian position-error processes whose spectrum respects the 5 fps measurement (T4.3).
+"""Stationary Gaussian position-error processes whose spectrum respects the 5 fps measurement.
 
 The AR(1) model of :mod:`predfoot.kpi.errors` extrapolates an exponential autocorrelation from 5 fps
 (lags of 0.2 s) to 25 Hz. An exponential has a cusp at lag zero: its paths are not differentiable and its

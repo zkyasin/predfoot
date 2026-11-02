@@ -36,7 +36,7 @@ DEFAULT_PITCH_WIDTH_M = 68.0
 #: Top image corners are clipped this far beyond the far touchline (y = 34 + 5 = 39 m on a 68 m wide pitch).
 CORNER_MARGIN_M = 5.0
 #: χ²₂ quantile at 0.90, -2 ln(0.1) ≈ 4.605. ``pos_cov_m2`` is calibrated so that its ellipse
-#: {p : (p - x̂)ᵀ Σ⁻¹ (p - x̂) ≤ CHI2_2_090} is the 90 % prediction region (PLAN_MVP.md §3.3).
+#: {p : (p - x̂)ᵀ Σ⁻¹ (p - x̂) ≤ CHI2_2_090} is the 90 % prediction region.
 CHI2_2_090 = -2.0 * math.log(0.10)
 
 #: Corner order of ``image_corners_projection`` and of :attr:`TrackingFrame.corners`.

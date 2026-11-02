@@ -314,7 +314,6 @@ footer .wrap { display: grid; gap: 24px; padding-block: clamp(36px, 5vw, 56px); 
 .links-grid a span { font-size: 0.875rem; color: var(--ink-2); }
 .links-grid a:hover b { color: var(--link); }
 .credits { display: grid; gap: 6px; max-width: 80ch; font-size: 0.875rem; color: var(--ink-2); }
-.credits .independent { color: var(--ink); font-weight: 600; }
 
 /* The study, typeset as a one-page technical note */
 .study-head { display: grid; gap: 18px; margin-bottom: clamp(28px, 4vw, 44px); }
@@ -327,7 +326,6 @@ footer .wrap { display: grid; gap: 24px; padding-block: clamp(36px, 5vw, 56px); 
 }
 .paper-running { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 16px; padding-bottom: 10px; margin-bottom: clamp(20px, 3vw, 32px); border-bottom: 1px solid var(--rule); font: 400 0.75rem/1.4 var(--font-mono); color: var(--ink-3); }
 .paper-title { max-width: 32ch; font: 600 clamp(1.75rem, 1.25rem + 1.8vw, 2.5rem)/1.12 "Newsreader", Georgia, serif; letter-spacing: -0.01em; text-wrap: balance; }
-.paper-byline { margin-top: 10px; font-style: italic; color: var(--ink-2); }
 .paper-facts { list-style: none; padding: 0; margin-top: 16px; display: flex; flex-wrap: wrap; gap: 8px; font: 500 0.8125rem/1.2 var(--font-body); }
 .paper-facts li { padding: 6px 11px 5px; border: 1px solid var(--rule); border-radius: 999px; color: var(--ink-2); }
 .paper-facts b { color: var(--ink); font-weight: 600; }
@@ -640,7 +638,6 @@ footer .wrap { display: grid; gap: 24px; padding-block: clamp(36px, 5vw, 56px); 
     <article class="paper" data-reveal="1" aria-labelledby="paper-title">
       <p class="paper-running"><span>predfoot · technical note</span><span>November 2026</span></p>
       <h3 class="paper-title" id="paper-title">Error zones for player positions in broadcast football: a preregistered test</h3>
-      <p class="paper-byline">Ya-Sin, independent portfolio project</p>
       <ul class="paper-facts">
         <li><b>Data</b> SoccerNet SN-GSR</li>
         <li><b>Test</b> 3 held-out matches, 49 clips</li>
@@ -753,8 +750,6 @@ footer .wrap { display: grid; gap: 24px; padding-block: clamp(36px, 5vw, 56px); 
     </ul>
     <div class="credits">
       <p>Footage: <a href="https://huggingface.co/datasets/atomscott/soccertrack-v2" target="_blank" rel="noopener">SoccerTrack v2</a>, Scott et al., <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a>, reprojected to a virtual camera, cropped, downscaled and overlaid. Test matches: SoccerNet <span class="nowrap">SN-GSR</span> (Somers et al.), shown only as numbers and pitch diagrams. Pitch-marking network: PnLCalib weights by <span class="nowrap">Gutiérrez-Pérez</span> and Agudo, CC BY 4.0. Code: <span class="nowrap">Apache-2.0</span>. Page built with D3, Motion and Lenis (<a href="assets/vendor/LICENSES.txt" target="_blank" rel="noopener">licences</a>). <a href="https://github.com/zkyasin/predfoot/blob/main/ATTRIBUTION.md" target="_blank" rel="noopener">All credits</a>.</p>
-      <p>Built by Ya-Sin, a data-science master's student, as a portfolio project (<a href="https://github.com/zkyasin" target="_blank" rel="noopener">github.com/zkyasin</a>).</p>
-      <p class="independent">Independent project, not affiliated with SkillCorner.</p>
     </div>
   </div>
 </footer>

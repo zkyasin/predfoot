@@ -1,4 +1,4 @@
-"""KPI error budget, first sensitivity study (ticket T4.1) -> reports/kpi_sensitivity.md.
+"""KPI error budget, first sensitivity study -> reports/kpi_sensitivity.md.
 
     uv run python scripts/kpi_sensitivity.py --matches J03WPY J03WOH   # two matches
     uv run python scripts/kpi_sensitivity.py                           # all seven
@@ -6,7 +6,7 @@
 Reference: KPIs on clean IDSSE positions at 25 Hz with the standard pipeline. Control (gate G4): the same
 clean positions through the 10 fps pipeline. Then simulated position errors (i.i.d., AR(1), common-mode +
 individual) are added to the 25 Hz positions before the 10 fps pipeline. This is a sensitivity analysis: the
-real error process of predfoot is measured on SN-GSR later (ticket T4.2).
+real error process of predfoot is measured on SN-GSR later.
 
 Per-player tables, the configuration and metadata go to ``runs/<date>_<git-sha>/`` (never committed); the
 report with aggregate numbers goes to ``reports/kpi_sensitivity.md``. Run ``scripts/prepare_idsse.py`` first.
@@ -43,7 +43,7 @@ from predfoot.paths import REPO_ROOT, reports_dir
 SIGMAS = (0.05, 0.1, 0.2, 0.5)
 RHOS = (0.9, 0.99)
 GOALKEEPER = "TW"  # DFL position code
-G4_MAPE_PCT = 0.5  # EXECUTION.md, ticket T4.1
+G4_MAPE_PCT = 0.5  # largest MAPE the clean-data control may show
 
 KPI_LABELS = {
     "distance_m": "Distance",
@@ -459,13 +459,13 @@ def render_report(
     n_matches = len(meta["matches"])
 
     lines = [
-        "# KPI error budget: first sensitivity study (T4.1)",
+        "# KPI error budget: first sensitivity study",
         "",
         "> **This is a sensitivity analysis on simulated position errors.** None of these numbers is a "
         "measured",
         "> error of predfoot: the real error process (variance, temporal correlation, common-mode part, "
         "dependence",
-        "> on the predicted uncertainty) is measured on SN-GSR later (ticket T4.2) and injected in T4.3. KPI",
+        "> on the predicted uncertainty) is measured on SN-GSR and injected in later reports. KPI",
         "> definitions marked *assumption* below are ours, not SkillCorner's.",
         "",
         *(
@@ -710,7 +710,7 @@ def render_report(
         "with "
         "the distance to the camera, are larger along the viewing direction and depend on the calibration "
         "of each "
-        "frame (T4.2 measures them, T4.3 injects errors driven by the predicted uncertainty σ̂).",
+        "frame (later reports measure them and inject errors driven by the predicted uncertainty σ̂).",
         "- The reference is IDSSE's own tracking, not ground truth; injected errors are added on top of it.",
         "- Distance is robust to noise once positions are smoothed: for a moving player, noise lengthens "
         "each "
