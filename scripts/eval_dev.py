@@ -25,7 +25,7 @@ single frames come from different models, so conformal quantiles are fitted with
 variants differ only by the camera.
 
 Usage:
-    uv run python scripts/eval_dev.py                  # full per-frame run, writes reports/m2_logo_dev.md
+    uv run python scripts/eval_dev.py                  # full per-frame run, writes reports/dev_per_frame.md
     uv run python scripts/eval_dev.py --smooth ptz --calib-from runs/<run>/calib.npz   # runs/<run>/report.md
 Needs the index (scripts/build_index.py) and the detection cache (scripts/cache_keypoints.py).
 """
@@ -103,7 +103,7 @@ __all__ = [  # re-exported for tests and for other scripts
 
 app = typer.Typer(add_completion=False)
 STEP_MAX_ERROR_M = 10.0  # as scripts/error_process.py: larger errors are calibration failures (abstention)
-DEFAULT_REPORT = Path("reports/m2_logo_dev.md")
+DEFAULT_REPORT = Path("reports/dev_per_frame.md")
 
 
 # --- report ------------------------------------------------------------------------------------------------

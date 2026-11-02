@@ -11,8 +11,8 @@ calibration misses its own 65 annotated keypoints by 23 px (M1) and 8 px (M2) me
 to the pitch that is 3.3 m and 2.5 m median, and 5.7 m and 3.7 m at the far touchline, where one vertical video
 pixel spans 0.57 m (M1) and 0.69 m (M2) of pitch. A virtual camera is exact for the released *model*, not for
 the real pitch. Usable references are the annotated keypoints mapped into each view (true correspondences up to
-annotation noise) and, at best, the near half of the pitch. This is risk R8 of the plan: the benchmark idea is
-dropped and SoccerTrack stays a demo-pixel source.
+annotation noise) and, at best, the near half of the pitch. The benchmark idea is therefore dropped, and
+SoccerTrack v2 stays a demo-pixel source.
 
 ## What the files are
 

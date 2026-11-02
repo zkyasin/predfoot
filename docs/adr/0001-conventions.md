@@ -25,7 +25,7 @@ What was checked on 2026-10-30:
 |---|---|
 | Pitch frame | SkillCorner's: origin at the centre spot, metres, x towards the right-hand goal of the main camera, y towards the far touchline. Default pitch 105 × 68 m, configurable. |
 | SoccerNet / SoccerTrack v2 → internal | `(x, y) ↦ (x, −y)`; covariances `Σ ↦ D Σ D`, D = diag(1, −1). Only in `predfoot/io/`, with `predfoot.io.conventions`. |
-| Pixels | Original frame (1920 × 1080 for SN-GSR), OpenCV convention. SoccerNet normalised points are multiplied by width and height; the half-pixel convention is checked at M1. Network inputs are resized (960 × 540 for PnLCalib) and mapped back in one helper. |
+| Pixels | Original frame (1920 × 1080 for SN-GSR), OpenCV convention. SoccerNet normalised points are multiplied by width and height, with no half-pixel offset (not verified; the possible error is at most 0.5 px). Network inputs are resized (960 × 540 for PnLCalib) and mapped back in one helper. |
 | Ground plane | Only planar template elements enter a homography; goal posts and crossbars are excluded. |
 | Time | Native frame index (25 fps for SN-GSR) inside the pipeline; exports at 10 fps with `timestamp` `HH:MM:SS.ss`. |
 | Identifiers | `clip_id` (e.g. `SNGS-056`), `game_id` (integer from the labels' `info`), `track_id`. Exports use `player_id = track_id` (anonymous) and ship a minimal `match.json`. |

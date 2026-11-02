@@ -3,7 +3,8 @@
 Native frames → stages (``CalibResult``, ``FootObs``, ``Localization``) → export frames at 10 fps →
 ``tracking.jsonl``, ``match.json``, ``meta.json``, ``metrics.json``, ``minimap.png`` and ``qa_report.html`` in
 the output folder.
-The stages are the stubs of :mod:`predfoot.pipeline.stub` until the real modules replace them.
+Without detections the stages are the stubs of :mod:`predfoot.pipeline.stub`; with them, the real stages of
+:mod:`predfoot.pipeline.real`.
 
 Resume: export frames are processed in blocks of ``block_size``, each written atomically to ``OUT/.parts/``.
 A re-run reuses the complete blocks of the same input and configuration (checked by a fingerprint) and

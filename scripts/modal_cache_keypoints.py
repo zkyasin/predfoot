@@ -5,7 +5,8 @@ HTTP range requests (nothing is uploaded from the laptop), runs both PnLCalib ne
 and returns the decoded detections; the local entrypoint writes them to the same cache as
 ``scripts/cache_keypoints.py``, so the two can share the work (this one walks the clips backwards).
 
-Usage (from the repository, with the vision extra installed and a Modal token configured):
+Usage (from the repository, with the cloud extra installed (``uv sync --extra cloud``) and a Modal token
+configured; torch runs only inside the Modal image):
     uv run modal run scripts/modal_cache_keypoints.py --splits train,valid
 """
 
@@ -106,7 +107,7 @@ def main(splits: str = "train,valid", max_clips: int = 0) -> None:
     todo = []
     for split in splits.split(","):
         if split == "test":
-            raise SystemExit("the test split stays locked until the preregistration is frozen")
+            raise SystemExit("the test split is reserved for scripts/run_test_once.py")
         for clip_dir in sorted((data_dir() / "sn-gsr" / split).glob("SNGS-*"), reverse=True):
             if (clip_dir / "img1").is_dir() and not cache_path(clip_dir.name, 750 // EVERY).exists():
                 todo.append((split, clip_dir.name))

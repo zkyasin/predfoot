@@ -13,9 +13,9 @@ each broadcast frame from the pitch markings and adds three things to the positi
 - a **90 % region per player and frame**, an ellipse calibrated by conformal prediction on games held out
   from every fitting step;
 - a **calibration health score** that flags frames whose camera is probably wrong, so they can abstain
-  (evaluated on the development games, not yet wired into `predfoot run`);
+  (evaluated on the development games and in the test run, not yet wired into `predfoot run`);
 - an **error budget for physical KPIs** (distance, high-speed running, sprints, PSV-99), measured on the
-  development games with a model-free 5 fps proxy and simulated on IDSSE tracking, by scripts (`predfoot run`
+  development and test games with a model-free 5 fps proxy and simulated on IDSSE tracking, by scripts (`predfoot run`
   computes no KPI yet).
 
 Outputs follow the SkillCorner open-data JSONL schema at 10 fps, with the uncertainty as extra fields
@@ -99,7 +99,7 @@ clips, since frames within a clip are correlated.
 | KPI proxy, distance / high-speed-running distance bias | +27.0 % / +67.2 % | +2.7 % / +6.2 % |
 | Frames with published positions | 95.5 % | 95.1 % |
 
-Sources: [`m2_logo_dev.md`](../reports/m2_logo_dev.md), [`m2_temporal_dev.md`](../reports/m2_temporal_dev.md),
+Sources: [`dev_per_frame.md`](../reports/dev_per_frame.md), [`dev_smoothed.md`](../reports/dev_smoothed.md),
 [`error_process_temporal_dev.md`](../reports/error_process_temporal_dev.md), and
 [`dev_figures.md`](../reports/dev_figures.md) for the rows with each clip weighted equally (for the smoothed
 camera, an approximation of the fold-wise fit explained there). Coverage pools the held-out player-frames
@@ -109,7 +109,7 @@ Laplace ellipses cover only 17.9 % (per-frame) and 7.2 % (smoothed) at the same 
 them. It leaves out player-frames 10 m or more from the labels, as calibration failures for abstention to
 catch, which `predfoot run` cannot do yet.
 
-Failure detection, per-frame camera ([`m3_health_dev.md`](../reports/m3_health_dev.md)): a frame fails when the
+Failure detection, per-frame camera ([`dev_failure_detection.md`](../reports/dev_failure_detection.md)): a frame fails when the
 annotated lines sit more than 10 px from the projected pitch (11.0 % of 10024 frames). Scored out-of-game, the
 AUROC is 0.89 for gradient boosting, 0.79 for logistic regression and 0.73 for the best single feature;
 abstaining on the riskiest 10 % of frames removes 50 %, 32 % and 29 % of the failures.
@@ -163,9 +163,9 @@ flowchart LR
 
 **What `predfoot run` does today:** steps 1 and 3 and the export of step 5, from cached network detections.
 The PTZ smoother is implemented and used by the dev evaluation, and the real pipeline stages accept it, but the
-command line does not expose it yet. The health classifier is evaluated on dev only
-(`scripts/eval_health.py`): in `predfoot run`, `calib_health` is null and a frame abstains when its
-calibration fails. The KPI modules run only in the evaluation scripts; a run's outputs hold no KPI. Details:
+command line does not expose it yet. The health classifier runs only in the evaluation scripts
+(`scripts/eval_health.py` on dev, `scripts/run_test_once.py` on the test games): in `predfoot run`,
+`calib_health` is null and a frame abstains when its calibration fails. The KPI modules run only in the evaluation scripts; a run's outputs hold no KPI. Details:
 [ARCHITECTURE.md](../ARCHITECTURE.md), conventions in [ADR-0001](adr/0001-conventions.md).
 
 ## What the evidence shows, and what it does not
@@ -238,7 +238,7 @@ uv run python scripts/build_index.py
 uv run python scripts/download_data.py sn-gsr-frames --all-dev --every 5
 uv run python scripts/download_data.py pnlcalib-weights
 uv run python scripts/cache_keypoints.py           # network inference on every dev frame, once
-uv run python scripts/eval_dev.py                  # per-frame camera → reports/m2_logo_dev.md, runs/<none>/
+uv run python scripts/eval_dev.py                  # per-frame camera → reports/dev_per_frame.md, runs/<none>/
 uv run python scripts/eval_dev.py --smooth ptz --calib-from runs/<none>/calib.npz   # → runs/<ptz>/report.md
 uv run python scripts/eval_health.py runs/<none>/frames.parquet
 uv run python scripts/error_process.py runs/<ptz>/players.parquet --compare runs/<none>/players.parquet \

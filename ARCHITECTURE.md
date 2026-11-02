@@ -21,7 +21,7 @@ flowchart LR
 The keypoint networks run **once per frame**: their decoded detections are cached per clip
 (`PREDFOOT_DATA_DIR/cache/`, `.npz`, keyed by the model family and the number of frames on disk). Every later
 stage reads the cache, so experiments run in minutes: the PTZ dev evaluation of 115 clips took 404 s from
-saved calibrations (`reports/m2_temporal_dev.md`).
+saved calibrations (`reports/dev_smoothed.md`).
 
 What runs where today:
 
@@ -41,8 +41,8 @@ What runs where today:
 | `keypoints` | Frame → `KeypointObs`, `LinePointObs` (pixels): PnLCalib networks, heatmap decoding, the per-clip detection cache, ONNX export and ONNX Runtime inference |
 | `calib` | Observations → `CalibResult` (H, Σθ, residuals, status) (`solver`); line fits, the line oracle and line reprojection (`lines`); the PTZ Kalman/RTS smoother, its label-free noise fit and its frame flags (`temporal`) |
 | `uncertainty` | `CalibResult` + foot points → position and Σp (`delta`); grouped split conformal with Mondrian bins (`conformal`) |
-| `health` | Calibration features (no labels) for the failure detector |
-| `eval` | Selective prediction: error removed by abstaining on the riskiest frames |
+| `health` | Calibration features (no labels) and the failure detectors, including the frozen detector of the test run |
+| `eval` | Position evaluation shared by the dev evaluation and the test run (`positions`), the preregistration lock and its guards (`prereg`), the frozen artifacts and endpoints of the test run (`frozen`), selective prediction (`selective`) |
 | `io` | Dataset loaders (SN-GSR, SoccerTrack v2, IDSSE), coordinate conventions, SkillCorner JSONL writer and reader, export time base, JSON Schema and validator, downloads and manifest |
 | `kpi` | Speeds and physical KPIs at 10 fps; error models (AR(1), spectral `noise`); simulation on clean tracking; the model-free 5 fps proxy; KPI uncertainty cards; budget reports |
 | `viz` | Minimaps, the self-contained QA report |
@@ -63,12 +63,13 @@ command, commit and run folder.
 
 | Script | What it measures | Report |
 |---|---|---|
-| `eval_dev.py` | Position errors and leave-one-game-out coverage of the 90 % regions against the labels and the line oracle; `--smooth none, proj, ptz` | `m2_logo_dev.md`, `m2_temporal_dev.md` |
-| `eval_health.py` | Out-of-game failure detection from the health features | `m3_health_dev.md` |
+| `eval_dev.py` | Position errors and leave-one-game-out coverage of the 90 % regions against the labels and the line oracle; `--smooth none, proj, ptz` | `dev_per_frame.md`, `dev_smoothed.md` |
+| `eval_health.py` | Out-of-game failure detection from the health features | `dev_failure_detection.md` |
 | `error_process.py` | Common and individual error processes, model-free KPI proxy | `error_process_temporal_dev.md` |
 | `kpi_spectral.py`, `kpi_card.py` | KPI budget and cards on IDSSE with simulated errors | `kpi_budget_spectral.md`, `kpi_card.md` |
 | `make_figures.py` | Coverage at four levels, pooled and with every clip weighted equally; region size, coverage by distance and by clip size, KPI proxy | `dev_figures.md` |
-| `render_minimap_demo.py` | The README animation (minimaps only) | `minimap_demo.md` |
+| `freeze_prereg.py`, `run_test_once.py` | The frozen artifacts, then the single preregistered run on the test games | `test_run.md` |
+| `render_minimap_demo.py`, `render_hero.py` | The minimap animations (the technical overview's GIF, the README's GIF and the page's smoothing clips) and the page's hero loop | `minimap_demo.md`, `showcase_visuals.md` |
 
 ## Outputs of a run
 

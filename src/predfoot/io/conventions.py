@@ -20,7 +20,7 @@ FloatArray = NDArray[np.float64]
 SN_TO_INTERNAL: FloatArray = np.diag([1.0, -1.0])
 
 #: Half-pixel offset applied when turning SoccerNet normalised coordinates into OpenCV pixel coordinates
-#: (pixel centres on integers). To be confirmed at M1; the possible error is at most 0.5 px.
+#: (pixel centres on integers). Not verified; the possible error is at most 0.5 px.
 SN_NORMALISED_OFFSET_PX = 0.0
 
 

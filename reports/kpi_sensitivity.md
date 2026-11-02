@@ -13,7 +13,7 @@
 
 ## Summary
 
-- **Gate G4** (clean data, 10 fps vs 25 Hz, MAPE < 0.5 %): passed by Distance, Dist. < 15, Dist. 15-20, Dist. 20-25 (HSR), HI dist. > 20, PSV-99; not passed by Dist. > 25 (sprint) 0.76 %, HSR efforts 0.71 %, Sprint efforts 0.90 %, Expl. acc. to HSR 12.34 %, Expl. acc. to sprint 13.20 %. Totals stay close (bias within ±0.52 % for every KPI except explosive accelerations): the misses come from discretisation at thresholds, where an effort near the minimum duration or an acceleration near 3 m/s² flips between the two pipelines, on small per-player counts (6.5 explosive accelerations to HSR per player-match on average).
+- **Control** (clean data, 10 fps vs 25 Hz, MAPE < 0.5 %): passed by Distance, Dist. < 15, Dist. 15-20, Dist. 20-25 (HSR), HI dist. > 20, PSV-99; not passed by Dist. > 25 (sprint) 0.76 %, HSR efforts 0.71 %, Sprint efforts 0.90 %, Expl. acc. to HSR 12.34 %, Expl. acc. to sprint 13.20 %. Totals stay close (bias within ±0.52 % for every KPI except explosive accelerations): the misses come from discretisation at thresholds, where an effort near the minimum duration or an acceleration near 3 m/s² flips between the two pipelines, on small per-player counts (6.5 explosive accelerations to HSR per player-match on average).
 - **Smoothing** is the main lever: with i.i.d. σ = 0.2 m, the distance error is 5.37 % with the 1 s window and 1.53 % with 2 s, but on clean data the 2 s window already moves explosive accelerations to HSR by +21.77 % (definitions and noise robustness pull in opposite directions).
 - **Distance**: MAPE 1.56 % for i.i.d. σ = 0.1 m and 5.30 % for σ = 0.2 m, an overestimate (bias +5.28 % at 0.2 m). At σ = 0.2 m, slow errors (AR(1) ρ = 0.99, about 4 s) give 1.38 %, and errors correlated over about 0.4 s (ρ = 0.9) give 6.73 %, more than white noise: what matters is how much error power falls in the band the 1 s smoothing lets through, not correlation as such.
 - **High-speed KPIs** react more: at i.i.d. σ = 0.1 m, distance above 25 km/h has MAPE 5.27 % and sprint efforts 14.19 % against the clean 10 fps control; PSV-99 stays within 0.77 % (bias +0.67 %).
@@ -24,7 +24,7 @@
 
 - **Cleaning**: the raw IDSSE feed holds the last position of a player who is not observed, then jumps to the re-acquired position; there are also a few identity swaps. Steps faster than 43.2 km/h are cut out of the source data before anything else (held samples, or the sample after the jump): 41893 of 21874234 player-samples (0.192 %). Without this step each glitch becomes a fake sprint after smoothing, and the 25 Hz and 10 fps pipelines disagree on explosive accelerations by tens of percent.
 - **Reference**: clean IDSSE positions at 25 Hz through the standard pipeline: Savitzky-Golay smoothing of positions over 1 s (order 2, 25 samples), velocity and acceleration by central differences that never cross a gap, then the KPIs.
-- **Control (gate G4)**: the same clean positions resampled to 10 fps (linear interpolation between the two neighbouring 25 Hz samples) and smoothed over 11 samples (1.1 s). Gate G4 asks for MAPE < 0.5 %.
+- **Control**: the same clean positions resampled to 10 fps (linear interpolation between the two neighbouring 25 Hz samples) and smoothed over 11 samples (1.1 s). The control asks for MAPE < 0.5 %.
 - **Injected errors**: Gaussian, isotropic, added to the 25 Hz positions before the 10 fps pipeline; σ is the marginal standard deviation per axis. AR(1) correlation ρ is per 25 Hz frame: ρ = 0.9 is a correlation time of 0.38 s, ρ = 0.99 of 4.0 s. The common-mode condition gives every player of a frame the same slow error (ρ = 0.99) plus an individual one (ρ = 0.9), each with half of the variance. Linear resampling averages two 25 Hz samples at every other 10 fps sample, which halves i.i.d. noise variance there; this is part of the pipeline being tested.
 - **Statistics**: MAPE over player-matches with a positive reference; bias = relative error of the total over all player-matches; Spearman correlation of player rankings, on per-90-minute values (PSV-99 as is). 95 % intervals: percentile bootstrap resampling whole matches. With 7 matches the intervals are rough, and they do not include noise-seed variability (one noise draw per condition).
 
@@ -42,9 +42,9 @@
 
 Sources: SkillCorner, "New feature: explosive accelerations" (6 Feb 2025) and "SkillCorner releases new peak velocity metric" (11 Jun 2026); see `configs/kpi.yaml`.
 
-## Gate G4: clean data through the 10 fps pipeline
+## Control: clean data through the 10 fps pipeline
 
-| KPI | Ref. mean | MAPE % [95 % CI] | Bias % [95 % CI] | Spearman [95 % CI] | G4 |
+| KPI | Ref. mean | MAPE % [95 % CI] | Bias % [95 % CI] | Spearman [95 % CI] | MAPE < 0.5 % |
 |---|---|---|---|---|---|
 | Distance | 9646.8 | 0.06 [0.06, 0.07] | -0.06 [-0.07, -0.06] | 1.000 [1.000, 1.000] | pass |
 | Dist. < 15 | 7506.2 | 0.05 [0.04, 0.05] | -0.04 [-0.05, -0.03] | 1.000 [1.000, 1.000] | pass |
@@ -121,7 +121,7 @@ Confidence intervals for every cell are in the appendix.
 
 ### MAPE (%) against the clean 10 fps control: the effect of the noise alone
 
-Same noisy conditions, compared with clean data through the same 10 fps pipeline, so that the difference between the pipelines (gate G4 above) is not counted.
+Same noisy conditions, compared with clean data through the same 10 fps pipeline, so that the difference between the pipelines (the control above) is not counted.
 
 | Condition | Distance | Dist. < 15 | Dist. 15-20 | Dist. 20-25 (HSR) | Dist. > 25 (sprint) | HI dist. > 20 | HSR efforts | Sprint efforts | PSV-99 | Expl. acc. to HSR | Expl. acc. to sprint |
 |---|---|---|---|---|---|---|---|---|---|---|---|

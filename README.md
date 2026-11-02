@@ -25,7 +25,7 @@ high-speed running, and the positions come with no sign of how far off they migh
 
 ## Results on three unseen matches
 
-One test, on 49 clips from three SoccerNet matches kept out of development. Each result compares predfoot with
+One test, on 49 clips from three SoccerNet matches kept out of development. The table compares predfoot with
 the same pipeline minus the smoothing step: same network, same camera solver, each frame worked out on its own.
 
 | | Without smoothing | With smoothing (predfoot) |
@@ -34,15 +34,16 @@ the same pipeline minus the smoothing step: same network, same camera solver, ea
 | **Physical stats**, extra distance covered from camera wobble | 26.1 % | 3.4 % |
 | **Physical stats**, extra high-speed running | 72.4 % | 5.5 % |
 | **Error zones**, true positions inside their 90 % zone | 90.7 % | 93.1 %, target missed |
-| **Bad-camera alarm**, wrong camera estimates caught with 1 frame in 10 set aside | 34 % (best single warning sign) | 55 % |
 
 - The error zones came out a little too large. Allowing for chance, 93.1 % is too far from the promised 90 %,
   so the target set before the test was missed. They are still 27 % smaller than a fixed circle making the
   same promise.
 - The physical stats are measured 5 times a second against the dataset's smoothed tracks, which carry some
   noise of their own, so they show what camera wobble adds rather than absolute accuracy.
-- The alarm was tested on the frame-by-frame estimates, where 1 frame in 10 is wrong. Beating the best single
-  warning sign was the target set before the test (ranking score 0.91 against 0.80), and it was met.
+- **Bad-camera alarm.** On the frame-by-frame estimates, 1 in 10 of which is wrong, setting aside the 10 % of
+  frames the alarm trusts least catches 55 % of the wrong camera estimates, against 34 % for the best single
+  warning sign. Beating that sign was the target set before the test (ranking score 0.91 against 0.80), and
+  it was met.
 
 **Tested once, on matches never used during development, under a protocol frozen in advance and locked with
 checksums in git** ([preregistration](docs/preregistration.md)). Every result is published, including the
@@ -77,7 +78,9 @@ moment when both estimates lose the pitch ("camera lost").*
   project.
 - The error zones were slightly too large on the test matches.
 - The physical stats were checked against the dataset's smoothed tracks, which carry some noise of their own.
-- The alarm and the physical-stat checks run in the evaluation scripts, not yet in the command-line tool.
+- The command-line tool (`predfoot run`) works frame by frame for now: the smoothing, the alarm and the
+  physical-stat checks run in the evaluation scripts. The smoother is available from Python through
+  `predfoot.pipeline.real.real_stages(temporal=...)`.
 
 ## For engineers
 

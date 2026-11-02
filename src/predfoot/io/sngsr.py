@@ -45,7 +45,8 @@ from predfoot.paths import data_dir
 HF_REPO = "SoccerNet/SN-GSR-2025"
 LABELED_SPLITS: tuple[str, ...] = ("train", "valid", "test")
 DEV_SPLITS: tuple[str, ...] = ("train", "valid")
-#: Locked until the preregistration is frozen (ADR-0002): never tune or report per-clip numbers on it.
+#: The test split, kept apart (ADR-0002): downloaded only on request and evaluated once by
+#: scripts/run_test_once.py; never tune or report per-clip numbers on it.
 LOCKED_SPLITS: tuple[str, ...] = ("test",)
 LABELS_NAME = "Labels-GameState.json"
 SEQUENCES_INFO_NAME = "sequences_info.json"

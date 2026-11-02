@@ -43,5 +43,6 @@ Run these before every commit; CI runs the same steps.
 
 ## Git
 
-- Never push to `main`. One branch per ticket group (`m1/geometry`, `m0/data`…); the owner opens the PRs.
+- Never push to `main`: work on a branch named after its topic (`fix/…`, `docs/…`); the owner opens the pull
+  requests and merges them once CI passes.
 - Conventional commit messages (`feat:`, `fix:`, `test:`, `docs:`, `chore:`).

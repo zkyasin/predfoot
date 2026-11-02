@@ -140,7 +140,7 @@ Runtime: 404 s (calibration or loading 47 s).
 ## Ablations and reading of the results
 
 *Written after the runs above; the numbers come from `runs/20261031-152537_c3861c7_none` (per-frame,
-`reports/m2_logo_dev.md`), `runs/20261031-165523_bf28b35_proj`, this run and
+`reports/dev_per_frame.md`), `runs/20261031-165523_bf28b35_proj`, this run and
 `runs/20261031-165719_bf28b35_ptz-all`, all on the same 115 dev clips with the same per-frame calibrations
 (`--calib-from`).*
 
@@ -166,7 +166,7 @@ Runtime: 404 s (calibration or loading 47 s).
    by games 2, 6 and 9. The oracle is fitted frame by frame on the annotated lines; its own frame-level error
    does not shrink with smoothing while our smoothed covariance does, so its scores grow. The labels come
    from the annotators' camera, which is itself smooth over time. Neither reference is the truth: the
-   preregistration should keep both and state this asymmetry.
+   preregistration (`docs/preregistration.md`) keeps both and states this asymmetry.
 4. **KPI cost (model-free proxy on SN-GSR, 5 fps, Savitzky-Golay 5/2, against the smoothed labels):**
    distance bias +27.0 % → **+2.7 %**, high-speed-running distance +67.2 % → **+6.2 %**, speed error RMS
    1.49 → 0.71 m/s; the raw labels' own bias against the same reference is +17.9 % and +43.1 %
@@ -174,7 +174,7 @@ Runtime: 404 s (calibration or loading 47 s).
    (Ornstein-Uhlenbeck) error at 25 Hz still gives about +30 % for the smoothed camera: an exponential
    autocorrelation extrapolated from 5 fps to 25 Hz puts roughness at frequencies that were never measured
    and that a smoothed camera does not have. That simulation is therefore not reported for the smoothed
-   camera; a spectrum-aware error model, checked against this proxy, comes next.
+   camera; the spectrum-aware error model checked against this proxy is in `reports/kpi_budget_spectral.md`.
 5. **Failure handling.**
    - A brief run (≤ 0.5 s) of frames that the clip's PTZ model cannot explain, inside a segment, is a
      calibration failure rather than a cut to another camera: it gets the smoothed state (*bridged*, 266

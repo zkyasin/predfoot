@@ -1,12 +1,10 @@
-"""Stub stages of the tracer bullet. Each one has the signature its real module will have.
+"""Stub stages of the tracer bullet, with the signatures that :mod:`predfoot.pipeline.real` keeps.
 
-- calibrate: ClipFrame → CalibResult. Reads the homography from the input (later: ``calib`` on keypoints).
+- calibrate: ClipFrame → CalibResult. Reads the homography from the input.
 - detect: ClipFrame → list[FootObs]. Reads the foot points from the input, as the real stages do.
 - localize: CalibResult, FootObs → Localization. Inverse homography, exact; the uncertainty is a
-  placeholder, a constant 90 % radius with an isotropic covariance (later: ``uncertainty``, delta method +
-  conformal).
-- health: CalibResult → (calib_health, abstain). No score; abstain when calibration failed (later:
-  ``health``).
+  placeholder, a constant 90 % radius with an isotropic covariance.
+- health: CalibResult → (calib_health, abstain). No score; abstain when calibration failed.
 """
 
 from __future__ import annotations
@@ -19,7 +17,7 @@ from predfoot.contracts import CalibResult, CalibStatus, FootObs, Localization
 from predfoot.io.skillcorner import CHI2_2_090
 from predfoot.pipeline.clip import ClipFrame
 
-#: Placeholder 90 % radius (m) until the uncertainty module exists. Not a measured value.
+#: Placeholder 90 % radius (m) of the stub stages. Not a measured value.
 PLACEHOLDER_RADIUS_M = 1.0
 #: Condition number above which an input homography is treated as degenerate.
 MAX_CONDITION = 1e12
@@ -73,5 +71,5 @@ def localize(
 
 
 def health(calib: CalibResult) -> tuple[float | None, bool]:
-    """(calib_health, abstain): no health model yet, so no score; abstain exactly when calibration failed."""
+    """(calib_health, abstain): no score; abstain exactly when calibration failed."""
     return None, not calib.ok

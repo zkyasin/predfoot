@@ -358,7 +358,11 @@ def test_phones_get_the_stacked_smoothing_clip_and_its_poster():
         r'<link rel="preload" as="image" href="([^"]+)" media="([^"]+)" data-poster-for="([^"]+)">', page
     )
     assert link is not None
-    assert link.groups() == ("assets/smoothing-tall.jpg", "(max-width: 600px)", "smoothing-video")
+    assert link.groups() == (
+        "assets/smoothing-tall.jpg",
+        "(min-width: 1px) and (max-width: 600px)",
+        "smoothing-video",
+    )
 
 
 # Deploy

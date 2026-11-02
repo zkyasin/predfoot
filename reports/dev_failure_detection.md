@@ -5,7 +5,7 @@
 Calibrated dev frames with self-consistent line annotations: 10024, from 115 clips and 6 games. Failures (mean distance to the annotated lines > 10 px): 11.0%.
 All scores are out-of-game: each game is scored by detectors trained on the other games.
 
-**Abstaining on the 10 % riskiest frames removes 32% of the failures (logistic regression); the best single feature, `log_sigma_centre`, removes 29%.**
+**Abstaining on the 10 % riskiest frames removes 50% of the failures with gradient boosting and 32% with logistic regression; the best single feature, `log_sigma_centre`, removes 29%.**
 
 | Detector | AUROC | Average precision | AURC (failure rate) | AURC (line px, capped at 50) | Failures removed at 5 % / 10 % abstention |
 |---|---|---|---|---|---|
@@ -35,5 +35,4 @@ Per held-out game (logistic regression):
 | 9 | 1773 | 13.8% | 0.787 |
 
 Notes. Exploratory dev numbers. Frames are one in five and correlated within a clip, so the
-effective sample is closer to the number of clips than to the number of frames. The critic CNN
-has to beat the best row of this table to be worth its cost.
+effective sample is closer to the number of clips than to the number of frames.

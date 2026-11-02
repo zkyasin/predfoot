@@ -17,8 +17,8 @@ Development (SN-GSR dev games):
 
 - `spike_s0.py`: first calibration on real broadcast frames → `reports/spike_s0.md`.
 - `eval_dev.py`: positions, uncertainty and leave-one-game-out coverage, with or without camera smoothing →
-  `reports/m2_logo_dev.md`, `reports/m2_temporal_dev.md`.
-- `eval_health.py`: failure detection from calibration features → `reports/m3_health_dev.md`.
+  `reports/dev_per_frame.md`, `reports/dev_smoothed.md`.
+- `eval_health.py`: failure detection from calibration features → `reports/dev_failure_detection.md`.
 - `make_figures.py`: development figures → `reports/dev_figures.md`.
 - `run_real_clip.py`: `predfoot run` with the real stages on one cached dev clip.
 

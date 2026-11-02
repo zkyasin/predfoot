@@ -23,7 +23,7 @@ jq '{homography, cov_theta, dof, n_inliers, feet: [{track_id: 7, u: 960, v: 800}
 radius √(q · λmax(Σp)). With `--conformal`, each foot gets the q̂ of its Mondrian bin (metres per pixel at
 the feet × RANSAC inliers, hence `n_inliers`), exactly as the real pipeline stages do with the same model
 (`scripts/run_real_clip.py`); this is the construction that covered 90.4 % of the held-out dev errors
-(leave one game out, per-frame camera, `reports/m2_logo_dev.md`). A `conformal_quantile` in the request
+(leave one game out, per-frame camera, `reports/dev_per_frame.md`). A `conformal_quantile` in the request
 overrides the model with one threshold for all feet. Without either, q is the uncalibrated Laplace threshold,
 which covers only 17.9 % of the errors on the dev games. The model is calibrated on Σp from Σθ alone: a foot
 sent with `cov_uv` gets a wider region than the one calibrated. predfoot never saves uploaded images

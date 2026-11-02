@@ -23,8 +23,8 @@ player-frames, as it does against the line oracle; the report breaks coverage do
 The PTZ table keeps each clip smoothed with the label-free noise parameters of its own held-out fold only.
 eval_dev.py fits game g's quantiles on the other games re-smoothed with fold g's parameters, which the table
 does not keep, so here they are fitted on the other games' rows as saved: per-game numbers of the smoothed
-camera can differ slightly from reports/m2_temporal_dev.md. The per-frame camera's 90 % fits, intervals
-included, reproduce reports/m2_logo_dev.md: they draw from one generator, labels first, as eval_dev.py does.
+camera can differ slightly from reports/dev_smoothed.md. The per-frame camera's 90 % fits, intervals
+included, reproduce reports/dev_per_frame.md: they draw from one generator, labels first, as eval_dev.py does.
 
 Usage:
     uv run python scripts/make_figures.py --none-run runs/<per-frame run> --ptz-run runs/<ptz run>
@@ -606,7 +606,7 @@ def report(
         " smoothed with the label-free noise parameters of its own held-out fold; eval_dev.py fits game g's"
         " quantiles on the other games re-smoothed with fold g's parameters (not saved), so here they are"
         " fitted on the other games' saved rows, and the smoothed camera's numbers can differ slightly from"
-        " `reports/m2_temporal_dev.md`.",
+        " `reports/dev_smoothed.md`.",
     ]
     return "\n".join(md) + "\n"
 

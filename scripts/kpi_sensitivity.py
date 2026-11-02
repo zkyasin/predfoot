@@ -3,10 +3,11 @@
     uv run python scripts/kpi_sensitivity.py --matches J03WPY J03WOH   # two matches
     uv run python scripts/kpi_sensitivity.py                           # all seven
 
-Reference: KPIs on clean IDSSE positions at 25 Hz with the standard pipeline. Control (gate G4): the same
+Reference: KPIs on clean IDSSE positions at 25 Hz with the standard pipeline. Control: the same
 clean positions through the 10 fps pipeline. Then simulated position errors (i.i.d., AR(1), common-mode +
-individual) are added to the 25 Hz positions before the 10 fps pipeline. This is a sensitivity analysis: the
-real error process of predfoot is measured on SN-GSR later.
+individual) are added to the 25 Hz positions before the 10 fps pipeline. This is a sensitivity analysis;
+``--measured`` adds a condition with the error process measured on SN-GSR by ``scripts/error_process.py``
+(``reports/kpi_budget_measured.md``).
 
 Per-player tables, the configuration and metadata go to ``runs/<date>_<git-sha>/`` (never committed); the
 report with aggregate numbers goes to ``reports/kpi_sensitivity.md``. Run ``scripts/prepare_idsse.py`` first.
@@ -43,7 +44,7 @@ from predfoot.paths import REPO_ROOT, reports_dir
 SIGMAS = (0.05, 0.1, 0.2, 0.5)
 RHOS = (0.9, 0.99)
 GOALKEEPER = "TW"  # DFL position code
-G4_MAPE_PCT = 0.5  # largest MAPE the clean-data control may show
+CONTROL_MAPE_PCT = 0.5  # largest MAPE the clean-data control may show
 
 KPI_LABELS = {
     "distance_m": "Distance",
@@ -380,17 +381,17 @@ def summary_lines(comp: pl.DataFrame) -> list[str]:
     )
     mid_word = "more" if worse else "less"
     control = comp.filter((pl.col("baseline") == "reference") & (pl.col("condition") == "control"))
-    passed = [KPI_LABELS[r["kpi"]] for r in control.iter_rows(named=True) if r["mape"] < G4_MAPE_PCT]
+    passed = [KPI_LABELS[r["kpi"]] for r in control.iter_rows(named=True) if r["mape"] < CONTROL_MAPE_PCT]
     explosive = ("explosive_to_hsr", "explosive_to_sprint")
     max_bias = max(abs(r["bias"]) for r in control.iter_rows(named=True) if r["kpi"] not in explosive)
     mean_expl = cell(comp, "reference", "control", "explosive_to_hsr", "ref_mean")
     failed = [
         f"{KPI_LABELS[r['kpi']]} {fmt(r['mape'])} %"
         for r in control.iter_rows(named=True)
-        if r["mape"] >= G4_MAPE_PCT
+        if r["mape"] >= CONTROL_MAPE_PCT
     ]
     return [
-        f"- **Gate G4** (clean data, 10 fps vs 25 Hz, MAPE < {G4_MAPE_PCT:g} %): passed by "
+        f"- **Control** (clean data, 10 fps vs 25 Hz, MAPE < {CONTROL_MAPE_PCT:g} %): passed by "
         f"{', '.join(passed)}; "
         f"not passed by {', '.join(failed) if failed else 'none'}. Totals stay close (bias within "
         f"±{max_bias:.2f} % for every KPI except explosive accelerations): the misses come from "
@@ -443,7 +444,7 @@ def render_report(
     control = from_ref.filter(pl.col("condition") == "control")
     control_rows = []
     for r in control.iter_rows(named=True):
-        verdict = "pass" if r["mape"] < G4_MAPE_PCT else "**fail**"
+        verdict = "pass" if r["mape"] < CONTROL_MAPE_PCT else "**fail**"
         control_rows.append(
             [
                 KPI_LABELS[r["kpi"]],
@@ -458,14 +459,21 @@ def render_report(
     dirty = " (with uncommitted changes)" if meta["git_dirty"] else ""
     n_matches = len(meta["matches"])
 
+    measured = any(c.name == "measured" for c in conditions)
     lines = [
-        "# KPI error budget: first sensitivity study",
+        "# KPI error budget: "
+        + ("sensitivity study with the measured error process" if measured else "first sensitivity study"),
         "",
         "> **This is a sensitivity analysis on simulated position errors.** None of these numbers is a "
         "measured",
         "> error of predfoot: the real error process (variance, temporal correlation, common-mode part, "
         "dependence",
-        "> on the predicted uncertainty) is measured on SN-GSR and injected in later reports. KPI",
+        (
+            "> on the predicted uncertainty) is measured on SN-GSR by `scripts/error_process.py`; the row"
+            " *measured on SN-GSR* below injects it. KPI"
+            if measured
+            else "> on the predicted uncertainty) is measured on SN-GSR and injected in later reports. KPI"
+        ),
         "> definitions marked *assumption* below are ours, not SkillCorner's.",
         "",
         *(
@@ -478,7 +486,7 @@ def render_report(
                 "> jitter. Read it as the KPI cost of calibrating each frame independently.",
                 "",
             ]
-            if any(c.name == "measured" for c in conditions)
+            if measured
             else []
         ),
         f"- **Command**: `{meta['command']}`",
@@ -515,10 +523,10 @@ def render_report(
         f"of positions over {cfg.smoothing.window_s:g} s (order {cfg.smoothing.polyorder}, 25 samples), "
         "velocity "
         "and acceleration by central differences that never cross a gap, then the KPIs.",
-        "- **Control (gate G4)**: the same clean positions resampled to 10 fps (linear interpolation "
+        "- **Control**: the same clean positions resampled to 10 fps (linear interpolation "
         "between the "
-        "two neighbouring 25 Hz samples) and smoothed over 11 samples (1.1 s). Gate G4 asks for MAPE < 0.5 "
-        "%.",
+        "two neighbouring 25 Hz samples) and smoothed over 11 samples (1.1 s). The control asks for MAPE "
+        "< 0.5 %.",
         "- **Injected errors**: Gaussian, isotropic, added to the 25 Hz positions before the 10 fps "
         "pipeline; σ is "
         "the marginal standard deviation per axis. AR(1) correlation ρ is per 25 Hz frame: ρ = 0.9 is a "
@@ -576,10 +584,17 @@ def render_report(
         'Sources: SkillCorner, "New feature: explosive accelerations" (6 Feb 2025) and "SkillCorner '
         'releases new peak velocity metric" (11 Jun 2026); see `configs/kpi.yaml`.',
         "",
-        "## Gate G4: clean data through the 10 fps pipeline",
+        "## Control: clean data through the 10 fps pipeline",
         "",
         md_table(
-            ["KPI", "Ref. mean", "MAPE % [95 % CI]", "Bias % [95 % CI]", "Spearman [95 % CI]", "G4"],
+            [
+                "KPI",
+                "Ref. mean",
+                "MAPE % [95 % CI]",
+                "Bias % [95 % CI]",
+                "Spearman [95 % CI]",
+                f"MAPE < {CONTROL_MAPE_PCT:g} %",
+            ],
             control_rows,
         ),
         "",
@@ -602,7 +617,7 @@ def render_report(
         "### MAPE (%) against the clean 10 fps control: the effect of the noise alone",
         "",
         "Same noisy conditions, compared with clean data through the same 10 fps pipeline, so that the "
-        "difference between the pipelines (gate G4 above) is not counted.",
+        "difference between the pipelines (the control above) is not counted.",
         "",
         metric_matrix(
             comp.filter(pl.col("baseline") == "control"),

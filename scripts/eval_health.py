@@ -12,7 +12,7 @@ logistic regression and gradient boosting, all evaluated leave-one-game-out. Met
 precision, AURC and the share of failures removed when abstaining on 5 % or 10 % of frames.
 
 Usage:
-    uv run python scripts/eval_health.py runs/<run>/frames.parquet --out reports/m3_health_dev.md
+    uv run python scripts/eval_health.py runs/<run>/frames.parquet --out reports/dev_failure_detection.md
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ app = typer.Typer(add_completion=False)
 
 
 @app.command()
-def main(frames_path: Path, out: Path = Path("reports/m3_health_dev.md")) -> None:
+def main(frames_path: Path, out: Path = Path("reports/dev_failure_detection.md")) -> None:
     df = failure_table(pl.read_parquet(frames_path))
     y = df["fail"].to_numpy().astype(bool)
     line_px = df["line_px"].to_numpy().astype(float)
@@ -63,6 +63,7 @@ def main(frames_path: Path, out: Path = Path("reports/m3_health_dev.md")) -> Non
         ["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True
     ).stdout.strip()
     lr = next(r for r in rows if r["name"] == "logistic")
+    gb = next(r for r in rows if r["name"] == "boosting")
     md = [
         "# Dev failure detection: flagging a wrong camera from the frame's own features",
         "",
@@ -73,9 +74,9 @@ def main(frames_path: Path, out: Path = Path("reports/m3_health_dev.md")) -> Non
         f" annotated lines > {FAIL_LINE_PX:.0f} px): {y.mean():.1%}.",
         "All scores are out-of-game: each game is scored by detectors trained on the other games.",
         "",
-        f"**Abstaining on the 10 % riskiest frames removes {lr['rem10']:.0%} of the failures (logistic"
-        f" regression); the best single feature, `{best_single['name']}`, removes"
-        f" {best_single['rem10']:.0%}.**",
+        f"**Abstaining on the 10 % riskiest frames removes {gb['rem10']:.0%} of the failures with gradient"
+        f" boosting and {lr['rem10']:.0%} with logistic regression; the best single feature,"
+        f" `{best_single['name']}`, removes {best_single['rem10']:.0%}.**",
         "",
         "| Detector | AUROC | Average precision | AURC (failure rate) | AURC (line px, capped at 50) |"
         " Failures removed at 5 % / 10 % abstention |",
@@ -93,8 +94,7 @@ def main(frames_path: Path, out: Path = Path("reports/m3_health_dev.md")) -> Non
         *[f"| {g} | {n} | {rate:.1%} | {auc:.3f} |" for g, n, rate, auc in per_game],
         "",
         "Notes. Exploratory dev numbers. Frames are one in five and correlated within a clip, so the",
-        "effective sample is closer to the number of clips than to the number of frames. The critic CNN",
-        "has to beat the best row of this table to be worth its cost.",
+        "effective sample is closer to the number of clips than to the number of frames.",
     ]
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("\n".join(md) + "\n")

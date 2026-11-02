@@ -26,7 +26,7 @@ def main(
     ),
 ) -> None:
     if "test" in splits:
-        raise typer.BadParameter("the test split stays locked until the preregistration is frozen")
+        raise typer.BadParameter("the test split is reserved for scripts/run_test_once.py")
     clip_dirs = sorted(
         d for s in splits for d in (data_dir() / "sn-gsr" / s).glob("SNGS-*") if (d / "img1").is_dir()
     )

@@ -1,8 +1,8 @@
 """Calibration failure detectors on the per-frame health features: the failure label, out-of-game scores and a
 frozen detector stored as plain JSON.
 
-Failure label, chosen before looking at any score (reports/m3_health_dev.md): the calibration leaves the
-annotated pitch lines more than 10 px away on average, on frames whose calibration succeeded and whose
+Failure label, chosen before looking at any score (reports/dev_failure_detection.md): the calibration leaves
+the annotated pitch lines more than 10 px away on average, on frames whose calibration succeeded and whose
 annotated lines are self-consistent (a homography fits them within 3 px). It uses the line annotations only,
 never the position labels.
 

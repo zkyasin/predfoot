@@ -143,10 +143,11 @@ the project uses [semantic versioning](https://semver.org/).
   percentiles from the frozen test run. The README's wording follows the page.
 
 ### Changed
-- Ready for a public repository: neutral wording on the page, the README and the Space card (no personal
-  byline); internal ticket numbers and references to private planning notes removed from docstrings, reports
-  and this changelog; the reports index starts with the test report, and `scripts/README.md` lists the scripts
+- Ready for a public repository: wording of the page, the README, the Space card, the docstrings and the
+  reports reviewed; the reports index starts with the test report, and `scripts/README.md` lists the scripts
   by stage.
+- The dev reports are named after what they measure: `dev_per_frame.md`, `dev_smoothed.md` and
+  `dev_failure_detection.md`; report headings say what they test (go/no-go criteria, clean-data control).
 - The dev evaluation core moved from `scripts/eval_dev.py` into `predfoot.eval.positions`, the failure
   detectors into `predfoot.health.detector` and the players-table KPI proxy into `predfoot.kpi.proxy`; the
   scripts give identical results. The gradient boosting of the failure detector runs with early stopping
@@ -158,6 +159,17 @@ the project uses [semantic versioning](https://semver.org/).
   listed tutorials that were never written.
 
 ### Fixed
+- Public review: on phones the study's tables scroll inside their frame instead of widening the whole page
+  and pushing the top bar's link off-screen. In dark mode the comparison switch reaches AA contrast and the
+  error-zone squares show. The hidden top bar slides in when it takes keyboard focus, and its links move
+  focus to their section and land it just under the bar. Smaller fixes: the even chapters' figures get the
+  wide column, the hero bar wraps at 320 px, headings no longer blink before their fade-in, the distance
+  labels sit above the accuracy rings, and the Space's frame no longer preloads the phone poster.
+- The README's results table holds only the smoothing comparisons (the alarm is compared with the best
+  single warning sign, on the per-frame camera), and the limits say that `predfoot run` does not smooth
+  the camera yet. ATTRIBUTION.md lists the HRNet model definition as redistributed, and its file carries
+  the MIT licence text. Docstrings, docs and reports no longer describe existing work as future work, keep
+  the test split locked after the run, or mention a health critic that does not exist.
 - Showcase review: on the Space, links to GitHub opened inside the Space's frame, which GitHub refuses ("refused
   to connect"); they now open a new tab, and the build refuses a link to another site that does not. The page
   said "frozen and published" for a protocol committed to a private repository; it now says frozen before the

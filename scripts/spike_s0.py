@@ -191,7 +191,7 @@ def main(
         "",
         f"Clips: {', '.join(clips)}. Frames: {len(frames)}. Ground-truth boxes, truncated boxes excluded.",
         "",
-        "## Gate G0",
+        "## Go/no-go criteria",
         "",
         "| Criterion | Pass | Measured |",
         "|---|---|---|",

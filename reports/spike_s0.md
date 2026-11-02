@@ -4,7 +4,7 @@
 
 Clips: SNGS-036, SNGS-056, SNGS-067, SNGS-093, SNGS-168. Frames: 750. Ground-truth boxes, truncated boxes excluded.
 
-## Gate G0
+## Go/no-go criteria
 
 | Criterion | Pass | Measured |
 |---|---|---|

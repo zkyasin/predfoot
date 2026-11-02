@@ -22,7 +22,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Neural networks (keypoint model, critic). Kept out of CI to keep it fast.
+# Neural networks (the PnLCalib keypoint and line models). Kept out of CI to keep it fast.
 vision = ["torch>=2.5", "torchvision>=0.20"]
 # HTTP API (`predfoot serve`): python-multipart parses the uploads of /v1/calibrate, pillow reads image headers.
 serve = [
@@ -88,7 +88,7 @@ exclude = ["src/predfoot/keypoints/hrnet_mit\\.py"]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
 markers = [
-    "slow: long statistical or end-to-end tests (nightly)",
+    "slow: long statistical or end-to-end tests (not run in CI)",
     "data: needs datasets downloaded under PREDFOOT_DATA_DIR",
     "network: needs internet access",
     "vision: needs torch (extra 'vision')",

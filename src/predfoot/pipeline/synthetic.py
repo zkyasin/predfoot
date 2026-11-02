@@ -3,8 +3,8 @@
 A pinhole camera without distortion, placed in the internal pitch frame (x towards the right-hand goal, y
 towards the far touchline, z up) and aimed at a target point. Its ground-plane homography maps pitch points
 (x, y, 1) to pixels (u, v, 1), OpenCV convention (pixel centres on integers, so the principal point is
-((W-1)/2, (H-1)/2)). The calibration module will provide real cameras; this one only needs to be plausible
-and exact.
+((W-1)/2, (H-1)/2)). Real cameras come from :mod:`predfoot.calib`; this one only needs to be plausible and
+exact.
 """
 
 from __future__ import annotations

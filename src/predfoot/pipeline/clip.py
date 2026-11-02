@@ -1,6 +1,6 @@
 """Input of ``predfoot run``: a small JSON file describing a clip (format ``predfoot-clip/1``).
 
-It stands in for frames until the keypoint and detection modules exist: per native frame, the pitch → image
+It describes a clip without its frames: per native frame, the pitch → image
 homography (or null when calibration failed) and the foot points of the visible people, in pixels of the
 original image (OpenCV convention). Example::
 
