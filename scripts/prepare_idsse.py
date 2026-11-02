@@ -1,4 +1,4 @@
-"""Download the IDSSE tracking data and parse each match once into Parquet (ticket T0.8).
+"""Download the IDSSE tracking data and parse each match once into Parquet.
 
     uv run python scripts/prepare_idsse.py                 # all 7 matches
     uv run python scripts/prepare_idsse.py J03WPY J03WOH   # some matches

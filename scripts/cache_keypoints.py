@@ -1,4 +1,4 @@
-"""Cache keypoint and line detections for every downloaded clip of the given splits (ticket T1.6).
+"""Cache keypoint and line detections for every downloaded clip of the given splits.
 
 Usage:
     uv run python scripts/cache_keypoints.py --splits train valid

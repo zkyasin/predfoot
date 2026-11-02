@@ -36,4 +36,4 @@ Per held-out game (logistic regression):
 
 Notes. Exploratory dev numbers. Frames are one in five and correlated within a clip, so the
 effective sample is closer to the number of clips than to the number of frames. The critic CNN
-(ticket T3.3) has to beat the best row of this table to be worth its cost.
+has to beat the best row of this table to be worth its cost.

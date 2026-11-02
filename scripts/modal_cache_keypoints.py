@@ -1,4 +1,4 @@
-"""Cache keypoint and line detections on Modal GPUs instead of the local machine (ticket T5.6).
+"""Cache keypoint and line detections on Modal GPUs instead of the local machine.
 
 Each container takes one SN-GSR clip: it reads every fifth frame straight from the Hugging Face zip over
 HTTP range requests (nothing is uploaded from the laptop), runs both PnLCalib networks on a T4 in float32,

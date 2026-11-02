@@ -1,4 +1,4 @@
-# KPI error budget with a spectral error model (T4.3)
+# KPI error budget with a spectral error model
 
 > **Simulation, not measurement.** Every KPI error below comes from errors *simulated* by a model
 > fitted to predfoot's error process on SN-GSR dev (5 fps), injected into clean IDSSE tracking. The

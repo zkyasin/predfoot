@@ -1,4 +1,4 @@
-"""KPI uncertainty card: "HI distance = X ± Y m (nominal 90 %)" for one player-match (T4.4).
+"""KPI uncertainty card: "HI distance = X ± Y m (nominal 90 %)" for one player-match.
 
 Inputs: the player's observed positions (native rate, NaN where missing, one array per period) and the
 position-error model of the camera that produced them (:mod:`predfoot.kpi.noise`). Nothing else: no clean

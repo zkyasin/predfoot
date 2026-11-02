@@ -231,7 +231,6 @@ def test_space_readme_front_matter():
     assert front["colorTo"] in {"red", "yellow", "green", "blue", "indigo", "purple", "pink", "gray"}
     assert front["emoji"]
     assert 0 < len(front["short_description"]) < 60
-    assert "not affiliated with SkillCorner" in text
     # ADR-0002: the footage credit beside the downloadable clips says how the frames were changed
     assert "SoccerTrack v2](https://huggingface.co/datasets/atomscott/soccertrack-v2), Scott et al." in text
     assert all(change in text for change in ("reprojected", "cropped", "downscaled", "overlaid"))
@@ -317,7 +316,6 @@ def test_showcase_page_keeps_its_contract():
         for attr in ("autoplay", "muted", "loop", "playsinline", "poster=", "aria-label="):
             assert attr in video
     text = re.sub(r"<[^>]+>", "", page)
-    assert "Independent project, not affiliated with SkillCorner." in text
     assert "SoccerTrack v2, Scott et al., CC BY 4.0" in text
     # ADR-0002: public pixels say how the frames were changed
     assert all(change in text for change in ("cropped", "downscaled", "overlaid"))

@@ -1,4 +1,4 @@
-"""Virtual broadcast cameras inside a fixed panoramic video (SoccerTrack v2 demo, ticket T5.D1).
+"""Virtual broadcast cameras inside a fixed panoramic video (SoccerTrack v2 demo).
 
 The rectified panorama is a pinhole view of the pitch from one projection centre C: a pitch point X lands on
 the rectified pixel Knew R (X − C). A virtual camera that turns and zooms about the same centre is a PTZ

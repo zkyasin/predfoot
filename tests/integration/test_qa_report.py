@@ -1,4 +1,4 @@
-"""QA report (T5.2): written by ``predfoot run``, rebuilt by ``predfoot qa``, self-contained and escaped."""
+"""QA report: written by ``predfoot run``, rebuilt by ``predfoot qa``, self-contained and escaped."""
 
 import json
 import re

@@ -318,10 +318,11 @@ uv run python scripts/deploy_space.py    # → huggingface.co/spaces/Ya-SinZ/pre
 | Path | Contents |
 |---|---|
 | `src/predfoot/` | The package: `geometry`, `keypoints`, `calib`, `uncertainty`, `health`, `io`, `kpi`, `eval`, `viz`, `pipeline`, `serve`, `demo` |
-| `scripts/` | Data download, experiments and evaluations, figures, checks |
+| `scripts/` | Data download, experiments and evaluations, figures, checks ([index](../scripts/README.md)) |
 | `tests/` | `unit`, `property` (hypothesis), `integration`; synthetic fixtures and a three-record SkillCorner excerpt |
 | `reports/` | Generated reports with aggregate numbers, and their figures ([index](../reports/README.md)) |
 | `docs/` | This overview, architecture decision records, preregistration, serving and Docker |
+| `artifacts/prereg/v1/` | The frozen artifacts of the preregistered test (smoother, conformal regions, failure detector, analysis settings), hashed in `docs/preregistration.lock.json` |
 | `configs/` | YAML configs, validated with pydantic |
 | `docker/` | CPU images and their smoke tests |
 | `assets/` | Images for the README and this overview; `showcase/` holds the media of the showcase page |
@@ -346,5 +347,4 @@ of the last written decimal on numbers. After an intended change of the outputs,
 ## Licence and credits
 
 Apache-2.0. Third-party data and weights (PnLCalib, SN-GSR, SoccerTrack v2, IDSSE, SkillCorner open data) are
-credited in [ATTRIBUTION.md](../ATTRIBUTION.md); none is redistributed beyond what that file lists. predfoot is an
-independent project, not affiliated with SkillCorner.
+credited in [ATTRIBUTION.md](../ATTRIBUTION.md); none is redistributed beyond what that file lists.

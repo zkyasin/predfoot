@@ -11,7 +11,7 @@ def test_the_shipped_config_holds_the_published_thresholds():
     assert (ea.accel_ms2, ea.min_duration_s, ea.start_below_kmh) == (3.0, 0.7, 9.0)
     assert (cfg.psv99.activity_kmh, cfg.psv99.percentile) == (15.0, 99.0)
     assert (cfg.native_hz, cfg.output_hz) == (25, 10)
-    # The assumptions default to the values documented in the planning (EXECUTION.md §8).
+    # The assumptions default to the values documented in configs/kpi.yaml.
     assert cfg.min_effort_s == 1.0
     assert (cfg.smoothing.method, cfg.smoothing.window_s) == ("savgol", 1.0)
     assert cfg.psv99.statistic == "samples"

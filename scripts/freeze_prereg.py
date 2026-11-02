@@ -1,4 +1,4 @@
-"""Freeze the preregistration (ticket T3.4): fit the frozen artifacts on dev only and write the lock.
+"""Freeze the preregistration: fit the frozen artifacts on dev only and write the lock.
 
     uv run python scripts/freeze_prereg.py --calib-from runs/<per-frame dev run>/calib.npz
 

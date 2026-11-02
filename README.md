@@ -9,8 +9,6 @@ is probably wrong, and measures how camera errors inflate physical stats such as
 players' boxes come from the dataset's annotators. predfoot does not detect players, so its results measure
 the camera and the error zones.
 
-A portfolio project by Ya-Sin, a data-science master's student.
-
 <a href="https://huggingface.co/spaces/Ya-SinZ/predfoot"><img src="assets/showcase/hero.jpg" width="420" alt="predfoot on public match footage seen through a virtual TV camera: the pitch lines redrawn from the camera it recovered, and the same players on a pitch diagram with their error zones"></a>
 
 ### [Open the live page](https://huggingface.co/spaces/Ya-SinZ/predfoot)
@@ -112,5 +110,4 @@ Apache-2.0. Footage: SoccerTrack v2, Scott et al., CC BY 4.0, reprojected to a v
 downscaled and overlaid. Test data: SoccerNet SN-GSR (Somers et al.), shown only as numbers, plots and pitch
 diagrams. Pitch-marking network: PnLCalib weights by Gutiérrez-Pérez and Agudo, CC BY 4.0. The showcase page
 uses D3, Motion and Lenis ([licences](assets/showcase/vendor/LICENSES.txt)). Every third-party resource is
-credited in [ATTRIBUTION.md](ATTRIBUTION.md). predfoot is an independent project, not affiliated with
-SkillCorner.
+credited in [ATTRIBUTION.md](ATTRIBUTION.md).

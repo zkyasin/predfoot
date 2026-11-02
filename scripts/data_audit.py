@@ -20,7 +20,7 @@ import typer
 from predfoot.io import sngsr
 from predfoot.paths import REPO_ROOT, data_dir, reports_dir
 
-#: Game ids per split expected by the research (RAPPORT.md); the audit reports what it actually finds.
+#: Game ids per split expected before the audit; the audit reports what it actually finds.
 EXPECTED_GAMES = {"train": [4, 6, 9], "valid": [2, 3, 5], "test": [7, 8, 11]}
 PITCH_HALF_LENGTH, PITCH_HALF_WIDTH = 52.5, 34.0  # SN-GSR assumes 105 x 68 m
 OUTSIDE_MARGIN_M = 5.0

@@ -1,4 +1,4 @@
-"""Export the PnLCalib keypoint and line networks to ONNX and check parity with PyTorch (ticket T5.4).
+"""Export the PnLCalib keypoint and line networks to ONNX and check parity with PyTorch.
 
 Usage:
     uv sync --extra vision --extra export

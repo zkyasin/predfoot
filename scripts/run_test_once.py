@@ -1,4 +1,4 @@
-"""The single preregistered evaluation on the locked SN-GSR test games (ticket T6.1).
+"""The single preregistered evaluation on the locked SN-GSR test games.
 
     uv run python scripts/run_test_once.py              # stages A, B, C in order (A and B resume, C asks)
     uv run python scripts/run_test_once.py --stage b    # one stage

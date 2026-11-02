@@ -1,7 +1,7 @@
 """Stub stages of the tracer bullet. Each one has the signature its real module will have.
 
 - calibrate: ClipFrame → CalibResult. Reads the homography from the input (later: ``calib`` on keypoints).
-- detect: ClipFrame → list[FootObs]. Reads the foot points from the input (later: ``detect``).
+- detect: ClipFrame → list[FootObs]. Reads the foot points from the input, as the real stages do.
 - localize: CalibResult, FootObs → Localization. Inverse homography, exact; the uncertainty is a
   placeholder, a constant 90 % radius with an isotropic covariance (later: ``uncertainty``, delta method +
   conformal).

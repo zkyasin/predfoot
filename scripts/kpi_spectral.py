@@ -1,4 +1,4 @@
-"""Spectral position-error model: fit, check against the measured KPI proxy, KPI budget at 10 fps (T4.3).
+"""Spectral position-error model: fit, check against the measured KPI proxy, KPI budget at 10 fps.
 
     uv run python scripts/kpi_spectral.py                                  # all seven matches for the budget
     uv run python scripts/kpi_spectral.py --budget-matches J03WMX J03WN1   # quicker
@@ -504,7 +504,7 @@ def render(
 
     chosen_name = {c: f"{c}:{family}:{marginal}:white" for c in cameras}
     lines = [
-        "# KPI error budget with a spectral error model (T4.3)",
+        "# KPI error budget with a spectral error model",
         "",
         "> **Simulation, not measurement.** Every KPI error below comes from errors *simulated* by a model",
         "> fitted to predfoot's error process on SN-GSR dev (5 fps), injected into clean IDSSE tracking. The",
